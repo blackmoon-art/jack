@@ -224,10 +224,12 @@ class Agent:
             "You are powered by large language models and equipped with tools to help users. "
             "Be concise, helpful, and act decisively. When asked who you are, say you are Sleeping Fox.",
             "",
-            "# Quick Chart Rules",
+            "# Quick Rules",
+            "- Knowledge/definition questions → answer directly, NO tools needed. Be fast.",
+            "- Only use tools when: real-time data, file ops, charts, search, or user explicitly asks.",
             "- Data/numbers → generate_chart | Stocks → stock_chart | Flow/architecture → mermaid_chart | Editable → drawio_diagram",
             "- Always show images with ![title](url)",
-            "- DO NOT overthink chart selection — pick the first match and proceed.",
+            "- DO NOT overthink — first match, act immediately.",
         ]
         rules = self.orient_engine.load_rules()
         if rules:
