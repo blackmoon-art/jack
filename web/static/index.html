@@ -311,7 +311,14 @@ async function send() {
       $messages.scrollTop = $messages.scrollHeight;
     }
   } catch (err) {
-    addThinkingBlock('tool-result', `❌ 网络错误: ${err.message}`);
+    const msg = err.message || String(err);
+    if (msg.includes('Failed to fetch') || msg.includes('NetworkError')) {
+      addThinkingBlock('tool-result', '❌ 连接失败：服务器可能重启中或网络不稳定，请稍后重试');
+    } else if (msg.includes('timeout')) {
+      addThinkingBlock('tool-result', '❌ 请求超时，任务可能太复杂，请简化后重试');
+    } else {
+      addThinkingBlock('tool-result', `❌ 错误: ${msg}`);
+    }
   }
 
   $send.disabled = false;
