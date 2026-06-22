@@ -23,3 +23,7 @@ gen_liu_bei.py
 long_term_memory.db
 generate_ai_ppt.py
 charts/
+*.png
+least_squares*
+draw_circle*
+combined_ols*
