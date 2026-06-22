@@ -149,20 +149,41 @@ class TreeOfThoughtStrategy(BaseStrategy):
             return data
         return {"score": 5, "solved": True, "reason": "fallback"}
 
+    def _is_simple_task(self, task: str) -> bool:
+        """判断是否为简单任务（纯推理/知识/计算，不需要多路径探索）。"""
+        simple_patterns = [
+            "证明", "计算", "翻译", "解释", "什么是", "为什么",
+            "prove", "calculate", "explain", "what is", "why",
+            "写", "总结", "分析", "比较",
+        ]
+        task_lower = task.lower()
+        return any(p in task_lower for p in simple_patterns) and len(task) < 100
+
     def run(self, task: str, agent_loop_fn) -> str:
         """
         执行 Tree-of-Thought 策略。
 
-        Args:
-            task: 用户任务
-            agent_loop_fn: 核心循环 f(messages, exclude_tools) -> (text, messages)
+        优化:
+        - 简单任务(纯推理/知识)只生成1个候选, 直接执行
+        - 高分候选(≥8)直接执行, 跳过评分低的
         """
         logger.info(f"{'='*60}")
         logger.info(f"[Tree-of-Thought] Task: {task}")
         logger.info(f"{'='*60}")
 
-        # Phase 1: Generate candidates (breadth)
-        logger.info(f"[ToT:Generate] Creating {self.num_candidates} candidate approaches...")
+        # 简单任务检测：纯推理/知识类只走1条路径
+        is_simple = self._is_simple_task(task)
+        actual_candidates = 1 if is_simple else self.num_candidates
+
+        # Phase 1: Generate candidates
+        logger.info(f"[ToT:Generate] Creating {actual_candidates} candidate approaches..."
+                     f"{' (simple task)' if is_simple else ''}")
+        if is_simple:
+            # 简单任务：直接执行，不生成候选
+            result, _ = agent_loop_fn([{"role": "user", "content": task}])
+            logger.info(f"[ToT:Simple] Direct execution complete.")
+            return result
+
         candidates = self.generate_candidates(task)
         logger.info(f"[ToT:Generate] Got {len(candidates)} candidates")
 
@@ -222,9 +243,14 @@ class TreeOfThoughtStrategy(BaseStrategy):
             if is_solved and actual_score >= self.score_threshold:
                 logger.info(f"[ToT:Done] Task solved via path {attempt_idx+1}!")
                 break
-            else:
-                logger.info(f"[ToT:Backtrack] Score {actual_score} < threshold "
-                      f"{self.score_threshold}. Trying next candidate...")
+
+            # 高分但未完全解决 → 继续尝试但只看高分候选
+            if candidate.get("score", 0) >= 8 and not is_solved:
+                logger.info(f"[ToT:Backtrack] High-score path didn't fully solve. Trying next...")
+                continue
+
+            logger.info(f"[ToT:Backtrack] Score {actual_score} < threshold "
+                  f"{self.score_threshold}. Trying next candidate...")
 
         # Phase 5: Summary
         logger.info(f"[ToT:Summary] Explored {len(self._explored_paths)} paths. "
