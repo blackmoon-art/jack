@@ -158,17 +158,25 @@ def agent_stream(task: str, strategy: str, session_id: str):
     thread = Thread(target=run)
     thread.start()
 
-    # 流式发送事件
+    # 流式发送事件（带心跳，防止浏览器超时断开）
+    import time as _time
+    last_heartbeat = _time.time()
     while True:
-        item = queue.get()
-        last_item = item
-        if item is None:
-            break
-        event_type = item["event"]
-        data = item["data"]
-        yield f"event: {event_type}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
-        if event_type in ("done", "error"):
-            break
+        try:
+            item = queue.get(timeout=3)  # 3 秒超时，没事件就发心跳
+            last_item = item
+            last_heartbeat = _time.time()
+            if item is None:
+                break
+            event_type = item["event"]
+            data = item["data"]
+            yield f"event: {event_type}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+            if event_type in ("done", "error"):
+                break
+        except Exception:  # queue.Empty → 超时了，LLM 还在想
+            if _time.time() - last_heartbeat > 2.5:
+                yield ": heartbeat\n\n"  # SSE 注释，浏览器忽略但保持连接
+                last_heartbeat = _time.time()
 
     thread.join()
     # 记录历史（内存 + SQLite）
