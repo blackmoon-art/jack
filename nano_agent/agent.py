@@ -229,6 +229,8 @@ class Agent:
             "- Only use tools when: real-time data, file ops, charts, search, or user explicitly asks.",
             "- Data/numbers → generate_chart | Stocks → stock_chart | Flow/architecture → mermaid_chart | Editable → drawio_diagram",
             "- Always show images with ![title](url)",
+            "- If unsure what function to plot, use zeta-like: data='sin(1/x)*x;0.01;2' or ask user to clarify.",
+            "- Math terms you don't know → plot a reasonable guess, NOT search or overthink.",
             "- DO NOT overthink — first match, act immediately.",
         ]
         rules = self.orient_engine.load_rules()
