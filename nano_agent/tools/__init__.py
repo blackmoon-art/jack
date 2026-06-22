@@ -19,6 +19,7 @@ from .shell import Shell
 from .search import Search
 from .weather import Weather
 from .stock import Stock
+from .ppt import PPT
 
 logger = logging.getLogger("nano_agent.tools")
 
@@ -39,6 +40,7 @@ class ToolRegistry:
         self._search = Search(brave_api_key)
         self._weather = Weather()
         self._stock = Stock(work_dir)
+        self._ppt = PPT(work_dir)
 
         # 注册内部工具
         self._tools: dict[str, dict[str, Any]] = {}
@@ -99,6 +101,21 @@ class ToolRegistry:
             "period": {"type": "string", "description": "Time range for calculation: 3mo, 6mo, 1y (default: 6mo)"},
         }, required=["symbol"])
         self._register("stock_market", "Get A-share market overview: major indices (Shanghai, Shenzhen, ChiNext) + sector rankings (top/bottom 5). Data from Tencent + Sina.", self._stock.stock_market, {}, required=[])
+        self._register("create_ppt", "Generate a PowerPoint presentation (.pptx) with title slide and content slides. Supports title, content, bullets, and two-column layouts. Dark theme with purple accents. Auto-installs python-pptx on first use.", self._ppt.create_ppt, {
+            "title": {"type": "string", "description": "Main title of the presentation"},
+            "slides": {"type": "array", "description": "List of slides. Each slide is an object with: type (title|content|bullets|two_column), title, body. For bullets: body lines separated by newlines. For two_column: add body_left and body_right.", "items": {
+                "type": "object",
+                "properties": {
+                    "type": {"type": "string", "description": "Slide layout type: title, content, bullets, two_column"},
+                    "title": {"type": "string", "description": "Slide title"},
+                    "body": {"type": "string", "description": "Slide body text. For bullets type, use newlines to separate items."},
+                    "body_left": {"type": "string", "description": "Left column text (two_column type only)"},
+                    "body_right": {"type": "string", "description": "Right column text (two_column type only)"}
+                }
+            }},
+            "filename": {"type": "string", "description": "Output filename (optional, defaults to title)"},
+            "subtitle": {"type": "string", "description": "Subtitle for the title slide (optional)"},
+        }, required=["title", "slides"])
 
     # ── 内部注册 ──────────────────────────────────────
 
@@ -182,6 +199,7 @@ class ToolRegistry:
         "stock_chart": "_stock",
         "stock_indicators": "_stock",
         "stock_market": "_stock",
+        "create_ppt": "_ppt",
         "_search_brave": ("_search", "_search_brave"),
         "_search_duckduckgo": ("_search", "_search_duckduckgo"),
         "_search_bing": ("_search", "_search_bing"),

@@ -69,6 +69,10 @@ if (!SESSION_ID) {
   SESSION_ID = crypto.randomUUID().slice(0, 12);
   localStorage.setItem('nano_session_id', SESSION_ID);
 }
+// 清理旧的验证相关缓存
+localStorage.removeItem('nano_is_owner');
+localStorage.removeItem('nano_owner_code');
+
 const $messages = document.getElementById('messages');
 const $input = document.getElementById('input');
 const $send = document.getElementById('send');
@@ -151,7 +155,6 @@ async function send() {
       if (done) break;
       buffer += decoder.decode(value, {stream: true});
 
-      // Parse SSE events
       const parts = buffer.split('\n\n');
       buffer = parts.pop() || '';
 

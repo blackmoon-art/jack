@@ -110,7 +110,7 @@ sessions: dict[str, dict] = {}
 # ── 使用次数统计 ──────────────────────────────────────
 
 USAGE_FILE = Path(__file__).parent / "usage.json"
-DAILY_LIMIT = int(os.getenv("DAILY_LIMIT_PER_USER", "20"))
+DAILY_LIMIT = int(os.getenv("DAILY_LIMIT_PER_USER", "0"))  # 0 = unlimited
 
 
 def _today() -> str:
@@ -182,7 +182,11 @@ def get_or_create_session(session_id: Optional[str] = None) -> str:
 # ── SSE 流式响应 ──────────────────────────────────────
 
 def agent_stream(task: str, strategy: str, session_id: str):
-    """Generator that yields SSE events as the agent runs."""
+    """Generator that yields SSE events as the agent runs.
+
+    Args:
+        show_thinking: 是否发送思考过程事件 (orient/tool_call/tool_result/text)
+    """
     agent = sessions[session_id]["agent"]
 
     # 用队列收集 agent 事件
