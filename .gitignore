@@ -16,3 +16,4 @@ agent_memory.md
 .venv/
 *.egg-info/
 usage.json
+*.swp
