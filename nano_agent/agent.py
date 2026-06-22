@@ -163,16 +163,19 @@ class Agent:
 
                 # ── Act: 执行 ──
                 raw_result = self.tools.execute(name, args)
-                self._emit("tool_result", {"name": name, "result": raw_result,
-                                            "success": not raw_result.startswith("Error:")})
-                logger.debug(f"[Tool Result] {raw_result[:200]}")
+                # Observation 兼容：success 从对象取，字符操作委托到 result
+                is_success = raw_result.success if hasattr(raw_result, "success") else not str(raw_result).startswith("Error:")
+                result_text = str(raw_result)
+                self._emit("tool_result", {"name": name, "result": result_text,
+                                            "success": is_success})
+                logger.debug(f"[Tool Result] {result_text[:200]}")
 
                 # ── Orient: 显式解读 ──
-                orientation = self._orient(raw_result, args.get("task", ""))
+                orientation = self._orient(result_text, args.get("task", ""))
                 if orientation:
                     self._emit("orient", orientation)
                     enriched = (
-                        f"{raw_result}\n\n"
+                        f"{result_text}\n\n"
                         f"[Orient] interpretation={orientation.get('interpretation', '')[:200]}\n"
                         f"[Orient] implication={orientation.get('implication', '')[:200]}"
                     )
@@ -181,7 +184,7 @@ class Agent:
                     })
                 else:
                     messages.append({
-                        "role": "tool", "tool_call_id": tc["id"], "content": raw_result,
+                        "role": "tool", "tool_call_id": tc["id"], "content": result_text,
                     })
 
         logger.warning(f"Max iterations ({self.config.max_iterations}) reached, "

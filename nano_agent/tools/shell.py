@@ -96,13 +96,33 @@ class Shell:
                 timeout=self.bash_timeout,
             )
             out = (r.stdout + r.stderr).strip()
-            return out[:50000] if out else "(no output)"
+            text = out[:50000] if out else "(no output)"
+            return Observation(
+                tool_name="bash",
+                result=text,
+                success=(r.returncode == 0),
+                args={"command": command},
+                metadata={
+                    "exit_code": r.returncode,
+                    "truncated": len(out) > 50000,
+                    "output_length": len(out),
+                },
+            )
         except subprocess.TimeoutExpired:
-            return f"Error: Timeout ({self.bash_timeout}s)"
+            return Observation(
+                tool_name="bash", result=f"Error: Timeout ({self.bash_timeout}s)",
+                success=False, args={"command": command}, metadata={},
+            )
         except FileNotFoundError:
-            return f"Error: Command not found: {parts[0]}"
+            return Observation(
+                tool_name="bash", result=f"Error: Command not found: {parts[0]}",
+                success=False, args={"command": command}, metadata={},
+            )
         except OSError as e:
-            return f"Error: {e}"
+            return Observation(
+                tool_name="bash", result=f"Error: {e}",
+                success=False, args={"command": command}, metadata={},
+            )
 
     def calculate(self, expression: str) -> str:
         """安全计算数学表达式（使用 ast 解析，无 eval）。"""
@@ -144,8 +164,23 @@ class Shell:
         try:
             tree = ast.parse(expression.strip(), mode="eval")
             result = _eval_ast(tree)
-            return f"{expression} = {result}"
+            return Observation(
+                tool_name="calculate",
+                result=f"{expression} = {result}",
+                success=True,
+                args={"expression": expression},
+            )
         except ZeroDivisionError:
-            return "Error: Division by zero"
+            return Observation(
+                tool_name="calculate",
+                result="Error: Division by zero",
+                success=False,
+                args={"expression": expression},
+            )
         except Exception as e:
-            return f"Error: {e}"
+            return Observation(
+                tool_name="calculate",
+                result=f"Error: {e}",
+                success=False,
+                args={"expression": expression},
+            )
