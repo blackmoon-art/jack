@@ -96,6 +96,9 @@ class ToolRegistry:
         self._register("fetch_url", "Fetch and extract text content from a URL.", self.fetch_url, {
             "url": {"type": "string", "description": "URL to fetch"},
         }, required=["url"])
+        self._register("search_and_fetch", "Search the web and auto-fetch top result content. Best for questions needing detailed answers.", self.search_and_fetch, {
+            "query": {"type": "string", "description": "Search query"},
+        }, required=["query"])
         self._register("plan", "Break a complex task into steps and execute sequentially.", self.plan, {
             "task": {"type": "string", "description": "The task to plan"},
         }, required=["task"])
@@ -263,7 +266,7 @@ class ToolRegistry:
             return f"Error: {e}"
 
     def web_search(self, query: str, max_results: int = 5) -> str:
-        """搜索网页：DuckDuckGo → Bing → Wikipedia 三级降级。"""
+        """搜索网页：DuckDuckGo → Bing → SearXNG → Wikipedia 四级降级。"""
         max_results = min(max(max_results, 1), 10)
 
         # Level 1: DuckDuckGo Lite (POST)
@@ -276,7 +279,12 @@ class ToolRegistry:
         if results:
             return f"Search results for '{query}' (Bing):\n\n" + "\n\n".join(results)
 
-        # Level 3: Wikipedia API
+        # Level 3: SearXNG 公共实例
+        results = self._search_searxng(query, max_results)
+        if results:
+            return f"Search results for '{query}' (SearXNG):\n\n" + "\n\n".join(results)
+
+        # Level 4: Wikipedia API
         results = self._search_wikipedia(query, max_results)
         if results:
             return f"Search results for '{query}' (Wikipedia):\n\n" + "\n\n".join(results)
@@ -309,30 +317,59 @@ class ToolRegistry:
             return []
 
         results = []
-        result_blocks = re.findall(
-            r'<a[^>]*rel="nofollow"[^>]*href="([^"]+)"[^>]*>(.*?)</a>',
+        # 提取结果块 (包含链接、标题和摘要)
+        blocks = re.findall(
+            r'<tr[^>]*class="result-snippet"[^>]*>.*?</tr>',
             html, re.DOTALL,
         )
-        seen: set[str] = set()
-        for href, title in result_blocks:
-            if len(results) >= max_results:
-                break
-            title_clean = re.sub(r'<[^>]+>', '', title).strip()
-            title_clean = (title_clean
-                .replace("&#x27;", "'")
-                .replace("&amp;", "&")
-                .replace("&quot;", '"')
-                .replace("&lt;", "<")
-                .replace("&gt;", ">"))
-            if not title_clean or len(title_clean) < 3:
-                continue
-            if "duckduckgo" in href:
-                continue
-            if href in seen:
-                continue
-            seen.add(href)
-            results.append(f"{len(results)+1}. {title_clean}\n   {href}")
+        if not blocks:
+            # 回退到简单链接匹配
+            blocks = re.findall(
+                r'<a[^>]*rel="nofollow"[^>]*href="([^"]+)"[^>]*>(.*?)</a>',
+                html, re.DOTALL,
+            )
+            seen = set()
+            for href, title in blocks:
+                if len(results) >= max_results:
+                    break
+                title_clean = self._clean_html(title)
+                if not title_clean or len(title_clean) < 3 or href in seen:
+                    continue
+                if "duckduckgo" in href:
+                    continue
+                seen.add(href)
+                results.append(f"{len(results)+1}. {title_clean}\n   {href}")
+        else:
+            seen = set()
+            for block in blocks:
+                if len(results) >= max_results:
+                    break
+                link_m = re.search(
+                    r'<a[^>]*href="([^"]+)"[^>]*>(.*?)</a>', block, re.DOTALL
+                )
+                snippet_m = re.search(
+                    r'<td class="result-snippet"[^>]*>(.*?)</td>', block, re.DOTALL
+                )
+                if link_m:
+                    href = link_m.group(1)
+                    title = self._clean_html(link_m.group(2))
+                    if not title or len(title) < 3 or href in seen:
+                        continue
+                    if "duckduckgo" in href:
+                        continue
+                    seen.add(href)
+                    snippet = ""
+                    if snippet_m:
+                        snippet = " — " + self._clean_html(snippet_m.group(1))[:200]
+                    results.append(f"{len(results)+1}. {title}\n   {href}{snippet}")
         return results
+
+    def _clean_html(self, text: str) -> str:
+        """清理 HTML 实体和标签。"""
+        return (re.sub(r'<[^>]+>', '', text).strip()
+                .replace("&#x27;", "'").replace("&amp;", "&")
+                .replace("&quot;", '"').replace("&lt;", "<")
+                .replace("&gt;", ">").replace("&#039;", "'"))
 
     def _search_bing(self, query: str, max_results: int) -> list[str]:
         """Bing 搜索 (国际版 → 国内版)。被反爬时返回空列表。"""
@@ -391,6 +428,56 @@ class ToolRegistry:
                     snippet = " — " + re.sub(r'<[^>]+>', '', snippet_m.group(1)).strip()[:200]
                 results.append(f"{len(results)+1}. {title}\n   {href}{snippet}")
         return results
+
+    def _search_searxng(self, query: str, max_results: int) -> list[str]:
+        """SearXNG 公共实例搜索。被反爬时返回空列表。"""
+        instances = [
+            "https://searx.be",
+            "https://search.sapti.me",
+        ]
+        params = urllib.parse.urlencode({
+            "q": query, "format": "json", "categories": "general",
+        })
+        for base_url in instances:
+            try:
+                req = urllib.request.Request(
+                    f"{base_url}/search?{params}",
+                    headers={"User-Agent": "nano_agent_plus/1.0"},
+                )
+                with urllib.request.urlopen(req, timeout=10) as resp:
+                    data = json.loads(resp.read().decode("utf-8"))
+                results = []
+                for item in data.get("results", [])[:max_results]:
+                    title = item.get("title", "").strip()
+                    url = item.get("url", "")
+                    snippet = item.get("content", "") or item.get("snippet", "")
+                    if title and url:
+                        s = f" — {self._clean_html(snippet)[:200]}" if snippet else ""
+                        results.append(f"{len(results)+1}. {title}\n   {url}{s}")
+                return results
+            except Exception:
+                continue
+        return []
+
+    def search_and_fetch(self, query: str) -> str:
+        """搜索 + 自动抓取第一个结果的内容。"""
+        # 先用 web_search 获取结果
+        search_result = self.web_search(query, max_results=3)
+        if "No search results" in search_result or "Error" in search_result:
+            return search_result
+
+        # 提取第一个 URL
+        urls = re.findall(r'(https?://[^\s\n]+)', search_result)
+        if not urls:
+            return search_result + "\n\n(Could not extract URL for auto-fetch)"
+
+        first_url = urls[0]
+        content = self.fetch_url(first_url)
+        return (
+            f"{search_result}\n\n"
+            f"─── Auto-fetched: {first_url} ───\n"
+            f"{content[:5000]}"
+        )
 
     def _search_wikipedia(self, query: str, max_results: int) -> list[str]:
         """Wikipedia API 搜索 (中英文自动检测，无需 API key)。"""
