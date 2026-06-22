@@ -30,6 +30,16 @@
                  color:#6ee7b7; background:#0a1a15; border-radius:0 6px 6px 0;
                  max-height:200px; overflow-y:auto; }
   .orient { padding:6px 10px; margin:4px 0; font-size:12px; color:#94a3b8; font-style:italic; }
+  /* 思考过程折叠 */
+  .thinking-summary { display:inline-block; padding:3px 10px; margin:0 0 6px 0;
+                       background:#1e1e2e; border:1px solid #333; border-radius:10px;
+                       font-size:11px; color:#7c3aed; cursor:pointer; user-select:none;
+                       transition: background .15s; }
+  .thinking-summary:hover { background:#2a2a3e; }
+  .thinking-summary::before { content:'▶ '; font-size:9px; }
+  .thinking-summary.open::before { content:'▼ '; font-size:9px; }
+  .thinking-block { display:none; }
+  .thinking-block.visible { display:block; }
   footer { padding:16px 20px; border-top:1px solid #333; display:flex; gap:10px; background:#1a1a2e; }
   footer input { flex:1; background:#222; color:#e0e0e0; border:1px solid #444; padding:10px 16px;
                  border-radius:8px; font-size:14px; outline:none; }
@@ -69,10 +79,6 @@ if (!SESSION_ID) {
   SESSION_ID = crypto.randomUUID().slice(0, 12);
   localStorage.setItem('nano_session_id', SESSION_ID);
 }
-// 清理旧的验证相关缓存
-localStorage.removeItem('nano_is_owner');
-localStorage.removeItem('nano_owner_code');
-
 const $messages = document.getElementById('messages');
 const $input = document.getElementById('input');
 const $send = document.getElementById('send');
@@ -81,6 +87,7 @@ const $status = document.getElementById('status');
 document.getElementById('session-info').textContent = `会话: ${SESSION_ID}`;
 
 let currentMsg = null;
+let thinkingCount = 0;  // 当前消息的思考步骤数
 
 // 页面加载时恢复历史对话
 (async function restoreHistory() {
@@ -105,18 +112,42 @@ function addMessage(role, text) {
   return div;
 }
 
-function addBlock(cls, text) {
-  const div = document.createElement('div');
-  div.className = cls;
-  div.textContent = text;
-  if (currentMsg) {
-    currentMsg.appendChild(div);
-  } else {
-    currentMsg = addMessage('agent', '');
-    currentMsg.appendChild(div);
+function addThinkingBlock(cls, text) {
+  // 确保有 thinking-block 容器
+  let block = currentMsg.querySelector('.thinking-block');
+  if (!block) {
+    block = document.createElement('div');
+    block.className = 'thinking-block';
+    currentMsg.appendChild(block);
   }
+
+  const inner = document.createElement('div');
+  inner.className = cls;
+  inner.textContent = text;
+  block.appendChild(inner);
+
+  thinkingCount++;
+  // 更新标签
+  let tag = currentMsg.querySelector('.thinking-summary');
+  if (tag) tag.textContent = `👽 ${thinkingCount} 步思考过程`;
+
   $messages.scrollTop = $messages.scrollHeight;
-  return div;
+}
+
+function ensureThinkingTag() {
+  if (!currentMsg) return;
+  if (currentMsg.querySelector('.thinking-summary')) return;
+  const tag = document.createElement('div');
+  tag.className = 'thinking-summary';
+  tag.textContent = `👽 ${thinkingCount} 步思考过程`;
+  tag.addEventListener('click', () => {
+    const block = currentMsg.querySelector('.thinking-block');
+    if (!block) return;
+    const open = block.classList.toggle('visible');
+    tag.classList.toggle('open', open);
+  });
+  // 插入到消息最前面（content 之前）
+  currentMsg.insertBefore(tag, currentMsg.firstChild);
 }
 
 function escapeHtml(s) {
@@ -130,6 +161,7 @@ async function send() {
   $send.disabled = true;
   $input.disabled = true;
   $status.textContent = '思考中...';
+  thinkingCount = 0;
 
   addMessage('user', task);
   currentMsg = null;
@@ -172,25 +204,30 @@ async function send() {
         try {
           const data = JSON.parse(dataStr);
 
+          // 思考过程事件 → 折叠
+          if (['text', 'tool_call', 'tool_result', 'orient'].includes(eventType)) {
+            if (!currentMsg) currentMsg = addMessage('agent', '');
+            ensureThinkingTag();
+          }
+
           switch (eventType) {
             case 'text':
               if (data.text) {
-                if (!currentMsg) currentMsg = addMessage('agent', '');
                 const el = document.createElement('div');
                 el.textContent = data.text;
-                el.style.cssText = 'color:#94a3b8;font-size:12px;margin:4px 0;';
-                currentMsg.appendChild(el);
+                el.style.cssText = 'color:#fbbf24;font-size:12px;margin:4px 0;';
+                addThinkingBlock('thought', data.text);
               }
               break;
             case 'tool_call':
-              addBlock('tool-call',
-                `🔧 <span class="name">${data.name}</span>(${JSON.stringify(data.args)})`);
+              addThinkingBlock('tool-call',
+                `🔧 ${data.name}(${JSON.stringify(data.args)})`);
               break;
             case 'tool_result':
-              addBlock('tool-result', data.result?.slice(0, 1000) || '');
+              addThinkingBlock('tool-result', data.result?.slice(0, 1000) || '');
               break;
             case 'orient':
-              addBlock('orient',
+              addThinkingBlock('orient',
                 `💡 ${data.implication || data.interpretation || ''}`.slice(0, 200));
               break;
             case 'done':
@@ -201,7 +238,8 @@ async function send() {
               $status.textContent = '就绪';
               break;
             case 'error':
-              addBlock('tool-result', `❌ ${data.text}`);
+              if (!currentMsg) currentMsg = addMessage('agent', '');
+              addThinkingBlock('tool-result', `❌ ${data.text}`);
               $status.textContent = '错误';
               break;
           }
@@ -210,7 +248,7 @@ async function send() {
       $messages.scrollTop = $messages.scrollHeight;
     }
   } catch (err) {
-    addBlock('tool-result', `❌ 网络错误: ${err.message}`);
+    addThinkingBlock('tool-result', `❌ 网络错误: ${err.message}`);
   }
 
   $send.disabled = false;

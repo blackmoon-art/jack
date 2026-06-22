@@ -1,0 +1,464 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>五子棋 🐱⚡</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    min-height: 100vh;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    background: linear-gradient(135deg, #2b1b3d 0%, #1a1a2e 50%, #16213e 100%);
+    font-family: 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+    padding: 20px;
+  }
+
+  .container {
+    text-align: center;
+    background: rgba(255,255,255,0.06);
+    backdrop-filter: blur(12px);
+    border-radius: 28px;
+    padding: 32px 36px 40px;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.6);
+    border: 1px solid rgba(255,255,255,0.08);
+  }
+
+  h1 {
+    color: #e0d0ff;
+    font-size: 28px;
+    font-weight: 700;
+    letter-spacing: 4px;
+    margin-bottom: 6px;
+    text-shadow: 0 0 20px rgba(160,120,255,0.3);
+  }
+
+  .subtitle {
+    color: #a890c8;
+    font-size: 14px;
+    margin-bottom: 18px;
+    letter-spacing: 2px;
+  }
+
+  .status-bar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 16px;
+    padding: 0 4px;
+  }
+
+  .turn-indicator {
+    color: #d0c0ee;
+    font-size: 16px;
+    font-weight: 600;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .stone-preview {
+    display: inline-block;
+    width: 22px; height: 22px;
+    border-radius: 50%;
+    border: 2px solid rgba(255,255,255,0.25);
+    vertical-align: middle;
+    transition: all 0.2s;
+  }
+  .stone-preview.black { background: radial-gradient(circle at 35% 35%, #555, #111); }
+  .stone-preview.white { background: radial-gradient(circle at 35% 35%, #fff, #ccc); }
+
+  .btn {
+    background: rgba(255,255,255,0.08);
+    border: 1px solid rgba(255,255,255,0.15);
+    color: #d0c0ee;
+    padding: 8px 22px;
+    border-radius: 10px;
+    font-size: 14px;
+    cursor: pointer;
+    transition: all 0.25s;
+    font-weight: 500;
+  }
+  .btn:hover {
+    background: rgba(160,120,255,0.25);
+    border-color: rgba(160,120,255,0.4);
+    transform: scale(1.03);
+  }
+
+  .board-wrapper {
+    display: inline-block;
+    padding: 12px;
+    background: rgba(0,0,0,0.3);
+    border-radius: 16px;
+    border: 1px solid rgba(255,255,255,0.06);
+  }
+
+  canvas {
+    display: block;
+    background: #d4b88c;
+    border-radius: 10px;
+    cursor: pointer;
+    box-shadow: inset 0 0 30px rgba(0,0,0,0.15);
+    width: 540px;
+    height: 540px;
+  }
+
+  .info {
+    margin-top: 14px;
+    color: #8870aa;
+    font-size: 13px;
+    letter-spacing: 1px;
+  }
+  .info span { color: #b8a0d8; }
+
+  /* 胜利弹窗 */
+  .overlay {
+    display: none;
+    position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+    background: rgba(0,0,0,0.65);
+    backdrop-filter: blur(6px);
+    z-index: 999;
+    justify-content: center;
+    align-items: center;
+  }
+  .overlay.active { display: flex; }
+  .modal {
+    background: linear-gradient(145deg, #2a1f3a, #1e162e);
+    border: 1px solid rgba(160,120,255,0.3);
+    border-radius: 24px;
+    padding: 40px 50px;
+    text-align: center;
+    box-shadow: 0 30px 80px rgba(0,0,0,0.6);
+    animation: pop 0.35s cubic-bezier(0.34,1.56,0.64,1);
+  }
+  @keyframes pop {
+    0% { transform: scale(0.7); opacity: 0; }
+    100% { transform: scale(1); opacity: 1; }
+  }
+  .modal h2 {
+    font-size: 32px;
+    margin-bottom: 8px;
+    color: #f0e8ff;
+  }
+  .modal .emoji { font-size: 56px; display: block; margin-bottom: 6px; }
+  .modal p {
+    color: #b098d0;
+    font-size: 16px;
+    margin-bottom: 22px;
+  }
+  .modal .btn-restart {
+    background: linear-gradient(135deg, #8a6cd8, #6a4cb8);
+    border: none;
+    color: #fff;
+    padding: 12px 40px;
+    border-radius: 12px;
+    font-size: 16px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.25s;
+    box-shadow: 0 6px 20px rgba(106,76,184,0.4);
+  }
+  .modal .btn-restart:hover {
+    transform: translateY(-2px) scale(1.03);
+    box-shadow: 0 10px 30px rgba(106,76,184,0.5);
+  }
+
+  @media (max-width: 620px) {
+    .container { padding: 20px 16px 28px; }
+    canvas { width: 88vw; height: 88vw; max-width: 540px; max-height: 540px; }
+  }
+</style>
+</head>
+<body>
+
+<div class="overlay" id="winOverlay">
+  <div class="modal">
+    <span class="emoji" id="winEmoji">🏆</span>
+    <h2 id="winTitle">黑棋获胜！</h2>
+    <p id="winSub">恭喜！五子连珠 ✨</p>
+    <button class="btn-restart" onclick="resetGame()">🔄 再来一局</button>
+  </div>
+</div>
+
+<div class="container">
+  <h1>⚫ 五子棋 ⚪</h1>
+  <div class="subtitle">Gomoku · 果断猫版</div>
+
+  <div class="status-bar">
+    <div class="turn-indicator">
+      <span>当前落子</span>
+      <span class="stone-preview black" id="turnStone"></span>
+      <span id="turnText">黑棋</span>
+    </div>
+    <button class="btn" onclick="resetGame()">🔄 重新开始</button>
+  </div>
+
+  <div class="board-wrapper">
+    <canvas id="boardCanvas" width="540" height="540"></canvas>
+  </div>
+
+  <div class="info">
+    黑棋先手 · 点击棋盘落子 · <span id="moveCount">0</span> 手
+  </div>
+</div>
+
+<script>
+// ====== 五子棋核心逻辑 ======
+
+const SIZE = 15;
+const CELL = 540 / SIZE;  // 36px
+const RADIUS = CELL * 0.42;
+const OFFSET = CELL / 2;
+
+let board = [];
+let currentPlayer = 'black'; // 'black' 先手
+let gameOver = false;
+let moveHistory = [];
+let moveCount = 0;
+
+const canvas = document.getElementById('boardCanvas');
+const ctx = canvas.getContext('2d');
+
+function initBoard() {
+  board = Array.from({ length: SIZE }, () => Array(SIZE).fill(null));
+  currentPlayer = 'black';
+  gameOver = false;
+  moveHistory = [];
+  moveCount = 0;
+  document.getElementById('moveCount').textContent = '0';
+  document.getElementById('winOverlay').classList.remove('active');
+  updateTurnUI();
+  drawBoard();
+}
+
+function drawBoard() {
+  ctx.clearRect(0, 0, 540, 540);
+
+  // 棋盘底色
+  ctx.fillStyle = '#d4b88c';
+  ctx.fillRect(0, 0, 540, 540);
+
+  // 网格线
+  ctx.strokeStyle = '#5a3e28';
+  ctx.lineWidth = 1.2;
+  for (let i = 0; i < SIZE; i++) {
+    const pos = i * CELL + OFFSET;
+    ctx.beginPath();
+    ctx.moveTo(OFFSET, pos);
+    ctx.lineTo(540 - OFFSET, pos);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(pos, OFFSET);
+    ctx.lineTo(pos, 540 - OFFSET);
+    ctx.stroke();
+  }
+
+  // 星位 (天元 + 小目)
+  const stars = [[7,7], [3,3], [11,3], [3,11], [11,11]];
+  ctx.fillStyle = '#5a3e28';
+  stars.forEach(([r,c]) => {
+    ctx.beginPath();
+    ctx.arc(c * CELL + OFFSET, r * CELL + OFFSET, 4, 0, Math.PI*2);
+    ctx.fill();
+  });
+
+  // 棋子
+  for (let r = 0; r < SIZE; r++) {
+    for (let c = 0; c < SIZE; c++) {
+      const stone = board[r][c];
+      if (!stone) continue;
+      const x = c * CELL + OFFSET;
+      const y = r * CELL + OFFSET;
+
+      // 阴影
+      ctx.beginPath();
+      ctx.arc(x + 2, y + 2, RADIUS, 0, Math.PI*2);
+      ctx.fillStyle = 'rgba(0,0,0,0.25)';
+      ctx.fill();
+
+      // 棋子本体
+      const grad = ctx.createRadialGradient(x-4, y-4, 2, x, y, RADIUS);
+      if (stone === 'black') {
+        grad.addColorStop(0, '#666');
+        grad.addColorStop(0.5, '#222');
+        grad.addColorStop(1, '#000');
+      } else {
+        grad.addColorStop(0, '#fff');
+        grad.addColorStop(0.5, '#eee');
+        grad.addColorStop(1, '#bbb');
+      }
+      ctx.beginPath();
+      ctx.arc(x, y, RADIUS, 0, Math.PI*2);
+      ctx.fillStyle = grad;
+      ctx.fill();
+
+      // 高光
+      ctx.beginPath();
+      ctx.arc(x-3, y-3, RADIUS*0.28, 0, Math.PI*2);
+      ctx.fillStyle = stone === 'black' ? 'rgba(255,255,255,0.15)' : 'rgba(255,255,255,0.5)';
+      ctx.fill();
+    }
+  }
+
+  // 最后一手标记
+  if (moveHistory.length > 0) {
+    const last = moveHistory[moveHistory.length - 1];
+    const x = last.c * CELL + OFFSET;
+    const y = last.r * CELL + OFFSET;
+    ctx.strokeStyle = last.player === 'black' ? '#ff4444' : '#ff4444';
+    ctx.lineWidth = 2.5;
+    const s = 6;
+    ctx.beginPath();
+    ctx.moveTo(x - s, y - s); ctx.lineTo(x + s, y + s);
+    ctx.moveTo(x + s, y - s); ctx.lineTo(x - s, y + s);
+    ctx.stroke();
+  }
+}
+
+function updateTurnUI() {
+  const stone = document.getElementById('turnStone');
+  const text = document.getElementById('turnText');
+  stone.className = 'stone-preview ' + currentPlayer;
+  text.textContent = currentPlayer === 'black' ? '黑棋' : '白棋';
+}
+
+function checkWin(row, col, player) {
+  const directions = [[1,0],[0,1],[1,1],[1,-1]];
+  for (const [dr, dc] of directions) {
+    let count = 1;
+    // 正方向
+    for (let i = 1; i < 5; i++) {
+      const nr = row + dr * i, nc = col + dc * i;
+      if (nr < 0 || nr >= SIZE || nc < 0 || nc >= SIZE) break;
+      if (board[nr][nc] !== player) break;
+      count++;
+    }
+    // 反方向
+    for (let i = 1; i < 5; i++) {
+      const nr = row - dr * i, nc = col - dc * i;
+      if (nr < 0 || nr >= SIZE || nc < 0 || nc >= SIZE) break;
+      if (board[nr][nc] !== player) break;
+      count++;
+    }
+    if (count >= 5) return true;
+  }
+  return false;
+}
+
+function showWin(player) {
+  gameOver = true;
+  const overlay = document.getElementById('winOverlay');
+  const emoji = document.getElementById('winEmoji');
+  const title = document.getElementById('winTitle');
+  const sub = document.getElementById('winSub');
+
+  if (player === 'black') {
+    emoji.textContent = '⚫';
+    title.textContent = '黑棋获胜！';
+  } else {
+    emoji.textContent = '⚪';
+    title.textContent = '白棋获胜！';
+  }
+  sub.textContent = `五子连珠 · 共 ${moveCount} 手 ✨`;
+  overlay.classList.add('active');
+}
+
+function placeStone(row, col) {
+  if (gameOver) return false;
+  if (board[row][col] !== null) return false;
+
+  board[row][col] = currentPlayer;
+  moveHistory.push({ r: row, c: col, player: currentPlayer });
+  moveCount++;
+  document.getElementById('moveCount').textContent = moveCount;
+  drawBoard();
+
+  if (checkWin(row, col, currentPlayer)) {
+    showWin(currentPlayer);
+    return true;
+  }
+
+  // 平局检查
+  if (moveCount === SIZE * SIZE) {
+    gameOver = true;
+    const overlay = document.getElementById('winOverlay');
+    document.getElementById('winEmoji').textContent = '🤝';
+    document.getElementById('winTitle').textContent = '平局！';
+    document.getElementById('winSub').textContent = '棋盘已满，势均力敌！';
+    overlay.classList.add('active');
+    return true;
+  }
+
+  // 切换玩家
+  currentPlayer = currentPlayer === 'black' ? 'white' : 'black';
+  updateTurnUI();
+  return true;
+}
+
+function resetGame() {
+  initBoard();
+  drawBoard();
+}
+
+// 鼠标点击坐标 -> 棋盘格子
+canvas.addEventListener('click', (e) => {
+  const rect = canvas.getBoundingClientRect();
+  const scale = canvas.width / rect.width;
+  const x = (e.clientX - rect.left) * scale;
+  const y = (e.clientY - rect.top) * scale;
+
+  const col = Math.round((x - OFFSET) / CELL);
+  const row = Math.round((y - OFFSET) / CELL);
+
+  if (row < 0 || row >= SIZE || col < 0 || col >= SIZE) return;
+  placeStone(row, col);
+});
+
+// 鼠标移动悬停效果
+let hoverPos = null;
+canvas.addEventListener('mousemove', (e) => {
+  const rect = canvas.getBoundingClientRect();
+  const scale = canvas.width / rect.width;
+  const x = (e.clientX - rect.left) * scale;
+  const y = (e.clientY - rect.top) * scale;
+  const col = Math.round((x - OFFSET) / CELL);
+  const row = Math.round((y - OFFSET) / CELL);
+
+  if (row < 0 || row >= SIZE || col < 0 || col >= SIZE) {
+    if (hoverPos) { hoverPos = null; drawBoard(); }
+    return;
+  }
+
+  if (!hoverPos || hoverPos[0] !== row || hoverPos[1] !== col) {
+    hoverPos = [row, col];
+    drawBoard();
+    // 绘制悬停半透明棋子
+    if (!gameOver && board[row][col] === null) {
+      const x2 = col * CELL + OFFSET;
+      const y2 = row * CELL + OFFSET;
+      ctx.beginPath();
+      ctx.arc(x2, y2, RADIUS, 0, Math.PI*2);
+      ctx.fillStyle = currentPlayer === 'black' ? 'rgba(0,0,0,0.35)' : 'rgba(255,255,255,0.35)';
+      ctx.fill();
+    }
+  }
+});
+
+canvas.addEventListener('mouseleave', () => {
+  hoverPos = null;
+  drawBoard();
+});
+
+// 键盘快捷键：R 重新开始
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'r' || e.key === 'R') resetGame();
+});
+
+// 启动
+initBoard();
+</script>
+</body>
+</html>

@@ -32,14 +32,17 @@ class PlanExecuteStrategy(BaseStrategy):
         super().__init__(config, llm, tools)
 
     def create_plan(self, task: str) -> list[str]:
-        """调用 LLM 将任务分解为有序步骤。"""
+        """调用 LLM 将任务分解为有序步骤。简单任务返回 1 步。"""
         messages = [{
             "role": "user",
             "content": (
-                f"Break the following task into 3-5 simple, ordered, actionable steps. "
-                f"Each step must be a concrete action that can be executed independently. "
-                f"Return ONLY a JSON object with a 'steps' array of strings. "
-                f"No markdown, no explanation.\n\nTask: {task}"
+                f"Break the following task into ordered, actionable steps.\n\n"
+                f"Rules:\n"
+                f"- If the task is simple (single question, single action), return ONLY 1 step.\n"
+                f"- If the task is complex (multiple sub-tasks, dependencies), return 3-5 steps.\n"
+                f"- Each step must be concrete and independently executable.\n"
+                f"- Return ONLY a JSON object with a 'steps' array of strings. No markdown, no explanation.\n\n"
+                f"Task: {task}"
             ),
         }]
         plan_data = self._chat_json(messages)
@@ -86,9 +89,7 @@ class PlanExecuteStrategy(BaseStrategy):
         """
         执行 Plan-Execute 策略。
 
-        Args:
-            task: 用户任务
-            agent_loop_fn: 核心循环函数 f(messages, exclude_tools) -> (text, messages)
+        简单任务短路：如果 LLM 认为任务只需一步，直接执行跳过评估。
         """
         logger.info(f"{'='*60}")
         logger.info(f"[Plan-Execute] Task: {task}")
@@ -99,6 +100,13 @@ class PlanExecuteStrategy(BaseStrategy):
         logger.info(f"[Plan] Created {len(steps)} steps:")
         for i, s in enumerate(steps, 1):
             logger.info(f"  {i}. {s}")
+
+        # 简单任务短路：1 步直接执行，不需要评估
+        if len(steps) == 1:
+            logger.info("[Plan] Single step — executing directly without evaluation")
+            result, _ = agent_loop_fn([{"role": "user", "content": task}])
+            self._emit_safe("text", {"text": result})
+            return result
 
         # Phase 2: Execute with evaluation
         results: list[str] = []
@@ -116,13 +124,12 @@ class PlanExecuteStrategy(BaseStrategy):
             all_messages.extend(step_messages)
             logger.info(f"[Result] {step_result[:300]}...")
 
-            # Phase 3: Evaluate
-            if step_idx < len(steps) - 1 or len(steps) > 1:
+            # Phase 3: Evaluate (只对非最后一步评估，减少 LLM 调用)
+            if step_idx < len(steps) - 1:
                 eval_result = self.evaluate_step(task, step, step_result)
                 logger.info(f"[Evaluate] {eval_result}")
 
                 if eval_result.lower().startswith("failed"):
-                    # Phase 4: Revise plan
                     remaining = steps[step_idx + 1:]
                     logger.info(f"[Revise] Replanning remaining {len(remaining)} steps...")
                     revised = self.revise_plan(task, remaining, eval_result)
@@ -132,7 +139,6 @@ class PlanExecuteStrategy(BaseStrategy):
                     steps = steps[:step_idx + 1] + revised
                     logger.info(f"[Revise] Updated plan ({len(steps)} steps total)")
                 elif eval_result.lower().startswith("partial"):
-                    # 部分成功，在下一步前插入修正步骤
                     remaining = steps[step_idx + 1:]
                     revised = self.revise_plan(task, remaining, eval_result)
                     if revised:
