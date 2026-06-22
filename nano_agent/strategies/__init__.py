@@ -6,6 +6,7 @@
 """
 
 from .base import BaseStrategy
+from .default import DefaultStrategy
 from .plan_execute import PlanExecuteStrategy
 from .react import ReActStrategy
 from .reflexion import ReflexionStrategy
@@ -15,6 +16,7 @@ from .tree_of_thought import TreeOfThoughtStrategy
 # key = 策略名称, value = 策略类
 # 新增策略只需: 1) 实现策略类  2) 在此注册
 STRATEGY_REGISTRY: dict[str, type] = {
+    "default": DefaultStrategy,
     "react": ReActStrategy,
     "plan-execute": PlanExecuteStrategy,
     "reflexion": ReflexionStrategy,
@@ -23,7 +25,7 @@ STRATEGY_REGISTRY: dict[str, type] = {
 
 __all__ = [
     "BaseStrategy",
-    "ReActStrategy", "PlanExecuteStrategy",
+    "DefaultStrategy", "ReActStrategy", "PlanExecuteStrategy",
     "ReflexionStrategy", "TreeOfThoughtStrategy",
     "STRATEGY_REGISTRY",
 ]

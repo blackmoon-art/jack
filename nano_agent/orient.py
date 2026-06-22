@@ -143,28 +143,51 @@ class Orient:
         return "\n".join(parts)
 
     def _parse_orientation(self, text: str) -> dict:
-        """解析 LLM 返回的 JSON。容错处理。"""
+        """解析 LLM 返回的 JSON。含重试逻辑。"""
         import json as _json
         text = text.strip()
         if text.startswith("```"):
             text = text.split("\n", 1)[-1]
             if text.endswith("```"):
                 text = text[:-3]
-        try:
-            data = _json.loads(text)
-            return {
-                "interpretation": data.get("interpretation", ""),
-                "association": data.get("association", ""),
-                "implication": data.get("implication", ""),
-                "confidence": int(data.get("confidence", 5)),
-                "focus": data.get("focus", ""),
-            }
-        except (_json.JSONDecodeError, ValueError) as e:
-            logger.warning(f"Failed to parse orientation JSON: {e}")
-            return {
-                "interpretation": text[:500],
-                "association": "",
-                "implication": "Proceed with the next action.",
-                "confidence": 5,
-                "focus": "",
-            }
+
+        for attempt in range(3):
+            try:
+                data = _json.loads(text.strip())
+                return {
+                    "interpretation": data.get("interpretation", ""),
+                    "association": data.get("association", ""),
+                    "implication": data.get("implication", ""),
+                    "confidence": int(data.get("confidence", 5)),
+                    "focus": data.get("focus", ""),
+                }
+            except (_json.JSONDecodeError, ValueError) as e:
+                if attempt >= 2:
+                    logger.warning(f"Failed to parse orientation JSON after 3 attempts: {e}")
+                    return {
+                        "interpretation": text[:500],
+                        "association": "",
+                        "implication": "Proceed with the next action.",
+                        "confidence": 5,
+                        "focus": "",
+                    }
+                # 重试：让 LLM 重新生成
+                logger.warning(f"Orient JSON parse failed (attempt {attempt+1}/3), retrying: {e}")
+                retry_prompt = (
+                    "Your previous response was not valid JSON. "
+                    "Return ONLY a valid JSON object with keys: "
+                    "interpretation, association, implication, confidence, focus. "
+                    "No markdown, no explanation."
+                )
+                response = self.llm.chat(
+                    messages=[
+                        {"role": "user", "content": retry_prompt},
+                    ],
+                    tools=[],
+                    system="You are an analytical observer. Be precise and concise.",
+                )
+                text = response["text"].strip()
+                if text.startswith("```"):
+                    text = text.split("\n", 1)[-1]
+                    if text.endswith("```"):
+                        text = text[:-3]

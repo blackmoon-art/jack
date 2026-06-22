@@ -22,8 +22,68 @@ class Stock:
     # ── 实时行情 ──────────────────────────────────────
 
     def stock_info(self, symbol: str) -> str:
-        """获取股票实时行情。数据来源 Yahoo Finance，免费无需 Key。"""
-        symbol = symbol.upper().strip()
+        """获取股票实时行情。A 股走 akshare，美股/港股走 Yahoo Finance。"""
+        raw = symbol.upper().strip()
+        clean, is_a = self._parse_stock_symbol(raw)
+
+        if is_a:
+            return self._stock_info_akshare(clean)
+        return self._stock_info_yahoo(raw)
+
+    def _stock_info_akshare(self, symbol: str) -> str:
+        """A 股实时行情 — 腾讯行情 API（国内可达，无需 Key）。"""
+        try:
+            # 判断市场前缀: 6/9开头=沪(sh), 0/3开头=深(sz)
+            prefix = 'sh' if symbol.startswith(('6', '9')) else 'sz'
+            code = f"{prefix}{symbol}"
+            url = f"http://qt.gtimg.cn/q={code}"
+            req = urllib.request.Request(url, headers={
+                "User-Agent": "Mozilla/5.0",
+                "Referer": "https://gu.qq.com/",
+            })
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                raw = resp.read().decode('gbk', errors='replace')
+
+            # 格式: v_sh000001="1~名称~代码~现价~昨收~开~成交量~..."
+            if f'v_{code}="' not in raw:
+                return f"Error: A-share symbol not found — '{symbol}'"
+
+            val = raw.split('="', 1)[1].rstrip('";')
+            fields = val.split('~')
+
+            # 腾讯行情字段索引 (关键):
+            # 1=名称, 2=代码, 3=现价, 4=昨收, 5=今开,
+            # 31=涨跌额, 32=涨跌幅(%), 33=最高, 34=最低,
+            # 6=成交量(手), 37=成交额(万)
+            name = fields[1] if len(fields) > 1 else symbol
+            price = float(fields[3]) if len(fields) > 3 and fields[3] else 0
+            prev_close = float(fields[4]) if len(fields) > 4 and fields[4] else 0
+            change = float(fields[31]) if len(fields) > 31 and fields[31] else price - prev_close
+            change_pct = float(fields[32]) if len(fields) > 32 and fields[32] else (change / prev_close * 100 if prev_close else 0)
+            volume = float(fields[6]) if len(fields) > 6 and fields[6] else 0
+            turnover = float(fields[37]) if len(fields) > 37 and fields[37] else 0
+            high = float(fields[33]) if len(fields) > 33 and fields[33] else 0
+            low = float(fields[34]) if len(fields) > 34 and fields[34] else 0
+
+            sign = "+" if change >= 0 else ""
+            arrow = "📈" if change >= 0 else "📉"
+            vol_str = f"{volume/1e4:.0f}万手" if volume > 1e4 else f"{volume:.0f}手"
+            turnover_str = f"{turnover/1e4:.1f}亿" if turnover > 1e4 else f"{turnover:.0f}万"
+
+            return (
+                f"{arrow} {name} ({symbol}) — A股\n"
+                f"💵 价格: {price:.2f} CNY\n"
+                f"📊 涨跌: {sign}{change:.2f} ({sign}{change_pct:.2f}%)\n"
+                f"📈 最高: {high:.2f} | 📉 最低: {low:.2f}\n"
+                f"📦 成交量: {vol_str} | 💰 成交额: {turnover_str}\n"
+                f"🕐 昨收: {prev_close:.2f} CNY"
+            )
+        except Exception as e:
+            return f"Error: A-share lookup failed for '{symbol}' — {e}"
+
+    def _stock_info_yahoo(self, symbol: str) -> str:
+        """美股/港股实时行情 — Yahoo Finance → 腾讯行情 fallback。"""
+        # 先尝试 Yahoo
         try:
             url = (
                 f"https://query1.finance.yahoo.com/v8/finance/chart/{urllib.parse.quote(symbol)}"
@@ -36,41 +96,86 @@ class Stock:
             })
             with urllib.request.urlopen(req, timeout=10) as resp:
                 data = _json.loads(resp.read().decode("utf-8"))
-        except urllib.error.HTTPError as e:
-            return f"Error: Stock symbol not found — '{symbol}' (HTTP {e.code})"
-        except urllib.error.URLError as e:
-            return f"Error: Cannot reach Yahoo Finance — {e.reason}"
+
+            result = data.get("chart", {}).get("result", [])
+            if not result:
+                raise ValueError("No data")
+
+            meta = result[0].get("meta", {})
+            price = meta.get("regularMarketPrice", "N/A")
+            prev_close = meta.get("previousClose", "N/A")
+            change = round(price - prev_close, 2) if isinstance(price, (int, float)) and isinstance(prev_close, (int, float)) else "N/A"
+            change_pct = round(change / prev_close * 100, 2) if isinstance(change, (int, float)) and prev_close else "N/A"
+            high = meta.get("regularMarketDayHigh", "N/A")
+            low = meta.get("regularMarketDayLow", "N/A")
+            volume = meta.get("regularMarketVolume", "N/A")
+            name = meta.get("longName") or meta.get("shortName") or symbol
+            currency = meta.get("currency", "USD")
+            exchange = meta.get("exchangeName", "")
+
+            sign = "+" if isinstance(change, (int, float)) and change >= 0 else ""
+            arrow = "📈" if isinstance(change, (int, float)) and change >= 0 else "📉"
+
+            return (
+                f"{arrow} {name} ({symbol}) — {exchange}\n"
+                f"💵 价格: {price} {currency}\n"
+                f"📊 涨跌: {sign}{change} ({sign}{change_pct}%)\n"
+                f"📈 最高: {high} | 📉 最低: {low}\n"
+                f"📦 成交量: {volume}\n"
+                f"🕐 昨收: {prev_close} {currency}"
+            )
+        except Exception:
+            pass  # Yahoo 失败，尝试腾讯行情
+
+        # Fallback: 腾讯行情（支持美股 .US / 港股 .HK）
+        try:
+            # 转换符号: AAPL → usAAPL, 0700.HK → hk0700
+            if '.' in symbol.upper():
+                base, mkt = symbol.upper().split('.', 1)
+                if mkt == 'HK':
+                    qt_code = f'hk{base}'
+                else:
+                    qt_code = f'us{base}'
+            else:
+                qt_code = f'us{symbol.upper()}'
+
+            url = f"http://qt.gtimg.cn/q={qt_code}"
+            req = urllib.request.Request(url, headers={
+                "User-Agent": "Mozilla/5.0",
+                "Referer": "https://gu.qq.com/",
+            })
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                raw = resp.read().decode('gbk', errors='replace')
+
+            if f'v_{qt_code}="' not in raw:
+                return f"Error: Stock symbol not found — '{symbol}'"
+
+            val = raw.split('="', 1)[1].rstrip('";')
+            fields = val.split('~')
+
+            name = fields[1] if len(fields) > 1 else symbol
+            price = float(fields[3]) if len(fields) > 3 and fields[3] else 0
+            prev_close = float(fields[4]) if len(fields) > 4 and fields[4] else 0
+            change = float(fields[31]) if len(fields) > 31 and fields[31] else price - prev_close
+            change_pct = float(fields[32]) if len(fields) > 32 and fields[32] else (change / prev_close * 100 if prev_close else 0)
+            high = float(fields[33]) if len(fields) > 33 and fields[33] else 0
+            low = float(fields[34]) if len(fields) > 34 and fields[34] else 0
+            volume = float(fields[6]) if len(fields) > 6 and fields[6] else 0
+            currency = fields[82] if len(fields) > 82 and fields[82] else "USD"
+
+            sign = "+" if change >= 0 else ""
+            arrow = "📈" if change >= 0 else "📉"
+
+            return (
+                f"{arrow} {name} ({symbol})\n"
+                f"💵 价格: {price:.2f} {currency}\n"
+                f"📊 涨跌: {sign}{change:.2f} ({sign}{change_pct:.2f}%)\n"
+                f"📈 最高: {high:.2f} | 📉 最低: {low:.2f}\n"
+                f"📦 成交量: {volume:,.0f}\n"
+                f"🕐 昨收: {prev_close:.2f} {currency}"
+            )
         except Exception as e:
-            return f"Error: {e}"
-
-        result = data.get("chart", {}).get("result", [])
-        if not result:
-            return f"Error: No data for symbol '{symbol}'"
-
-        meta = result[0].get("meta", {})
-
-        price = meta.get("regularMarketPrice", "N/A")
-        prev_close = meta.get("previousClose", "N/A")
-        change = round(price - prev_close, 2) if isinstance(price, (int, float)) and isinstance(prev_close, (int, float)) else "N/A"
-        change_pct = round(change / prev_close * 100, 2) if isinstance(change, (int, float)) and prev_close else "N/A"
-        high = meta.get("regularMarketDayHigh", "N/A")
-        low = meta.get("regularMarketDayLow", "N/A")
-        volume = meta.get("regularMarketVolume", "N/A")
-        name = meta.get("longName") or meta.get("shortName") or symbol
-        currency = meta.get("currency", "USD")
-        exchange = meta.get("exchangeName", "")
-
-        sign = "+" if isinstance(change, (int, float)) and change >= 0 else ""
-        arrow = "📈" if isinstance(change, (int, float)) and change >= 0 else "📉"
-
-        return (
-            f"{arrow} {name} ({symbol}) — {exchange}\n"
-            f"💵 价格: {price} {currency}\n"
-            f"📊 涨跌: {sign}{change} ({sign}{change_pct}%)\n"
-            f"📈 最高: {high} | 📉 最低: {low}\n"
-            f"📦 成交量: {volume}\n"
-            f"🕐 昨收: {prev_close} {currency}"
-        )
+            return f"Error: Stock lookup failed for '{symbol}' — {e}"
 
     # ── 历史行情 ──────────────────────────────────────
 

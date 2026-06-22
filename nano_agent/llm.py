@@ -91,9 +91,20 @@ class LLM:
                 else:
                     return self._chat_openai(messages, tools, system)
             except Exception as e:
-                if attempt == 2:
+                # 只重试可恢复错误：429 限速、5xx 服务端错误、网络超时
+                retryable = False
+                err_str = str(e).lower()
+                status_code = getattr(e, 'status_code', None) or getattr(getattr(e, 'response', None), 'status_code', None)
+                if status_code in (429, 500, 502, 503, 504):
+                    retryable = True
+                elif any(kw in err_str for kw in ('rate_limit', 'timeout', 'connection', 'overloaded', 'server error')):
+                    retryable = True
+
+                if not retryable or attempt == 2:
                     raise
-                time.sleep(2**attempt)
+                wait = 2 ** attempt
+                logger.warning(f"LLM retryable error (attempt {attempt+1}/3): {e}, waiting {wait}s")
+                time.sleep(wait)
 
         raise RuntimeError("unreachable")
 

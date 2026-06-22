@@ -220,7 +220,7 @@ Generate 3 approaches → Score: A(9) B(7) C(3)
 | `search_and_fetch` | 搜索 + 自动抓取首个结果内容 | 复用 web_search + fetch_url |
 | `calculate` | 数学表达式求值 | `ast` 安全解析，无 `eval` |
 | `get_weather` | 查询城市实时天气 (Open-Meteo API) | 免费，无需 API Key |
-| `stock_info` | 股票实时行情 (Yahoo Finance API) | 免费，无需 API Key |
+| `stock_info` | 股票实时行情 (A股腾讯/Yahoo/腾讯fallback) | 免费，无需 API Key，国内可达 |
 | `stock_history` | 股票历史日K数据 (A股 akshare / 美股 yfinance) | 免费，无需 API Key |
 | `stock_chart` | 生成股票走势图/K线图 PNG (matplotlib) | 同股票同周期自动缓存 |
 
@@ -657,6 +657,16 @@ nano_agent_plus/
 **方案**：装饰器或基类自动从类型注解生成 schema。
 
 ## 更新日志
+
+### 2026-06-23 (凌晨打磨)
+
+- **LLM 智能重试**：不再盲目重试所有异常。只重试可恢复错误（429 限速、5xx 服务端、网络超时），其余直接抛出。避免 API key 错误等致命问题被掩盖。
+- **Default 策略进注册表**：`default` 不再硬编码 `_agent_loop`，和其他策略一样走 `STRATEGY_REGISTRY`。未知策略抛 `ValueError` 而非静默回退。
+- **策略参数可配置**：`_strategy_defaults()` 从 Config 注入 `react_max_steps`、`reflexion_max_retries`、`tot_num_candidates`、`tot_score_threshold`，`.env` 可配。
+- **Orient JSON 重试**：`_parse_orientation()` JSON 解析失败时重新让 LLM 生成，最多 3 次，而非直接回退到文本。
+- **stock_info 分市场**：A 股走腾讯行情 API（国内可达，GBK 解码），美股/港股走 Yahoo Finance + 腾讯 fallback。无需 Key。
+- **Web 线程安全**：`sessions` 全局 dict 加 `threading.Lock`，`agent_stream` 的 `item` 变量修复空指针风险。
+- **history 持久化到 SQLite**：`db_save_message` / `db_load_history`，进程重启后从 DB 恢复会话历史。
 
 ### 2026-06-22 深夜续续续 (基准测试 + Observation + LongTermMemory)
 

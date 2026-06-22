@@ -100,8 +100,11 @@ def db_clear_session(session_id: str):
         logger.warning(f"Failed to clear session: {e}")
 
 
-# Session storage: session_id -> {"agent": Agent (内存), "history": list (缓存)}
-# history 同步持久化到 SQLite, 重启后从 DB 恢复
+import threading
+
+# Session storage: session_id -> {"agent": Agent, "history": list}
+# 线程安全：所有读写都经过 _sessions_lock
+_sessions_lock = threading.Lock()
 sessions: dict[str, dict] = {}
 
 # ── 使用次数统计 ──────────────────────────────────────
@@ -160,20 +163,20 @@ STATIC_DIR = Path(__file__).parent / "static"
 
 
 def get_or_create_session(session_id: Optional[str] = None) -> str:
-    """获取或创建会话。新 session 或内存中不存在时从 DB 恢复历史。"""
-    if session_id and session_id in sessions:
-        return session_id
-    new_id = session_id or uuid.uuid4().hex[:12]
-    if new_id not in sessions:
-        # 从 SQLite 恢复历史（如果有）
-        history = db_load_history(new_id)
-        sessions[new_id] = {
-            "agent": Agent(Config()),
-            "history": history,
-        }
-        if history:
-            logger.info(f"Restored session {new_id}: {len(history)} messages from DB")
-    return new_id
+    """获取或创建会话。新 session 或内存中不存在时从 DB 恢复历史。线程安全。"""
+    with _sessions_lock:
+        if session_id and session_id in sessions:
+            return session_id
+        new_id = session_id or uuid.uuid4().hex[:12]
+        if new_id not in sessions:
+            history = db_load_history(new_id)
+            sessions[new_id] = {
+                "agent": Agent(Config()),
+                "history": history,
+            }
+            if history:
+                logger.info(f"Restored session {new_id}: {len(history)} messages from DB")
+        return new_id
 
 
 # ── SSE 流式响应 ──────────────────────────────────────
@@ -189,12 +192,16 @@ def agent_stream(task: str, strategy: str, session_id: str):
         queue.put({"event": event_type, "data": data})
 
     # 在后台线程运行 agent
+    last_item = None
+
     def run():
+        nonlocal last_item
         try:
             agent.run(task, strategy=strategy, on_event=on_event)
         except Exception as e:
             logger.exception(f"Agent run failed: {e}")
-            queue.put({"event": "error", "data": {"text": str(e)}})
+            last_item = {"event": "error", "data": {"text": str(e)}}
+            queue.put(last_item)
 
     thread = Thread(target=run)
     thread.start()
@@ -202,6 +209,7 @@ def agent_stream(task: str, strategy: str, session_id: str):
     # 流式发送事件
     while True:
         item = queue.get()
+        last_item = item
         if item is None:
             break
         event_type = item["event"]
@@ -214,8 +222,8 @@ def agent_stream(task: str, strategy: str, session_id: str):
     # 记录历史（内存 + SQLite）
     sessions[session_id]["history"].append({"role": "user", "content": task})
     db_save_message(session_id, "user", task)
-    if item and item["event"] == "done":
-        reply = item["data"]["text"]
+    if last_item and last_item.get("event") == "done":
+        reply = last_item["data"]["text"]
         sessions[session_id]["history"].append({"role": "assistant", "content": reply})
         db_save_message(session_id, "assistant", reply)
 
@@ -264,19 +272,20 @@ async def chat(request: Request):
 @app.get("/api/sessions/{session_id}/history")
 async def get_history(session_id: str):
     """Get chat history for a session."""
-    if session_id not in sessions:
-        # 内存中没有, 尝试从 DB 恢复
-        history = db_load_history(session_id)
-        return {"history": history}
-    return {"history": sessions[session_id]["history"]}
+    with _sessions_lock:
+        if session_id not in sessions:
+            history = db_load_history(session_id)
+            return {"history": history}
+        return {"history": sessions[session_id]["history"]}
 
 
 @app.delete("/api/sessions/{session_id}")
 async def clear_session(session_id: str):
     """Clear session memory."""
-    if session_id in sessions:
-        sessions[session_id]["agent"].clear_memory()
-        sessions[session_id]["history"] = []
+    with _sessions_lock:
+        if session_id in sessions:
+            sessions[session_id]["agent"].clear_memory()
+            sessions[session_id]["history"] = []
     db_clear_session(session_id)
     return {"ok": True}
 

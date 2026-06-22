@@ -74,13 +74,12 @@ class Agent:
         base_messages = self._build_messages(task)
 
         strategy_cls = STRATEGY_REGISTRY.get(strategy)
-        if strategy_cls:
-            # 从 Config 注入策略默认参数（可被 strategy_kwargs 覆盖）
-            defaults = self._strategy_defaults(strategy)
-            defaults.update(strategy_kwargs)
-            final = self._run_strategy(strategy_cls, task, **defaults)
-        else:  # default
-            final, _ = self._agent_loop(base_messages)
+        if not strategy_cls:
+            raise ValueError(f"Unknown strategy: '{strategy}'. Available: {list(STRATEGY_REGISTRY.keys())}")
+
+        defaults = self._strategy_defaults(strategy)
+        defaults.update(strategy_kwargs)
+        final = self._run_strategy(strategy_cls, task, **defaults)
 
         self._emit("done", {"text": final})
         self.memory.save_context(task, final)
