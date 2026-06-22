@@ -19,21 +19,22 @@ class Search:
     # ── 公开接口 ──────────────────────────────────────
 
     def web_search(self, query: str, max_results: int = 5) -> str:
-        """搜索网页：Brave → DuckDuckGo → Bing → SearXNG → Wikipedia 五级降级。"""
+        """搜索网页：Bing → DuckDuckGo → Brave → SearXNG → Wikipedia 五级降级。"""
         max_results = min(max(max_results, 1), 10)
 
-        if self.brave_api_key:
-            results = self._search_brave(query, max_results)
-            if results:
-                return f"Search results for '{query}' (Brave):\n\n" + "\n\n".join(results)
+        # 国内环境：Bing 最稳定，优先
+        results = self._search_bing(query, max_results)
+        if results:
+            return f"Search results for '{query}' (Bing):\n\n" + "\n\n".join(results)
 
         results = self._search_duckduckgo(query, max_results)
         if results:
             return f"Search results for '{query}':\n\n" + "\n\n".join(results)
 
-        results = self._search_bing(query, max_results)
-        if results:
-            return f"Search results for '{query}' (Bing):\n\n" + "\n\n".join(results)
+        if self.brave_api_key:
+            results = self._search_brave(query, max_results)
+            if results:
+                return f"Search results for '{query}' (Brave):\n\n" + "\n\n".join(results)
 
         results = self._search_searxng(query, max_results)
         if results:
@@ -140,7 +141,7 @@ class Search:
         }
         try:
             req = urllib.request.Request(url, data=data, headers=headers)
-            with urllib.request.urlopen(req, timeout=15) as resp:
+            with urllib.request.urlopen(req, timeout=8) as resp:
                 html = resp.read().decode("utf-8", errors="ignore")
         except Exception as e:
             logger.debug(f"DuckDuckGo search failed: {e}")
@@ -202,19 +203,19 @@ class Search:
 
     def _search_bing(self, query: str, max_results: int) -> list[str]:
         sources = [
-            ("https://www.bing.com/search", {
-                "User-Agent": (
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-                ),
-                "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
-            }),
             ("https://cn.bing.com/search", {
                 "User-Agent": (
                     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
                 ),
                 "Accept-Language": "zh-CN,zh;q=0.9",
+            }),
+            ("https://www.bing.com/search", {
+                "User-Agent": (
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+                ),
+                "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
             }),
         ]
         params = f"q={urllib.parse.quote_plus(query)}&count={max_results}"
@@ -223,13 +224,15 @@ class Search:
         for base_url, headers in sources:
             try:
                 req = urllib.request.Request(f"{base_url}?{params}", headers=headers)
-                with urllib.request.urlopen(req, timeout=15) as resp:
+                with urllib.request.urlopen(req, timeout=8) as resp:
                     html = resp.read().decode("utf-8", errors="ignore")
                 if html and len(html) > 1000:
                     break
             except Exception as e:
                 logger.debug(f"Bing search failed ({base_url}): {e}")
                 continue
+
+        if not html or len(html) < 500:
             return []
 
         blocks = re.findall(r'<li class="b_algo"[^>]*>(.*?)</li>', html, re.DOTALL)

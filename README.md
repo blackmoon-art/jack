@@ -658,6 +658,10 @@ nano_agent_plus/
 
 ## 更新日志
 
+### 2026-06-23 (午间)
+
+- **搜索链优先级调整**：Bing（cn优先）→ DDG → Brave → SearXNG → Wikipedia。国内环境 Bing 最稳定，超时从 15s 降至 8s 实现快速降级。
+
 ### 2026-06-23 (凌晨续)
 
 - **Decisive Cat 命名**：网页标题、FastAPI title、system prompt 统一改为 Decisive Cat（果断猫）。Agent 人设：简洁、果断、执行力强。
