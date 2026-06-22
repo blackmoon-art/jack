@@ -292,6 +292,9 @@ async function send() {
               break;
             case 'done':
               if (data.text && data.text !== 'Max iterations reached.') {
+                // 自动折叠所有思考块
+                document.querySelectorAll('.thinking-block.visible').forEach(b => b.classList.remove('visible'));
+                document.querySelectorAll('.thinking-summary.open').forEach(t => t.classList.remove('open'));
                 currentMsg = null;
                 addMessage('agent', data.text);
               }
