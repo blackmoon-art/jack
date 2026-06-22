@@ -156,7 +156,7 @@ function ensureThinkingTag() {
   tag.className = 'thinking-summary';
   tag.textContent = `👽 ${thinkingCount} 步思考过程`;
   tag.addEventListener('click', () => {
-    const block = currentMsg.querySelector('.thinking-block');
+    const block = tag.parentElement.querySelector('.thinking-block');
     if (!block) return;
     const open = block.classList.toggle('visible');
     tag.classList.toggle('open', open);
