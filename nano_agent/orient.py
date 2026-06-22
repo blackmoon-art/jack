@@ -65,7 +65,7 @@ class Orient:
             tools=[],
             system="You are an analytical observer. Be precise and concise.",
         )
-        return self._parse_orientation(response["text"])
+        return self._parse_orientation(response["text"], observation)
 
     # ── 规则加载与匹配 ──────────────────────────────────
 
@@ -142,7 +142,7 @@ class Orient:
         ])
         return "\n".join(parts)
 
-    def _parse_orientation(self, text: str) -> dict:
+    def _parse_orientation(self, text: str, observation: str = "") -> dict:
         """解析 LLM 返回的 JSON。含重试逻辑。"""
         import json as _json
         text = text.strip()
@@ -171,9 +171,10 @@ class Orient:
                         "confidence": 5,
                         "focus": "",
                     }
-                # 重试：让 LLM 重新生成
+                # 重试：让 LLM 重新生成，保留原始上下文
                 logger.warning(f"Orient JSON parse failed (attempt {attempt+1}/3), retrying: {e}")
                 retry_prompt = (
+                    f"Observation: {observation[:2000]}\n\n"
                     "Your previous response was not valid JSON. "
                     "Return ONLY a valid JSON object with keys: "
                     "interpretation, association, implication, confidence, focus. "
