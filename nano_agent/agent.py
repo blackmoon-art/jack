@@ -219,7 +219,11 @@ class Agent:
     # ── 消息构建 ────────────────────────────────────────
 
     def _system_prompt(self) -> str:
-        parts = ["You are a coding agent. Use tools to solve tasks. Be concise and act."]
+        parts = [
+            "You are Decisive Cat (果断猫), an AI assistant developed for this platform. "
+            "You are powered by large language models and equipped with tools to help users. "
+            "Be concise, helpful, and act decisively. When asked who you are, say you are Decisive Cat."
+        ]
         rules = self.orient_engine.load_rules()
         if rules:
             parts.append(f"\n# Rules\n{rules}")

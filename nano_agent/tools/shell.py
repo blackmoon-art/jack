@@ -60,7 +60,7 @@ _SAFE_COMMAND_PREFIXES = [
     "curl", "wget", "diff", "sort", "uniq", "cut", "sed", "awk", "tr",
     "which", "command", "type", "file", "stat", "du", "df",
     "pip", "pip3", "poetry", "uv", "cargo",
-    "nano", "code",
+    "nano", "code", "bash",
 ]
 _SAFE_COMMAND_PREFIXES_TUPLE = tuple(_SAFE_COMMAND_PREFIXES)
 
@@ -69,6 +69,18 @@ class Shell:
     def __init__(self, work_dir: str, bash_timeout: int = 120):
         self.work_dir = work_dir
         self.bash_timeout = bash_timeout
+        # 自动检测 venv，把 .venv/bin 加到 PATH
+        self._env = os.environ.copy()
+        venv_bin = os.path.join(work_dir, '.venv', 'bin')
+        if os.path.isdir(venv_bin):
+            self._env['PATH'] = venv_bin + os.pathsep + self._env.get('PATH', '')
+            self._env['VIRTUAL_ENV'] = os.path.join(work_dir, '.venv')
+
+    # 危险模式黑名单 — bash -c 内部不允许的命令
+    _DANGEROUS_PATTERNS = (
+        'rm -rf /', 'mkfs', 'dd if=', ':(){:|:&}', 'format c:',
+        'shutdown', 'reboot', 'init 0', 'init 6',
+    )
 
     def bash(self, command: str) -> str:
         """安全执行 bash 命令：shell=False + shlex + 白名单前缀。"""
@@ -86,6 +98,13 @@ class Shell:
                 f"Allowed prefixes: {', '.join(_SAFE_COMMAND_PREFIXES[:15])}..."
             )
 
+        # bash -c 安全检查：禁止危险模式
+        if cmd_name == 'bash' and '-c' in parts:
+            inner_cmd = ' '.join(parts[parts.index('-c') + 1:])
+            for pattern in self._DANGEROUS_PATTERNS:
+                if pattern in inner_cmd.lower():
+                    return f"Error: Dangerous pattern blocked in bash -c command"
+
         try:
             r = subprocess.run(
                 parts,
@@ -94,6 +113,7 @@ class Shell:
                 capture_output=True,
                 text=True,
                 timeout=self.bash_timeout,
+                env=self._env,
             )
             out = (r.stdout + r.stderr).strip()
             text = out[:50000] if out else "(no output)"

@@ -658,6 +658,12 @@ nano_agent_plus/
 
 ## 更新日志
 
+### 2026-06-23 (凌晨续)
+
+- **Decisive Cat 命名**：网页标题、FastAPI title、system prompt 统一改为 Decisive Cat（果断猫）。Agent 人设：简洁、果断、执行力强。
+- **bash 白名单增强**：`bash` 加入白名单，支持 `bash -c "管道|脚本"` 复杂命令。`bash -c` 内层加 `_DANGEROUS_PATTERNS` 黑名单（`rm -rf /`/`mkfs`/`fork bomb`等），防止白名单被绕过。
+- **venv 自动检测**：`Shell.__init__` 检测 `.venv/bin` 目录存在时自动注入 PATH 和 `VIRTUAL_ENV`，Agent 可直接使用项目虚拟环境中的 Python/工具。
+
 ### 2026-06-23 (凌晨打磨)
 
 - **LLM 智能重试**：不再盲目重试所有异常。只重试可恢复错误（429 限速、5xx 服务端、网络超时），其余直接抛出。避免 API key 错误等致命问题被掩盖。
