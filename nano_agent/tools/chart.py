@@ -18,6 +18,11 @@ import os
 from datetime import datetime
 from pathlib import Path
 
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+import numpy as np
+
 logger = logging.getLogger("nano_agent.tools.chart")
 
 
@@ -53,11 +58,6 @@ class Chart:
             filename: 文件名 (可选)
             style: dark 或 light (默认 dark)
         """
-        import matplotlib
-        matplotlib.use("Agg")
-        import matplotlib.pyplot as plt
-        import numpy as np
-
         # 解析数据
         try:
             data_sets = self._parse_multi(data)
@@ -263,8 +263,7 @@ class Chart:
         import numpy as np
         matrix = np.array([[float(x) for x in ds] for ds in data_sets])
         im = ax.imshow(matrix, cmap="coolwarm", aspect="auto")
-        import matplotlib.pyplot as _plt
-        cbar = _plt.colorbar(im, ax=ax)
+        cbar = plt.colorbar(im, ax=ax)
         cbar.ax.yaxis.set_tick_params(color="#ccc" if is_dark else "#333")
         for i in range(len(data_sets)):
             for j in range(len(data_sets[0])):
@@ -312,8 +311,7 @@ class Chart:
                 if i < len(xs):
                     ax.annotate(lbl, (xs[i], ys[i]), textcoords="offset points", xytext=(0, 8),
                                 ha="center", fontsize=9, color="#ccc" if is_dark else "#333")
-        import matplotlib.pyplot as _plt
-        _plt.colorbar(sc, ax=ax)
+        plt.colorbar(sc, ax=ax)
 
     # ── 清理 ──
 
