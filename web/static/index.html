@@ -104,7 +104,8 @@ const $status = document.getElementById('status');
 document.getElementById('session-info').textContent = `会话: ${SESSION_ID}`;
 
 let currentMsg = null;
-let thinkingCount = 0;  // 当前消息的思考步骤数
+let thinkingCount = 0;
+let chartImages = [];  // 本轮生成的图表图片 URL
 
 // 页面加载时恢复历史对话
 (async function restoreHistory() {
@@ -242,6 +243,7 @@ async function send() {
   $input.disabled = true;
   $status.textContent = '思考中...';
   thinkingCount = 0;
+  chartImages = [];
 
   addMessage('user', task);
   currentMsg = null;
@@ -306,6 +308,12 @@ async function send() {
               break;
             case 'tool_result':
               addThinkingBlock('tool-result', data.result?.slice(0, 1000) || '');
+              // 收集图表图片 URL (从 ![...](url) markdown)
+              const urls = (data.result || '').match(/!\[[^\]]*\]\((\/charts\/[^)]+)\)/g);
+              if (urls) urls.forEach(m => {
+                const u = m.match(/\(\/charts\/[^)]+\)/)[0].slice(1, -1);
+                if (!chartImages.includes(u)) chartImages.push(u);
+              });
               break;
             case 'orient':
               addThinkingBlock('orient',
@@ -313,11 +321,9 @@ async function send() {
               break;
             case 'done':
               if (data.text && data.text !== 'Max iterations reached.') {
-                // 从工具返回里提取图片 (linkify 已把 ![alt](url) 转成 <img>)
-                let imgs = '';
-                document.querySelectorAll('.tool-result img[src^="/charts/"]').forEach(el => {
-                  if (!imgs.includes(el.src)) imgs += `<img src="${el.src}" style="max-width:100%;border-radius:8px;margin:8px 0;" />`;
-                });
+                const imgs = chartImages.map(u =>
+                  `<img src="${u}" style="max-width:100%;border-radius:8px;margin:8px 0;" />`
+                ).join('');
                 document.querySelectorAll('.thinking-block.visible').forEach(b => b.classList.remove('visible'));
                 document.querySelectorAll('.thinking-summary.open').forEach(t => t.classList.remove('open'));
                 currentMsg = null;
