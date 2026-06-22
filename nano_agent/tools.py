@@ -307,12 +307,15 @@ class ToolRegistry:
                 f"{urllib.parse.urlencode({'q': query, 'count': str(max_results)})}",
                 headers={
                     "Accept": "application/json",
-                    "Accept-Encoding": "gzip",
                     "X-Subscription-Token": self.brave_api_key,
                 },
             )
             with urllib.request.urlopen(req, timeout=10) as resp:
-                data = json.loads(resp.read().decode("utf-8"))
+                raw = resp.read()
+                if resp.headers.get("Content-Encoding") == "gzip":
+                    import gzip
+                    raw = gzip.decompress(raw)
+                data = json.loads(raw.decode("utf-8"))
         except Exception:
             return []
 
