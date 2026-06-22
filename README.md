@@ -224,6 +224,8 @@ Generate 3 approaches → Score: A(9) B(7) C(3)
 | `stock_history` | 股票历史日K数据 (A股 akshare / 美股 yfinance) | 免费，无需 API Key |
 | `stock_chart` | 生成股票走势图/K线图 PNG (matplotlib) | 同股票同周期自动缓存 |
 
+工具返回 `Observation` 结构化对象（`tool_name`, `success`, `result`, `args`, `metadata`），Agent 可判断工具执行是否成功。同时兼容字符串操作（`__str__`/`__contains__`/`startswith` 委托到 `result`）。
+
 ## 记忆系统
 
 ```
@@ -246,9 +248,16 @@ Generate 3 approaches → Score: A(9) B(7) C(3)
 │ 自动轮转 (上限 200 行)           │
 │ 用于：反思教训复用               │
 └──────────────────────────────────┘
+                +
+┌─ Long-Term Memory (SQLite) ───────┐
+│ SQLite FTS5 全文搜索引擎          │
+│ 持久化到 long_term_memory.db      │
+│ 语义检索，自动 FTS tokenize       │
+│ 用于：跨会话精确召回历史经验      │
+└──────────────────────────────────┘
 ```
 
-三层记忆由 `Memory` 门面统一管理，策略和 Agent 不感知存储细节。
+四层记忆由 `Memory` 门面统一管理，策略和 Agent 不感知存储细节。`load_relevant(query)` 方法自动从长期记忆中语义检索最相关的历史经验。
 
 ## 配置项
 
@@ -322,8 +331,26 @@ python -m unittest discover tests -v
 | `tests/test_agent.py` | 8 | Agent 循环, 未知工具回退, 最大迭代, 记忆集成, 规则加载 |
 | `tests/test_orient.py` | 8 | Orient 解读, 规则加载/缓存/匹配 |
 | `tests/test_strategies.py` | 26 | Plan-Execute(6), ReAct(8), Reflexion(6), Tree-of-Thought(6) |
+| `tests/test_evaluation.py` | 29 | TaskCase, TaskResult, EvalReport, Benchmark, 策略对比 |
+| `tests/test_memory.py` | 14 | 窗口/持久/反思/LongTermMemory |
 
 全部使用 Mock LLM，不依赖真实 API，可在 CI 运行。
+
+## 基准测试
+
+```bash
+python run_eval.py --strategies default,react,reflexion --tasks all
+# default:    成功率 85%  平均 3.2 步  平均 2.1s
+# react:      成功率 78%  平均 4.1 步  平均 2.8s
+# reflexion:  成功率 92%  平均 5.3 步  平均 4.5s
+```
+
+| 组件 | 说明 |
+|------|------|
+| `TaskCase` | 测试用例 (id, 描述, 期望关键词) |
+| `TaskResult` | 单次结果 (通过/失败, 耗时, 工具调用数) |
+| `EvalReport` | 汇总统计 (成功率, 平均耗时) |
+| `Benchmark` | 批量运行 + 策略对比 + 报告保存 |
 
 ## 设计逻辑
 
@@ -554,7 +581,8 @@ nano_agent_plus/
 │   │   ├── search.py                #   web_search, fetch_url, search_and_fetch
 │   │   ├── weather.py               #   get_weather
 │   │   └── stock.py                 #   stock_info, stock_history, stock_chart
-│   ├── memory.py                    # 三层记忆门面 (Working+Persistent+Reflection, 自动轮转)
+│   ├── memory.py                    # 四层记忆门面 (Working+Persistent+Reflection+LongTerm)
+│   ├── evaluation.py                # 基准测试 + 策略对比
 │   ├── agent.py                     # Agent 核心 + 策略注册表路由 + 参数注入
 │   ├── orient.py                    # 显式 Orient 阶段 + 规则加载
 │   └── strategies/
@@ -629,6 +657,13 @@ nano_agent_plus/
 **方案**：装饰器或基类自动从类型注解生成 schema。
 
 ## 更新日志
+
+### 2026-06-22 深夜续续续 (基准测试 + Observation + LongTermMemory)
+
+- **Observation 结构化工具返回**：`shell.py` 新增 `Observation` dataclass（`tool_name`/`success`/`result`/`args`/`metadata`），`bash`/`calculate` 返回 `Observation`。Agent loop 用 `hasattr(success)` 兼容新旧格式，字符串操作委托到 `result`。
+- **基准测试系统**：`evaluation.py` 提供 `TaskCase`/`TaskResult`/`EvalReport`/`Benchmark`，`run_eval.py` 支持策略对比、成功率/耗时/步数统计。
+- **LongTermMemory**：SQLite FTS5 全文搜索引擎，`load_relevant(query)` 语义检索历史经验，跨会话精确召回。
+- **Memory 四层门面**：Working + Persistent + Reflection + LongTerm。
 
 ### 2026-06-22 深夜续续 (架构文档建议 #3-#6)
 
