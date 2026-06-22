@@ -435,3 +435,5 @@ nano_agent_plus/
 - **LLM 层新增 Anthropic 消息格式转换**：`_convert_messages_for_anthropic()` 自动将内部 OpenAI 风格消息转为 Anthropic content blocks，多后端无缝切换。
 - **新增 Orient 模块**：显式 O-O-D-A 循环，工具结果执行后自动解读并注入上下文。
 - 测试覆盖：77 → 77 (ReAct 测试从文本解析版迁移到 FC 版)
+
+####  2026-06-23

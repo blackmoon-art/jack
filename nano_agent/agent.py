@@ -47,18 +47,25 @@ class Agent:
 
     # ── 主入口 ──────────────────────────────────────────
 
-    def run(self, task: str, strategy: str = "default", **strategy_kwargs) -> str:
+    def run(self, task: str, strategy: str = "default",
+            on_event: Optional[Callable[[str, dict], None]] = None,
+            **strategy_kwargs) -> str:
         """
         执行用户任务。
 
         Args:
             task:     用户输入的任务描述
             strategy: 推理策略 (default | react | plan-execute | reflexion | tree-of-thought)
+            on_event: 可选事件回调 f(event_type, data)
+                      event_type: "text" | "tool_call" | "tool_result" | "orient" | "done"
             **strategy_kwargs: 传递给策略的额外参数
 
         Returns:
             Agent 的最终回复文本
         """
+        self._on_event = on_event
+        self._emit("text", {"text": f"Task: {task}\nStrategy: {strategy}"})
+
         base_messages = self._build_messages(task)
 
         if strategy == "react":
@@ -72,9 +79,19 @@ class Agent:
         else:  # default
             final, _ = self._agent_loop(base_messages)
 
+        self._emit("done", {"text": final})
         self.memory.save_context(task, final)
         self.memory.save_persistent(task, final)
+        self._on_event = None
         return final
+
+    def _emit(self, event_type: str, data: dict):
+        """发送事件给回调。"""
+        if self._on_event:
+            try:
+                self._on_event(event_type, data)
+            except Exception:
+                pass
 
     # ── 策略实现 ────────────────────────────────────────
 
@@ -140,12 +157,15 @@ class Agent:
 
             # 无工具调用 → 结束
             if not response["tool_calls"]:
+                if response["text"]:
+                    self._emit("text", {"text": response["text"]})
                 return response["text"], messages
 
             # ── Act: 执行工具 ──
             for tc in response["tool_calls"]:
                 name = tc["name"]
                 args = tc["arguments"] if isinstance(tc["arguments"], dict) else {}
+                self._emit("tool_call", {"name": name, "args": args})
                 print(f"\033[33m[Tool] {name}({json.dumps(args, ensure_ascii=False)[:200]})\033[0m")
 
                 if name == "plan":
@@ -165,11 +185,13 @@ class Agent:
                 else:
                     # ── Act: 执行 ──
                     raw_result = self.tools.execute(name, args)
+                    self._emit("tool_result", {"name": name, "result": raw_result})
                     print(raw_result[:200])
 
                     # ── Orient: 显式解读 ──
                     orientation = self._orient(raw_result, args.get("task", ""))
                     if orientation:
+                        self._emit("orient", orientation)
                         enriched = (
                             f"{raw_result}\n\n"
                             f"[Orient] interpretation={orientation.get('interpretation', '')[:200]}\n"
