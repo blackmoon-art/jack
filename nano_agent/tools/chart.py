@@ -38,18 +38,20 @@ class Chart:
         x_label: str = "",
         y_label: str = "",
         filename: str = "",
+        style: str = "dark",
     ) -> str:
         """
         生成图表并保存为 PNG 图片。
 
         Args:
-            chart_type: 图表类型 (line, bar, scatter, pie, histogram, area)
+            chart_type: 图表类型 (line, curve, bar, scatter, pie, histogram, area, heatmap, radar, bubble)
             title: 图表标题
-            data: 数据，逗号分隔的数值 (如 "10,20,30,40")；多组用分号分隔 (如 "10,20;30,40")
-            labels: 标签，逗号分隔 (如 "A,B,C,D")；多组用分号分隔
+            data: 数据，逗号分隔的数值；多组用分号分隔。heatmap 需矩阵格式（行用分号，列用逗号）。bubble 需 x;y;size 三组。
+            labels: 标签，逗号分隔；多组用分号分隔
             x_label: X 轴标签
             y_label: Y 轴标签
-            filename: 文件名 (可选，默认自动生成)
+            filename: 文件名 (可选)
+            style: dark 或 light (默认 dark)
         """
         import matplotlib
         matplotlib.use("Agg")
@@ -75,52 +77,68 @@ class Chart:
 
         # 生成图表
         chart_type = chart_type.lower().strip()
-        fig, ax = plt.subplots(figsize=(10, 6), facecolor="#1a1a2e")
-        ax.set_facecolor("#1a1a2e")
+        style = style.lower().strip()
+        is_dark = style != "light"
+        bg = "#1a1a2e" if is_dark else "#ffffff"
+        fg = "#e0e0e0" if is_dark else "#333333"
+        grid_c = "#333" if is_dark else "#ddd"
+        fig, ax = plt.subplots(figsize=(10, 6), facecolor=bg)
+        ax.set_facecolor(bg)
+        # 雷达图需要极坐标
+        if chart_type == "radar":
+            fig.delaxes(ax)
+            ax = fig.add_subplot(111, polar=True)
+            ax.set_facecolor(bg)
 
         try:
             if chart_type == "line":
-                self._draw_line(ax, data_sets, label_sets)
+                self._draw_line(ax, data_sets, label_sets, is_dark)
             elif chart_type == "curve":
-                self._draw_curve(ax, data_sets, label_sets)
+                self._draw_curve(ax, data_sets, label_sets, is_dark)
             elif chart_type == "bar":
-                self._draw_bar(ax, data_sets, label_sets)
+                self._draw_bar(ax, data_sets, label_sets, is_dark)
             elif chart_type == "scatter":
-                self._draw_scatter(ax, data_sets, label_sets)
+                self._draw_scatter(ax, data_sets, label_sets, is_dark)
             elif chart_type == "pie":
-                self._draw_pie(ax, data_sets, label_sets)
+                self._draw_pie(ax, data_sets, label_sets, is_dark)
             elif chart_type == "histogram":
-                self._draw_histogram(ax, data_sets, label_sets)
+                self._draw_histogram(ax, data_sets, label_sets, is_dark)
             elif chart_type == "area":
-                self._draw_area(ax, data_sets, label_sets)
+                self._draw_area(ax, data_sets, label_sets, is_dark)
+            elif chart_type == "heatmap":
+                self._draw_heatmap(ax, data_sets, label_sets, is_dark)
+            elif chart_type == "radar":
+                self._draw_radar(ax, data_sets, label_sets, is_dark)
+            elif chart_type == "bubble":
+                self._draw_bubble(ax, data_sets, label_sets, is_dark)
             else:
-                return f"Error: Unknown chart type '{chart_type}'. Supported: line, curve, bar, scatter, pie, histogram, area"
+                return f"Error: Unknown chart type '{chart_type}'. Supported: line, curve, bar, scatter, pie, histogram, area, heatmap, radar, bubble"
         except Exception as e:
             plt.close(fig)
             return f"Error generating chart: {e}"
 
         # 样式
-        if chart_type != "pie":
-            ax.tick_params(colors="#ccc")
-            ax.spines["bottom"].set_color("#444")
-            ax.spines["left"].set_color("#444")
+        if chart_type not in ("pie", "radar"):
+            ax.tick_params(colors=fg)
+            for spine in ["bottom", "left"]:
+                ax.spines[spine].set_color(grid_c)
             ax.spines["top"].set_visible(False)
             ax.spines["right"].set_visible(False)
             if x_label:
-                ax.set_xlabel(x_label, color="#ccc", fontsize=12)
+                ax.set_xlabel(x_label, color=fg, fontsize=12)
             if y_label:
-                ax.set_ylabel(y_label, color="#ccc", fontsize=12)
-            ax.grid(True, alpha=0.2, color="#666")
+                ax.set_ylabel(y_label, color=fg, fontsize=12)
+            ax.grid(True, alpha=0.2, color=grid_c)
+        elif chart_type == "radar":
+            ax.tick_params(colors=fg, labelcolor=fg)
+            ax.grid(True, alpha=0.3, color=grid_c)
 
         if title:
-            fig.suptitle(title, color="#e0e0e0", fontsize=16, fontweight="bold")
+            fig.suptitle(title, color=fg, fontsize=16, fontweight="bold")
 
         fig.tight_layout()
-
-        # 清理旧文件（保留最近 50 个）
         self._cleanup(max_files=50)
 
-        # 保存
         if not filename:
             ts = datetime.now().strftime("%Y%m%d_%H%M%S")
             filename = f"chart_{ts}.png"
@@ -128,10 +146,8 @@ class Chart:
             filename += ".png"
         filepath = self.charts_dir / filename
 
-        fig.savefig(filepath, dpi=150, bbox_inches="tight", facecolor="#1a1a2e")
+        fig.savefig(filepath, dpi=150, bbox_inches="tight", facecolor=bg)
         plt.close(fig)
-
-        # 返回前端可访问的 URL
         url = f"/charts/{filename}"
         return f"Chart generated: {url}\n![{title}]({url})"
 
@@ -147,7 +163,7 @@ class Chart:
 
     # ── 绘图 ──
 
-    def _draw_line(self, ax, data_sets, label_sets):
+    def _draw_line(self, ax, data_sets, label_sets, is_dark=True):
         colors = ["#7c3aed", "#3b82f6", "#10b981", "#f59e0b", "#ef4444", "#ec4899"]
         for i, ds in enumerate(data_sets):
             vals = [float(x) for x in ds]
@@ -158,7 +174,7 @@ class Chart:
         if any(i < len(label_sets) and label_sets[i] for i in range(len(data_sets))):
             ax.legend(facecolor="#222", edgecolor="#444", labelcolor="#ccc")
 
-    def _draw_curve(self, ax, data_sets, label_sets):
+    def _draw_curve(self, ax, data_sets, label_sets, is_dark=True):
         """平滑曲线 — scipy spline 优先，回退到 numpy polyfit。"""
         import numpy as np
         colors = ["#7c3aed", "#3b82f6", "#10b981", "#f59e0b", "#ef4444", "#ec4899"]
@@ -183,7 +199,7 @@ class Chart:
         if any(i < len(label_sets) and label_sets[i] for i in range(len(data_sets))):
             ax.legend(facecolor="#222", edgecolor="#444", labelcolor="#ccc")
 
-    def _draw_bar(self, ax, data_sets, label_sets):
+    def _draw_bar(self, ax, data_sets, label_sets, is_dark=True):
         colors = ["#7c3aed", "#3b82f6", "#10b981", "#f59e0b", "#ef4444"]
         x_labels = label_sets[0] if label_sets else None
         n = len(data_sets)
@@ -196,11 +212,11 @@ class Chart:
             ax.bar(x, vals, width=width, color=colors[i % len(colors)], label=label, alpha=0.85)
         if x_labels:
             ax.set_xticks(range(len(x_labels)))
-            ax.set_xticklabels(x_labels, color="#ccc")
+            ax.set_xticklabels(x_labels, color="#ccc" if is_dark else "#333")
         if n > 1:
-            ax.legend(facecolor="#222", edgecolor="#444", labelcolor="#ccc")
+            ax.legend(facecolor="#222" if is_dark else "#f0f0f0", edgecolor="#444" if is_dark else "#ccc", labelcolor="#ccc" if is_dark else "#333")
 
-    def _draw_scatter(self, ax, data_sets, label_sets):
+    def _draw_scatter(self, ax, data_sets, label_sets, is_dark=True):
         colors = ["#7c3aed", "#3b82f6", "#10b981"]
         # 需要 x,y 对：第一组=x，第二组=y
         if len(data_sets) < 2:
@@ -211,7 +227,7 @@ class Chart:
             ys = [float(x) for x in data_sets[1]]
             ax.scatter(xs, ys, color=colors[0], s=60, alpha=0.8)
 
-    def _draw_pie(self, ax, data_sets, label_sets):
+    def _draw_pie(self, ax, data_sets, label_sets, is_dark=True):
         colors = ["#7c3aed", "#3b82f6", "#10b981", "#f59e0b", "#ef4444", "#ec4899", "#14b8a6"]
         vals = [float(x) for x in data_sets[0]]
         labels = label_sets[0] if label_sets else None
@@ -239,6 +255,65 @@ class Chart:
             ax.plot(range(len(vals)), vals, color=colors[i % len(colors)], linewidth=1.5)
         if any(i < len(label_sets) and label_sets[i] for i in range(len(data_sets))):
             ax.legend(facecolor="#222", edgecolor="#444", labelcolor="#ccc")
+
+    # ── 新图表类型 ──
+
+    def _draw_heatmap(self, ax, data_sets, label_sets, is_dark=True):
+        """热力图 — 矩阵数据，行用分号，列用逗号。"""
+        import numpy as np
+        matrix = np.array([[float(x) for x in ds] for ds in data_sets])
+        im = ax.imshow(matrix, cmap="coolwarm", aspect="auto")
+        import matplotlib.pyplot as _plt
+        cbar = _plt.colorbar(im, ax=ax)
+        cbar.ax.yaxis.set_tick_params(color="#ccc" if is_dark else "#333")
+        for i in range(len(data_sets)):
+            for j in range(len(data_sets[0])):
+                ax.text(j, i, f"{matrix[i,j]:.1f}", ha="center", va="center",
+                        color="white" if abs(matrix[i,j]) > matrix.max()/2 else "black",
+                        fontsize=10)
+        if label_sets and label_sets[0]:
+            ax.set_xticks(range(len(label_sets[0])))
+            ax.set_xticklabels(label_sets[0], color="#ccc" if is_dark else "#333")
+        if label_sets and len(label_sets) > 1:
+            ax.set_yticks(range(len(label_sets[1])))
+            ax.set_yticklabels(label_sets[1], color="#ccc" if is_dark else "#333")
+
+    def _draw_radar(self, ax, data_sets, label_sets, is_dark=True):
+        """雷达图 — 第一组为数值，label_sets[0] 为维度名。"""
+        import numpy as np
+        vals = [float(x) for x in data_sets[0]]
+        n = len(vals)
+        angles = np.linspace(0, 2 * np.pi, n, endpoint=False).tolist()
+        angles += angles[:1]
+        vals += vals[:1]
+        colors = ["#7c3aed", "#3b82f6", "#10b981"]
+        for i, ds in enumerate(data_sets):
+            v = [float(x) for x in ds] + [float(ds[0])]
+            ax.fill(angles, v, alpha=0.25, color=colors[i % len(colors)])
+            ax.plot(angles, v, color=colors[i % len(colors)], linewidth=2)
+        if label_sets and label_sets[0]:
+            cats = label_sets[0] + [label_sets[0][0]]
+            ax.set_xticks(angles)
+            ax.set_xticklabels(cats, color="#ccc" if is_dark else "#333", fontsize=10)
+
+    def _draw_bubble(self, ax, data_sets, label_sets, is_dark=True):
+        """气泡图 — 三组数据: x;y;size。label_sets[0] 为各点标签。"""
+        import numpy as np
+        if len(data_sets) < 3:
+            ax.scatter([float(x) for x in data_sets[0]], [float(x) for x in data_sets[1]] if len(data_sets) > 1 else [0],
+                       s=60, alpha=0.8, color="#7c3aed")
+            return
+        xs = np.array([float(x) for x in data_sets[0]])
+        ys = np.array([float(x) for x in data_sets[1]])
+        sizes = np.array([float(x) for x in data_sets[2]]) * 50
+        sc = ax.scatter(xs, ys, s=sizes, alpha=0.6, c=sizes, cmap="coolwarm", edgecolors="#fff", linewidth=0.5)
+        if label_sets and label_sets[0]:
+            for i, lbl in enumerate(label_sets[0]):
+                if i < len(xs):
+                    ax.annotate(lbl, (xs[i], ys[i]), textcoords="offset points", xytext=(0, 8),
+                                ha="center", fontsize=9, color="#ccc" if is_dark else "#333")
+        import matplotlib.pyplot as _plt
+        _plt.colorbar(sc, ax=ax)
 
     # ── 清理 ──
 
