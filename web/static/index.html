@@ -64,7 +64,11 @@
 </footer>
 
 <script>
-const SESSION_ID = crypto.randomUUID().slice(0, 12);
+let SESSION_ID = localStorage.getItem('nano_session_id');
+if (!SESSION_ID) {
+  SESSION_ID = crypto.randomUUID().slice(0, 12);
+  localStorage.setItem('nano_session_id', SESSION_ID);
+}
 const $messages = document.getElementById('messages');
 const $input = document.getElementById('input');
 const $send = document.getElementById('send');
@@ -73,6 +77,20 @@ const $status = document.getElementById('status');
 document.getElementById('session-info').textContent = `会话: ${SESSION_ID}`;
 
 let currentMsg = null;
+
+// 页面加载时恢复历史对话
+(async function restoreHistory() {
+  try {
+    const res = await fetch(`/api/sessions/${SESSION_ID}/history`);
+    const data = await res.json();
+    if (data.history && data.history.length > 0) {
+      for (const msg of data.history) {
+        addMessage(msg.role, msg.content);
+      }
+      $messages.scrollTop = $messages.scrollHeight;
+    }
+  } catch(e) { /* 忽略 */ }
+})();
 
 function addMessage(role, text) {
   const div = document.createElement('div');
