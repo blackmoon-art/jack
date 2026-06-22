@@ -20,6 +20,7 @@ from .search import Search
 from .weather import Weather
 from .stock import Stock
 from .ppt import PPT
+from .chart import Chart
 
 logger = logging.getLogger("nano_agent.tools")
 
@@ -41,6 +42,7 @@ class ToolRegistry:
         self._weather = Weather()
         self._stock = Stock(work_dir)
         self._ppt = PPT(work_dir)
+        self._chart = Chart(work_dir)
 
         # 注册内部工具
         self._tools: dict[str, dict[str, Any]] = {}
@@ -116,6 +118,15 @@ class ToolRegistry:
             "filename": {"type": "string", "description": "Output filename (optional, defaults to title)"},
             "subtitle": {"type": "string", "description": "Subtitle for the title slide (optional)"},
         }, required=["title", "slides"])
+        self._register("generate_chart", "Generate a chart (line, bar, scatter, pie, histogram, area) and save as PNG image. Returns a URL for viewing. Data format: comma-separated numbers; multiple series separated by semicolons.", self._chart.generate_chart, {
+            "chart_type": {"type": "string", "description": "Chart type: line, bar, scatter, pie, histogram, area (default: line)"},
+            "title": {"type": "string", "description": "Chart title"},
+            "data": {"type": "string", "description": "Data values: comma-separated numbers. Multiple series: separate with semicolons. E.g. '10,20,30' or '10,20;30,40'"},
+            "labels": {"type": "string", "description": "Labels: comma-separated. For pie chart names or bar x-axis. Multiple series: semicolons."},
+            "x_label": {"type": "string", "description": "X-axis label"},
+            "y_label": {"type": "string", "description": "Y-axis label"},
+            "filename": {"type": "string", "description": "Output filename (optional)"},
+        }, required=["data"])
 
     # ── 内部注册 ──────────────────────────────────────
 
@@ -200,6 +211,7 @@ class ToolRegistry:
         "stock_indicators": "_stock",
         "stock_market": "_stock",
         "create_ppt": "_ppt",
+        "generate_chart": "_chart",
         "_search_brave": ("_search", "_search_brave"),
         "_search_duckduckgo": ("_search", "_search_duckduckgo"),
         "_search_bing": ("_search", "_search_bing"),

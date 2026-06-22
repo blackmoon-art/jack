@@ -164,14 +164,15 @@ function escapeHtml(s) {
 }
 
 function renderMarkdown(text) {
-  // Simple markdown: bold, italic, headers, code
-  // 注意: 必须在 linkify 之后调用，因为 linkify 会生成 <a> 标签
   let html = text;
+  // Images: ![alt](url) — must be before links
+  html = html.replace(/!\[([^\]]*)\]\(([^)]+)\)/g,
+    '<img src="$2" alt="$1" style="max-width:100%;border-radius:8px;margin:8px 0;" />');
   // Headers
   html = html.replace(/^### (.+)$/gm, '<h3 style="font-size:15px;margin:8px 0 4px;">$1</h3>');
   html = html.replace(/^## (.+)$/gm, '<h2 style="font-size:16px;margin:8px 0 4px;">$1</h2>');
   html = html.replace(/^# (.+)$/gm, '<h1 style="font-size:18px;margin:8px 0 4px;">$1</h1>');
-  // Bold (skip if inside <a> tag)
+  // Bold
   html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
   // Italic
   html = html.replace(/\*(.+?)\*/g, '<em>$1</em>');

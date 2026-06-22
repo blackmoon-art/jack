@@ -1,0 +1,759 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>超级玛丽 🍄</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  background: #1a1a2e;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  min-height: 100vh;
+  font-family: 'Arial', sans-serif;
+  overflow: hidden;
+}
+.game-wrapper {
+  background: #16213e;
+  padding: 20px;
+  border-radius: 20px;
+  box-shadow: 0 20px 60px rgba(0,0,0,0.5);
+  border: 3px solid #e94560;
+}
+canvas {
+  display: block;
+  margin: 0 auto;
+  border-radius: 12px;
+  background: #6b8cff;
+  box-shadow: inset 0 0 30px rgba(0,0,0,0.2);
+  cursor: pointer;
+  max-width: 100%;
+}
+.controls {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 15px;
+  color: #eee;
+  gap: 20px;
+  flex-wrap: wrap;
+}
+.controls .info {
+  display: flex;
+  gap: 25px;
+  font-size: 18px;
+  font-weight: bold;
+}
+.controls .info span {
+  color: #ffd700;
+}
+.btn-group {
+  display: flex;
+  gap: 10px;
+}
+.btn {
+  background: #e94560;
+  color: white;
+  border: none;
+  padding: 8px 20px;
+  border-radius: 30px;
+  font-size: 16px;
+  font-weight: bold;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.btn:hover { transform: scale(1.05); background: #ff6b81; }
+.btn:active { transform: scale(0.95); }
+.btn-restart { background: #0f3460; }
+.btn-restart:hover { background: #1a4a7a; }
+.hint {
+  color: #aaa;
+  font-size: 14px;
+  text-align: center;
+  margin-top: 10px;
+}
+.hint kbd {
+  background: #333;
+  color: #fff;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 13px;
+}
+@media (max-width: 600px) {
+  .game-wrapper { padding: 10px; }
+  .controls { flex-direction: column; }
+}
+</style>
+</head>
+<body>
+
+<div class="game-wrapper">
+  <canvas id="gameCanvas" width="800" height="500"></canvas>
+  <div class="controls">
+    <div class="info">
+      <div>🏆 分数: <span id="scoreDisplay">0</span></div>
+      <div>🪙 金币: <span id="coinDisplay">0</span></div>
+      <div>❤️ 生命: <span id="lifeDisplay">3</span></div>
+    </div>
+    <div class="btn-group">
+      <button class="btn btn-restart" onclick="resetGame()">🔄 重新开始</button>
+    </div>
+  </div>
+  <div class="hint">
+    <kbd>←</kbd> <kbd>→</kbd> 移动 &nbsp;|&nbsp; <kbd>空格</kbd> <kbd>↑</kbd> 跳跃 &nbsp;|&nbsp; 踩敌人消灭它们 💥
+  </div>
+</div>
+
+<script>
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+const W = 800, H = 500;
+
+// ========== 游戏状态 ==========
+const GRAVITY = 0.5;
+const FRICTION = 0.8;
+const MOVE_SPEED = 3.5;
+const JUMP_FORCE = -10;
+
+let gameOver = false;
+let score = 0;
+let coins = 0;
+let lives = 3;
+let cameraX = 0;
+const WORLD_WIDTH = 3200;
+const GROUND_Y = 430;
+
+// ========== 按键 ==========
+const keys = {};
+document.addEventListener('keydown', e => {
+  keys[e.code] = true;
+  if (['Space','ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].includes(e.code)) e.preventDefault();
+});
+document.addEventListener('keyup', e => { keys[e.code] = false; });
+
+// ========== 马里奥 ==========
+const mario = {
+  x: 80, y: GROUND_Y - 48,
+  w: 32, h: 48,
+  vx: 0, vy: 0,
+  onGround: false,
+  facing: 1,
+  frame: 0,
+  frameTimer: 0,
+  jumpCount: 0,
+  maxJumps: 2,
+  invincible: 0,
+  
+  reset(x=80) {
+    this.x = x; this.y = GROUND_Y - 48;
+    this.vx = 0; this.vy = 0;
+    this.onGround = false;
+    this.invincible = 0;
+    this.jumpCount = 0;
+  }
+};
+
+// ========== 平台定义 ==========
+const platforms = [
+  // 地面 (分段)
+  { x: 0, y: GROUND_Y, w: 800, h: 70, type: 'ground' },
+  { x: 800, y: GROUND_Y, w: 800, h: 70, type: 'ground' },
+  { x: 1600, y: GROUND_Y, w: 800, h: 70, type: 'ground' },
+  { x: 2400, y: GROUND_Y, w: 800, h: 70, type: 'ground' },
+  // 砖块平台
+  { x: 250, y: 300, w: 160, h: 24, type: 'brick' },
+  { x: 500, y: 240, w: 96, h: 24, type: 'brick' },
+  { x: 700, y: 320, w: 128, h: 24, type: 'brick' },
+  { x: 1000, y: 260, w: 160, h: 24, type: 'brick' },
+  { x: 1200, y: 340, w: 96, h: 24, type: 'brick' },
+  { x: 1400, y: 220, w: 160, h: 24, type: 'brick' },
+  { x: 1700, y: 300, w: 128, h: 24, type: 'brick' },
+  { x: 1900, y: 200, w: 96, h: 24, type: 'brick' },
+  { x: 2100, y: 320, w: 160, h: 24, type: 'brick' },
+  { x: 2400, y: 260, w: 128, h: 24, type: 'brick' },
+  { x: 2700, y: 340, w: 96, h: 24, type: 'brick' },
+  // 问号块 (特殊)
+  { x: 320, y: 260, w: 32, h: 32, type: 'question' },
+  { x: 1050, y: 210, w: 32, h: 32, type: 'question' },
+  { x: 1750, y: 250, w: 32, h: 32, type: 'question' },
+  // 管道
+  { x: 450, y: 370, w: 60, h: 60, type: 'pipe' },
+  { x: 1100, y: 370, w: 60, h: 60, type: 'pipe' },
+  { x: 2200, y: 370, w: 60, h: 60, type: 'pipe' },
+];
+
+// ========== 金币 ==========
+const coinList = [];
+function spawnCoins() {
+  coinList.length = 0;
+  const positions = [
+    [280, 270], [310, 270], [340, 270], [370, 270],
+    [530, 210], [560, 210],
+    [730, 290], [760, 290], [790, 290],
+    [1030, 230], [1060, 230], [1090, 230],
+    [1230, 310], [1260, 310],
+    [1430, 190], [1460, 190], [1490, 190],
+    [1730, 270], [1760, 270],
+    [1930, 170], [1960, 170],
+    [2130, 290], [2160, 290], [2190, 290],
+    [2430, 230], [2460, 230],
+    [2730, 310], [2760, 310],
+  ];
+  for (const [x, y] of positions) {
+    coinList.push({ x, y, w: 16, h: 16, collected: false, bob: Math.random() * Math.PI * 2 });
+  }
+}
+spawnCoins();
+
+// ========== 敌人 ==========
+const enemies = [];
+function spawnEnemies() {
+  enemies.length = 0;
+  const positions = [350, 650, 900, 1300, 1550, 1850, 2050, 2500, 2800];
+  for (const x of positions) {
+    enemies.push({
+      x, y: GROUND_Y - 36,
+      w: 32, h: 36,
+      vx: -1.2 - Math.random() * 0.8,
+      alive: true,
+      deathTimer: 0,
+      patrolMin: x - 80,
+      patrolMax: x + 80,
+      frame: 0,
+      frameTimer: 0,
+    });
+  }
+}
+spawnEnemies();
+
+// ========== 碰撞检测 ==========
+function rectCollide(a, b) {
+  return a.x < b.x + b.w && a.x + a.w > b.x &&
+         a.y < b.y + b.h && a.y + a.h > b.y;
+}
+
+function handleCollisions() {
+  mario.onGround = false;
+  
+  // 平台碰撞
+  for (const p of platforms) {
+    if (!rectCollide(mario, p)) continue;
+    
+    const overlapX = Math.min(mario.x + mario.w, p.x + p.w) - Math.max(mario.x, p.x);
+    const overlapY = Math.min(mario.y + mario.h, p.y + p.h) - Math.max(mario.y, p.y);
+    
+    if (overlapX < overlapY) {
+      if (mario.vx > 0) mario.x = p.x - mario.w;
+      else if (mario.vx < 0) mario.x = p.x + p.w;
+      mario.vx = 0;
+    } else {
+      if (mario.vy > 0) {
+        mario.y = p.y - mario.h;
+        mario.vy = 0;
+        mario.onGround = true;
+        mario.jumpCount = 0;
+      } else if (mario.vy < 0) {
+        mario.y = p.y + p.h;
+        mario.vy = 0;
+        // 撞问号块
+        if (p.type === 'question' && p.w === 32) {
+          coins++;
+          score += 50;
+          // 把问号变成普通砖块
+          const idx = platforms.indexOf(p);
+          if (idx !== -1) platforms[idx] = { ...p, type: 'used_question' };
+        }
+      }
+    }
+  }
+  
+  // 金币收集
+  for (const c of coinList) {
+    if (c.collected) continue;
+    if (rectCollide(mario, c)) {
+      c.collected = true;
+      coins++;
+      score += 100;
+    }
+  }
+  
+  // 敌人碰撞
+  for (const e of enemies) {
+    if (!e.alive) continue;
+    if (!rectCollide(mario, e)) continue;
+    
+    // 从上方踩？
+    if (mario.vy > 0 && mario.y + mario.h - e.y < 20) {
+      // 踩扁敌人
+      e.alive = false;
+      e.deathTimer = 30;
+      mario.vy = -8;
+      score += 200;
+    } else if (mario.invincible <= 0) {
+      // 被敌人碰到
+      lives--;
+      if (lives <= 0) {
+        gameOver = true;
+        return;
+      }
+      mario.invincible = 90; // 无敌帧
+      mario.vy = -6;
+      mario.vx = (mario.x < e.x) ? -4 : 4;
+    }
+  }
+  
+  // 边界限制
+  if (mario.x < cameraX) { mario.x = cameraX; mario.vx = 0; }
+  if (mario.x + mario.w > WORLD_WIDTH) { mario.x = WORLD_WIDTH - mario.w; mario.vx = 0; }
+  if (mario.y > H + 50) {
+    lives--;
+    if (lives <= 0) { gameOver = true; return; }
+    mario.reset(Math.max(cameraX + 50, 80));
+  }
+}
+
+// ========== 更新逻辑 ==========
+function update() {
+  if (gameOver) return;
+  
+  // 马里奥移动
+  let moveX = 0;
+  if (keys['ArrowLeft']) moveX = -1;
+  if (keys['ArrowRight']) moveX = 1;
+  
+  if (moveX !== 0) {
+    mario.vx = moveX * MOVE_SPEED;
+    mario.facing = moveX;
+    mario.frameTimer++;
+    if (mario.frameTimer > 6) { mario.frameTimer = 0; mario.frame = (mario.frame + 1) % 4; }
+  } else {
+    mario.vx *= FRICTION;
+    if (Math.abs(mario.vx) < 0.1) mario.vx = 0;
+    mario.frame = 0;
+  }
+  
+  // 跳跃
+  if ((keys['Space'] || keys['ArrowUp']) && mario.jumpCount < mario.maxJumps) {
+    if (!mario._jumpHeld) {
+      mario.vy = JUMP_FORCE;
+      mario.jumpCount++;
+      mario.onGround = false;
+      mario._jumpHeld = true;
+    }
+  }
+  if (!keys['Space'] && !keys['ArrowUp']) mario._jumpHeld = false;
+  
+  // 可变跳跃高度
+  if ((keys['Space'] || keys['ArrowUp']) && mario.vy < -2) {
+    mario.vy += GRAVITY * 0.5;
+  } else {
+    mario.vy += GRAVITY;
+  }
+  if (mario.vy > 12) mario.vy = 12;
+  
+  mario.x += mario.vx;
+  mario.y += mario.vy;
+  
+  if (mario.invincible > 0) mario.invincible--;
+  
+  handleCollisions();
+  
+  // 更新相机
+  let targetCam = mario.x - W / 3;
+  targetCam = Math.max(0, Math.min(targetCam, WORLD_WIDTH - W));
+  cameraX += (targetCam - cameraX) * 0.08;
+  
+  // 更新敌人
+  for (const e of enemies) {
+    if (!e.alive) {
+      if (e.deathTimer > 0) e.deathTimer--;
+      continue;
+    }
+    e.x += e.vx;
+    if (e.x < e.patrolMin || e.x + e.w > e.patrolMax) e.vx *= -1;
+    e.frameTimer++;
+    if (e.frameTimer > 10) { e.frameTimer = 0; e.frame = (e.frame + 1) % 2; }
+  }
+  
+  // 金币浮动动画
+  for (const c of coinList) {
+    c.bob += 0.04;
+  }
+  
+  // 更新UI
+  document.getElementById('scoreDisplay').textContent = score;
+  document.getElementById('coinDisplay').textContent = coins;
+  document.getElementById('lifeDisplay').textContent = lives;
+}
+
+// ========== 绘图 ==========
+function drawMario(x, y, facing, frame, invincible) {
+  if (invincible > 0 && Math.floor(invincible / 4) % 2 === 0) return;
+  
+  ctx.save();
+  ctx.translate(x + 16, y + 24);
+  if (facing < 0) ctx.scale(-1, 1);
+  
+  // 身体
+  ctx.fillStyle = '#e74c3c';
+  ctx.fillRect(-12, -12, 24, 20);
+  
+  // 头部
+  ctx.fillStyle = '#f5cba7';
+  ctx.fillRect(-10, -22, 20, 14);
+  
+  // 帽子
+  ctx.fillStyle = '#e74c3c';
+  ctx.fillRect(-12, -28, 24, 8);
+  ctx.fillRect(-8, -32, 16, 6);
+  
+  // 眼睛
+  ctx.fillStyle = '#000';
+  ctx.fillRect(-3, -18, 4, 4);
+  ctx.fillRect(3, -18, 4, 4);
+  
+  // 胡子
+  ctx.fillStyle = '#8B4513';
+  ctx.fillRect(-4, -10, 12, 3);
+  
+  // 背带裤
+  ctx.fillStyle = '#2e86c1';
+  ctx.fillRect(-11, 6, 22, 14);
+  ctx.beginPath();
+  ctx.moveTo(-12, 6); ctx.lineTo(-8, -4); ctx.lineTo(-4, 6);
+  ctx.moveTo(12, 6); ctx.lineTo(8, -4); ctx.lineTo(4, 6);
+  ctx.fillStyle = '#2e86c1';
+  ctx.fill();
+  
+  // 纽扣
+  ctx.fillStyle = '#ffd700';
+  ctx.beginPath();
+  ctx.arc(-4, 2, 2, 0, Math.PI*2);
+  ctx.arc(4, 2, 2, 0, Math.PI*2);
+  ctx.fill();
+  
+  // 鞋
+  ctx.fillStyle = '#8B4513';
+  ctx.fillRect(-12, 20, 10, 5);
+  ctx.fillRect(4, 20, 10, 5);
+  
+  ctx.restore();
+}
+
+function drawEnemy(e) {
+  if (!e.alive) {
+    if (e.deathTimer > 0) {
+      ctx.fillStyle = '#8B4513';
+      ctx.fillRect(e.x - cameraX, e.y + e.h - 8, e.w, 8);
+    }
+    return;
+  }
+  
+  const screenX = e.x - cameraX;
+  
+  // 身体
+  ctx.fillStyle = '#8B4513';
+  ctx.beginPath();
+  ctx.arc(screenX + e.w/2, e.y + e.h/2, e.w/2 - 2, 0, Math.PI * 2);
+  ctx.fill();
+  
+  // 脚
+  const footOffset = e.frame === 0 ? 2 : -2;
+  ctx.fillStyle = '#5d4037';
+  ctx.fillRect(screenX + 4, e.y + e.h - 8, 8, 8);
+  ctx.fillRect(screenX + e.w - 12 + footOffset, e.y + e.h - 8, 8, 8);
+  
+  // 眼睛
+  ctx.fillStyle = '#fff';
+  ctx.beginPath();
+  ctx.arc(screenX + e.w/2 - 5, e.y + e.h/2 - 4, 5, 0, Math.PI * 2);
+  ctx.arc(screenX + e.w/2 + 5, e.y + e.h/2 - 4, 5, 0, Math.PI * 2);
+  ctx.fill();
+  
+  ctx.fillStyle = '#000';
+  ctx.beginPath();
+  ctx.arc(screenX + e.w/2 - 5, e.y + e.h/2 - 4, 2.5, 0, Math.PI * 2);
+  ctx.arc(screenX + e.w/2 + 5, e.y + e.h/2 - 4, 2.5, 0, Math.PI * 2);
+  ctx.fill();
+  
+  // 眉毛（凶）
+  ctx.strokeStyle = '#000';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(screenX + e.w/2 - 10, e.y + e.h/2 - 12);
+  ctx.lineTo(screenX + e.w/2 - 3, e.y + e.h/2 - 9);
+  ctx.moveTo(screenX + e.w/2 + 10, e.y + e.h/2 - 12);
+  ctx.lineTo(screenX + e.w/2 + 3, e.y + e.h/2 - 9);
+  ctx.stroke();
+}
+
+function drawCoins() {
+  for (const c of coinList) {
+    if (c.collected) continue;
+    const screenX = c.x - cameraX + Math.sin(c.bob) * 2;
+    const screenY = c.y + Math.sin(c.bob) * 3;
+    
+    // 发光效果
+    ctx.shadowColor = '#ffd700';
+    ctx.shadowBlur = 10;
+    
+    ctx.fillStyle = '#ffd700';
+    ctx.beginPath();
+    ctx.arc(screenX + 8, screenY + 8, 8, 0, Math.PI * 2);
+    ctx.fill();
+    
+    ctx.shadowBlur = 0;
+    
+    // $ 符号
+    ctx.fillStyle = '#b8860b';
+    ctx.font = 'bold 12px Arial';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('$', screenX + 8, screenY + 9);
+  }
+}
+
+function drawPlatforms() {
+  for (const p of platforms) {
+    const screenX = p.x - cameraX;
+    if (screenX + p.w < -50 || screenX > W + 50) continue;
+    
+    if (p.type === 'ground') {
+      // 地面 - 草地风格
+      ctx.fillStyle = '#8B4513';
+      ctx.fillRect(screenX, p.y, p.w, p.h);
+      ctx.fillStyle = '#27ae60';
+      ctx.fillRect(screenX, p.y, p.w, 8);
+      // 草纹理
+      ctx.fillStyle = '#2ecc71';
+      for (let i = 0; i < p.w; i += 12) {
+        ctx.fillRect(screenX + i, p.y - 3, 6, 6);
+      }
+    } else if (p.type === 'brick') {
+      ctx.fillStyle = '#c0392b';
+      ctx.fillRect(screenX, p.y, p.w, p.h);
+      ctx.strokeStyle = '#922b21';
+      ctx.lineWidth = 1;
+      for (let i = 0; i < p.w; i += 16) {
+        ctx.beginPath();
+        ctx.moveTo(screenX + i, p.y);
+        ctx.lineTo(screenX + i, p.y + p.h);
+        ctx.stroke();
+      }
+      for (let i = 0; i < p.h; i += 12) {
+        ctx.beginPath();
+        ctx.moveTo(screenX, p.y + i);
+        ctx.lineTo(screenX + p.w, p.y + i);
+        ctx.stroke();
+      }
+    } else if (p.type === 'question') {
+      // 问号块 - 闪烁
+      ctx.fillStyle = Math.floor(Date.now() / 200) % 2 === 0 ? '#f39c12' : '#e67e22';
+      ctx.fillRect(screenX, p.y, p.w, p.h);
+      ctx.strokeStyle = '#d35400';
+      ctx.lineWidth = 2;
+      ctx.strokeRect(screenX, p.y, p.w, p.h);
+      ctx.fillStyle = '#fff';
+      ctx.font = 'bold 20px Arial';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('?', screenX + p.w/2, p.y + p.h/2 + 1);
+    } else if (p.type === 'used_question') {
+      ctx.fillStyle = '#7f8c8d';
+      ctx.fillRect(screenX, p.y, p.w, p.h);
+      ctx.strokeStyle = '#636e72';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(screenX, p.y, p.w, p.h);
+    } else if (p.type === 'pipe') {
+      // 管道
+      ctx.fillStyle = '#27ae60';
+      ctx.fillRect(screenX - 4, p.y, p.w + 8, p.h);
+      ctx.fillStyle = '#2ecc71';
+      ctx.fillRect(screenX, p.y, p.w, 12);
+      ctx.fillStyle = '#1e8449';
+      ctx.fillRect(screenX, p.y + 12, 6, p.h - 12);
+    }
+  }
+}
+
+function drawBackground() {
+  // 天空渐变
+  const gradient = ctx.createLinearGradient(0, 0, 0, H);
+  gradient.addColorStop(0, '#6b8cff');
+  gradient.addColorStop(0.6, '#87ceeb');
+  gradient.addColorStop(1, '#b8d4e3');
+  ctx.fillStyle = gradient;
+  ctx.fillRect(0, 0, W, H);
+  
+  // 云朵
+  const cloudPositions = [
+    { x: 100 - cameraX * 0.2, y: 50 },
+    { x: 300 - cameraX * 0.2, y: 80 },
+    { x: 600 - cameraX * 0.2, y: 40 },
+    { x: 900 - cameraX * 0.2, y: 70 },
+    { x: 1200 - cameraX * 0.2, y: 50 },
+    { x: 1500 - cameraX * 0.2, y: 80 },
+    { x: 1800 - cameraX * 0.2, y: 40 },
+  ];
+  
+  for (const c of cloudPositions) {
+    ctx.fillStyle = 'rgba(255,255,255,0.8)';
+    ctx.beginPath();
+    ctx.arc(c.x, c.y, 30, 0, Math.PI * 2);
+    ctx.arc(c.x + 35, c.y - 10, 25, 0, Math.PI * 2);
+    ctx.arc(c.x + 70, c.y, 30, 0, Math.PI * 2);
+    ctx.arc(c.x + 35, c.y + 5, 28, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  
+  // 远景山
+  ctx.fillStyle = 'rgba(39, 174, 96, 0.3)';
+  ctx.beginPath();
+  ctx.moveTo(0, 400);
+  for (let i = 0; i <= W; i += 10) {
+    const worldX = i + cameraX * 0.3;
+    const h = Math.sin(worldX * 0.005) * 60 + Math.sin(worldX * 0.012) * 30 + 80;
+    ctx.lineTo(i, 400 - h);
+  }
+  ctx.lineTo(W, 400);
+  ctx.closePath();
+  ctx.fill();
+  
+  // 灌木
+  ctx.fillStyle = 'rgba(39, 174, 96, 0.4)';
+  for (let i = 0; i < W; i += 80) {
+    const worldX = i + cameraX * 0.5;
+    const bx = (worldX * 0.8) % (W + 100);
+    ctx.beginPath();
+    ctx.arc(bx, GROUND_Y - 5, 18, 0, Math.PI * 2);
+    ctx.arc(bx + 20, GROUND_Y - 5, 15, 0, Math.PI * 2);
+    ctx.arc(bx + 10, GROUND_Y - 12, 16, 0, Math.PI * 2);
+    ctx.fill();
+  }
+}
+
+function drawGameOver() {
+  ctx.fillStyle = 'rgba(0,0,0,0.7)';
+  ctx.fillRect(0, 0, W, H);
+  
+  ctx.fillStyle = '#e74c3c';
+  ctx.font = 'bold 60px Arial';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText('GAME OVER', W/2, H/2 - 40);
+  
+  ctx.fillStyle = '#ffd700';
+  ctx.font = '30px Arial';
+  ctx.fillText(`最终得分: ${score}`, W/2, H/2 + 30);
+  
+  ctx.fillStyle = '#fff';
+  ctx.font = '20px Arial';
+  ctx.fillText('点击 "重新开始" 再来一局', W/2, H/2 + 90);
+}
+
+function drawWin() {
+  ctx.fillStyle = 'rgba(0,0,0,0.7)';
+  ctx.fillRect(0, 0, W, H);
+  
+  ctx.fillStyle = '#ffd700';
+  ctx.font = 'bold 50px Arial';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText('🎉 恭喜通关！ 🎉', W/2, H/2 - 40);
+  
+  ctx.fillStyle = '#fff';
+  ctx.font = '28px Arial';
+  ctx.fillText(`最终得分: ${score} 🪙 金币: ${coins}`, W/2, H/2 + 30);
+  
+  ctx.font = '20px Arial';
+  ctx.fillText('点击 "重新开始" 再玩一次', W/2, H/2 + 90);
+}
+
+// ========== 主循环 ==========
+function gameLoop() {
+  ctx.clearRect(0, 0, W, H);
+  
+  drawBackground();
+  
+  ctx.save();
+  ctx.translate(-cameraX, 0);
+  
+  drawPlatforms();
+  drawCoins();
+  
+  // 检查是否到达终点
+  if (mario.x > WORLD_WIDTH - 100 && !gameOver) {
+    gameOver = true;
+    document.getElementById('scoreDisplay').textContent = score;
+  }
+  
+  for (const e of enemies) drawEnemy(e);
+  
+  drawMario(mario.x, mario.y, mario.facing, mario.frame, mario.invincible);
+  
+  ctx.restore();
+  
+  if (gameOver) {
+    if (lives <= 0) drawGameOver();
+    else drawWin();
+  }
+  
+  update();
+  requestAnimationFrame(gameLoop);
+}
+
+// ========== 重置 ==========
+function resetGame() {
+  gameOver = false;
+  score = 0;
+  coins = 0;
+  lives = 3;
+  cameraX = 0;
+  mario.reset(80);
+  spawnCoins();
+  spawnEnemies();
+  document.getElementById('scoreDisplay').textContent = '0';
+  document.getElementById('coinDisplay').textContent = '0';
+  document.getElementById('lifeDisplay').textContent = '3';
+}
+
+// ========== 触屏控制 ==========
+let touchStartX = 0;
+let touchStartY = 0;
+let isTouching = false;
+
+canvas.addEventListener('touchstart', e => {
+  e.preventDefault();
+  const touch = e.touches[0];
+  touchStartX = touch.clientX;
+  touchStartY = touch.clientY;
+  isTouching = true;
+  // 模拟跳跃
+  keys['Space'] = true;
+});
+
+canvas.addEventListener('touchmove', e => {
+  e.preventDefault();
+  if (!isTouching) return;
+  const touch = e.touches[0];
+  const dx = touch.clientX - touchStartX;
+  if (dx < -20) { keys['ArrowLeft'] = true; keys['ArrowRight'] = false; }
+  else if (dx > 20) { keys['ArrowRight'] = true; keys['ArrowLeft'] = false; }
+  else { keys['ArrowLeft'] = false; keys['ArrowRight'] = false; }
+});
+
+canvas.addEventListener('touchend', e => {
+  e.preventDefault();
+  isTouching = false;
+  keys['Space'] = false;
+  keys['ArrowLeft'] = false;
+  keys['ArrowRight'] = false;
+});
+
+// ========== 启动 ==========
+gameLoop();
+</script>
+</body>
+</html>

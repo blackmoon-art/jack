@@ -260,6 +260,21 @@ async def index():
     return HTMLResponse(html, headers={"Cache-Control": "no-cache, no-store"})
 
 
+# ── 图表文件服务 ──────────────────────────────────────────
+
+CHARTS_DIR = STATIC_DIR / "charts"
+CHARTS_DIR.mkdir(exist_ok=True)
+
+
+@app.get("/charts/{filename}")
+async def serve_chart(filename: str):
+    from fastapi.responses import FileResponse
+    filepath = CHARTS_DIR / filename
+    if not filepath.exists():
+        return {"error": "Chart not found"}
+    return FileResponse(filepath, media_type="image/png", headers={"Cache-Control": "public, max-age=86400"})
+
+
 # ── 启动 ──────────────────────────────────────────────
 
 if __name__ == "__main__":
