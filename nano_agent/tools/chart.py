@@ -2,6 +2,7 @@
 
 支持:
   - 折线图 (line)
+  - 平滑曲线 (curve)
   - 柱状图 (bar)
   - 散点图 (scatter)
   - 饼图 (pie)
@@ -80,6 +81,8 @@ class Chart:
         try:
             if chart_type == "line":
                 self._draw_line(ax, data_sets, label_sets)
+            elif chart_type == "curve":
+                self._draw_curve(ax, data_sets, label_sets)
             elif chart_type == "bar":
                 self._draw_bar(ax, data_sets, label_sets)
             elif chart_type == "scatter":
@@ -91,7 +94,7 @@ class Chart:
             elif chart_type == "area":
                 self._draw_area(ax, data_sets, label_sets)
             else:
-                return f"Error: Unknown chart type '{chart_type}'. Supported: line, bar, scatter, pie, histogram, area"
+                return f"Error: Unknown chart type '{chart_type}'. Supported: line, curve, bar, scatter, pie, histogram, area"
         except Exception as e:
             plt.close(fig)
             return f"Error generating chart: {e}"
@@ -152,6 +155,31 @@ class Chart:
             x = range(len(vals))
             ax.plot(x, vals, color=colors[i % len(colors)], marker="o",
                     linewidth=2, markersize=4, label=label)
+        if any(i < len(label_sets) and label_sets[i] for i in range(len(data_sets))):
+            ax.legend(facecolor="#222", edgecolor="#444", labelcolor="#ccc")
+
+    def _draw_curve(self, ax, data_sets, label_sets):
+        """平滑曲线 — scipy spline 优先，回退到 numpy polyfit。"""
+        import numpy as np
+        colors = ["#7c3aed", "#3b82f6", "#10b981", "#f59e0b", "#ef4444", "#ec4899"]
+        for i, ds in enumerate(data_sets):
+            vals = np.array([float(x) for x in ds])
+            n = len(vals)
+            if n < 3:
+                ax.plot(range(n), vals, color=colors[i % len(colors)], marker="o",
+                        linewidth=2, markersize=4)
+                continue
+            x = np.linspace(0, n - 1, 200)
+            try:
+                from scipy.interpolate import make_interp_spline
+                spl = make_interp_spline(range(n), vals, k=min(3, n - 1))
+                y = spl(x)
+            except ImportError:
+                z = np.polyfit(range(n), vals, min(4, n - 1))
+                y = np.polyval(z, x)
+            label = label_sets[i][0] if i < len(label_sets) and label_sets[i] else None
+            ax.plot(x, y, color=colors[i % len(colors)], linewidth=2, label=label)
+            ax.scatter(range(n), vals, color=colors[i % len(colors)], s=20, zorder=5)
         if any(i < len(label_sets) and label_sets[i] for i in range(len(data_sets))):
             ax.legend(facecolor="#222", edgecolor="#444", labelcolor="#ccc")
 
