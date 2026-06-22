@@ -58,10 +58,12 @@ class PathSandbox:
 class ToolRegistry:
     """管理所有工具的：执行函数 + OpenAI tool schema + 描述。"""
 
-    def __init__(self, work_dir: str, bash_timeout: int = 120):
+    def __init__(self, work_dir: str, bash_timeout: int = 120,
+                 brave_api_key: str = ""):
         self.sandbox = PathSandbox(work_dir)
         self.bash_timeout = bash_timeout
         self.work_dir = work_dir
+        self.brave_api_key = brave_api_key
 
         # 注册内部工具
         self._tools: dict[str, dict[str, Any]] = {}
@@ -266,8 +268,14 @@ class ToolRegistry:
             return f"Error: {e}"
 
     def web_search(self, query: str, max_results: int = 5) -> str:
-        """搜索网页：DuckDuckGo → Bing → SearXNG → Wikipedia 四级降级。"""
+        """搜索网页：Brave → DuckDuckGo → Bing → SearXNG → Wikipedia 五级降级。"""
         max_results = min(max(max_results, 1), 10)
+
+        # Level 0: Brave Search API (如有 API key)
+        if self.brave_api_key:
+            results = self._search_brave(query, max_results)
+            if results:
+                return f"Search results for '{query}' (Brave):\n\n" + "\n\n".join(results)
 
         # Level 1: DuckDuckGo Lite (POST)
         results = self._search_duckduckgo(query, max_results)
@@ -290,6 +298,33 @@ class ToolRegistry:
             return f"Search results for '{query}' (Wikipedia):\n\n" + "\n\n".join(results)
 
         return f"No search results found for '{query}'."
+
+    def _search_brave(self, query: str, max_results: int) -> list[str]:
+        """Brave Search API (需要 API key)。失败返回空列表。"""
+        try:
+            req = urllib.request.Request(
+                f"https://api.search.brave.com/res/v1/web/search?"
+                f"{urllib.parse.urlencode({'q': query, 'count': str(max_results)})}",
+                headers={
+                    "Accept": "application/json",
+                    "Accept-Encoding": "gzip",
+                    "X-Subscription-Token": self.brave_api_key,
+                },
+            )
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+        except Exception:
+            return []
+
+        results = []
+        for item in data.get("web", {}).get("results", [])[:max_results]:
+            title = item.get("title", "").strip()
+            url = item.get("url", "")
+            desc = item.get("description", "").strip()
+            if title and url:
+                s = f" — {desc[:200]}" if desc else ""
+                results.append(f"{len(results)+1}. {title}\n   {url}{s}")
+        return results
 
     def _search_duckduckgo(self, query: str, max_results: int) -> list[str]:
         """DuckDuckGo Lite POST 搜索。被反爬时返回空列表。"""

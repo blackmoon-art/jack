@@ -65,6 +65,9 @@ class Config:
     skills_dir: Optional[str] = field(
         default_factory=lambda: os.getenv("AGENT_SKILLS_DIR", ".agent/skills")
     )
+    brave_api_key: Optional[str] = field(
+        default_factory=lambda: os.getenv("BRAVE_SEARCH_API_KEY", "")
+    )
 
     @property
     def is_anthropic(self) -> bool:

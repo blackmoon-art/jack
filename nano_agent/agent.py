@@ -38,7 +38,8 @@ class Agent:
     def __init__(self, config: Optional[Config] = None):
         self.config = config or Config()
         self.llm = LLM(self.config)
-        self.tools = ToolRegistry(self.config.work_dir, self.config.bash_timeout)
+        self.tools = ToolRegistry(self.config.work_dir, self.config.bash_timeout,
+                                   brave_api_key=self.config.brave_api_key or "")
         self.memory = Memory(self.config.memory_window, self.config.memory_file)
         self.orient_engine = Orient(self.config, self.llm)
         self._plan_steps: list[str] = []
