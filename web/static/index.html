@@ -313,13 +313,10 @@ async function send() {
               break;
             case 'done':
               if (data.text && data.text !== 'Max iterations reached.') {
-                // 从工具返回里提取 markdown 图片 ![alt](url)
+                // 从工具返回里提取图片 (linkify 已把 ![alt](url) 转成 <img>)
                 let imgs = '';
-                document.querySelectorAll('.tool-result').forEach(el => {
-                  const matches = el.textContent.matchAll(/!\[[^\]]*\]\((\/charts\/[^)]+)\)/g);
-                  for (const m of matches) {
-                    if (!imgs.includes(m[1])) imgs += `<img src="${m[1]}" style="max-width:100%;border-radius:8px;margin:8px 0;" />`;
-                  }
+                document.querySelectorAll('.tool-result img[src^="/charts/"]').forEach(el => {
+                  if (!imgs.includes(el.src)) imgs += `<img src="${el.src}" style="max-width:100%;border-radius:8px;margin:8px 0;" />`;
                 });
                 document.querySelectorAll('.thinking-block.visible').forEach(b => b.classList.remove('visible'));
                 document.querySelectorAll('.thinking-summary.open').forEach(t => t.classList.remove('open'));
