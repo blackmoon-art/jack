@@ -25,7 +25,7 @@ demo_1          demo_2          shared_AI       nanoAgent
                     └───────────┬─────────────┘
                                 │
                     ┌───────────▼─────────────┐
-                    │        Agent             │  策略路由
+                    │        Agent             │  策略注册表路由
                     │  run(task, strategy)     │
                     └──┬────────┬──────────┬──┘
                        │        │          │
@@ -46,10 +46,9 @@ demo_1          demo_2          shared_AI       nanoAgent
 
 ```bash
 cd nano_agent_plus
-pip install openai python-dotenv
+pip install -r requirements.txt
 
-# 配置（Ollama 本地模型示例）
-cat > .env << 'EOF'
+# 配置（Ollama 本地模型示例）ncat > .env << 'EOF'
 AGENT_PROVIDER=openai
 OPENAI_API_KEY=ollama
 OPENAI_BASE_URL=http://localhost:11434/v1
@@ -92,6 +91,14 @@ python web/server.py
 ```
 
 实时显示每一步：工具调用（蓝色）、工具结果（绿色）、Orient 解读（灰色）。
+
+### 会话持久化
+
+会话历史通过 SQLite 持久化到 `web/sessions.db`：
+
+- **实时写入**：每条消息（user + assistant）即时存入 SQLite
+- **重启恢复**：服务重启后，前端 localStorage 保存的 session ID 仍可匹配，后端自动从 DB 恢复历史
+- **清除**：`DELETE /api/sessions/:id` 同时清内存和 DB
 
 ### 访问控制
 
@@ -229,7 +236,8 @@ Generate 3 approaches → Score: A(9) B(7) C(3)
 ┌─ 持久记忆 (文件级) ──────────────┐
 │ 追加写入 agent_memory.md         │
 │ 跨会话保留                       │
-│ 加载最近 50 行                   │
+│ 自动轮转 (上限 200 行)           │
+│ 加载最近 200 行                  │
 │ 用于：长期知识累积               │
 └──────────────────────────────────┘
 ```
@@ -242,7 +250,7 @@ AGENT_PROVIDER=anthropic          # anthropic | openai | deepseek | openrouter
 ANTHROPIC_API_KEY=sk-ant-xxx
 OPENAI_API_KEY=sk-xxx             # 也用于 DeepSeek/OpenRouter/Ollama
 OPENAI_BASE_URL=https://api.deepseek.com
-MODEL_NAME=deepseek-chat
+MODEL_NAME=deepseek-v4-flash
 
 # ── Agent 行为 ──
 AGENT_MAX_ITERATIONS=10           # 最大工具调用轮数
@@ -306,7 +314,7 @@ python -m unittest discover tests -v
 ```
 一个 agent.py 1000 行 → 改工具可能崩全局
         vs
-7 个独立模块 → 改工具不改 LLM，改策略不改核心循环，加测试不改配置
+独立模块 + tools/ 包 → 改工具不改 LLM，改策略不改核心循环，加测试不改配置
 ```
 
 ### 决策 2：LLM 层统一返回格式
@@ -343,7 +351,7 @@ LLM 看到 `"Error: Timeout"` 会自己调整策略，而不是整个 Agent Loop
 
 ### 决策 4：策略是可插拔的控制流
 
-5 种策略共用 `_agent_loop` 和 `ToolRegistry`，区别只有控制流：
+5 种策略共用 `_agent_loop` 和 `ToolRegistry`，区别只有控制流。所有策略继承 `BaseStrategy` 基类，统一了接口约束（`run()` 方法签名）、事件回调（`self.emit()`）和 JSON 解析重试（`self._chat_json()`）。`Agent.run()` 通过 `STRATEGY_REGISTRY` 字典查表分发，新增策略只需实现类 + 在注册表加一行，不改 `agent.py` 核心循环：
 
 | 策略 | 控制流 | 一句话 |
 |------|--------|--------|
@@ -369,7 +377,7 @@ LLM 看到 `"Error: Timeout"` 会自己调整策略，而不是整个 Agent Loop
 
 ```
 窗口记忆: 保留最近N轮对话(FIFO淘汰)，进程内，会话结束即丢 → 当前上下文连贯
-持久记忆: 追加写入 agent_memory.md，跨会话保留，每次加载最近50行 → 长期知识累积
+持久记忆: 追加写入 agent_memory.md，跨会话保留，自动轮转(上限200行) → 长期知识累积
 ```
 
 ### 一次请求的完整流转
@@ -377,7 +385,7 @@ LLM 看到 `"Error: Timeout"` 会自己调整策略，而不是整个 Agent Loop
 ```
 Agent.run(task, strategy)
 ├─ Memory.get_window_messages()    ← 加载会话历史
-├─ _system_prompt()                ← 规则 + 持久记忆 + 上次Orient结论
+├─ _system_prompt()                ← 规则 + 持久记忆 + 上次Orient结论 (循环前构建一次)
 │
 ├─ 策略路由
 │   └─ _agent_loop(messages)       ← 核心 O-O-D-A 循环
@@ -410,8 +418,9 @@ Agent.run(task, strategy)
    看: @dataclass Config, 13个环境变量
    问: 换一个模型改哪里？
 
-2. memory.py        (90行)
+2. memory.py        (104行)
    看: save_context(), get_window_messages(), save_persistent(), load_persistent()
+   看: save_persistent() 自动轮转 (超 200 行截断)
    问: 进程重启后窗口记忆还在吗？持久记忆呢？
 ```
 
@@ -425,51 +434,55 @@ Agent.run(task, strategy)
    问: 加一个新后端 (Gemini) 要改哪些？
 ```
 
-### 第 3 层：工具系统（~40 分钟）← 最长最重要的文件
+### 第 3 层：工具系统（~40 分钟）← 模块化拆分, 按子模块读
 
 ```
-4. tools.py         (917行)
-   a) PathSandbox   → resolve() + relative_to() 怎么防越界
-   b) _register()   → 工具 = func + OpenAI schema
-   c) bash          → shlex → 白名单 → shell=False 三道防线
-   d) read/write/edit → sandbox.safe_path() 每步校验
-   e) calculate     → ast.parse 递归遍历，无 eval
-   f) get_weather   → geocode → forecast，两次 HTTP
-   g) stock_info/history/chart → Yahoo Finance + akshare + matplotlib
-   h) web_search, fetch_url, search_and_fetch → 五级降级搜索链
-   i) glob, grep → 扫一遍
+4. tools/                       (1000行, 分 7 个子模块)
+   a) sandbox.py    (19行)  → resolve() + relative_to() 怎么防越界
+   b) file_ops.py   (91行)  → read/write/edit/glob/grep, 每步 sandbox.safe_path()
+   c) shell.py      (106行) → bash: shlex → 白名单 → shell=False 三道防线
+                              calculate: ast.parse 递归遍历, 无 eval
+   d) search.py     (317行) → web_search 五级降级链 + fetch_url + search_and_fetch
+   e) weather.py    (81行)  → geocode → forecast, 两次 HTTP
+   f) stock.py      (212行) → stock_info/history/chart, Yahoo Finance + akshare + matplotlib
+   g) __init__.py   (174行) → ToolRegistry 注册表 + __getattr__ 兼容委托
    问: LLM 让我执行 "rm -rf /"，哪道防线先拦住？
 ```
 
 ### 第 4 层：Agent 核心（~40 分钟）← 最重要的文件
 
 ```
-5. agent.py         (262行)
+5. agent.py         (240行)
    a) __init__() → 5 个组件怎么装配
-   b) run()      → 策略路由 if/elif
-   c) _agent_loop() → O-O-D-A 四步:
-        Decide: LLM.chat()
+   b) run()      → 策略注册表查表 STRATEGY_REGISTRY.get(strategy)
+   c) _agent_loop() → O-O-D-A 四步:\        Decide: LLM.chat()
         Act:    tools.execute()
         Orient: orient_engine.orient()
         [结果注入 → 回到 Decide]
    d) _system_prompt() + _build_messages()
    问: messages 列表在 _agent_loop 中经历了什么变化？
+   问: 新增一个策略需要改 agent.py 吗？(答: 不需要, 只需注册表加一行)
 ```
 
 ### 第 5 层：推理策略（~60 分钟）
 
 ```
-6. react.py         (204行)  ← 最直观，先读
-   看: Thought(从content提取) → FC Action(可靠) → Observation → 循环
+6. strategies/base.py  (55行)  ← 先读, 理解接口契约
+   看: BaseStrategy 基类, emit() 事件回调, _chat_json() JSON重试
+   问: 新策略必须实现哪个方法？
 
-7. reflexion.py     (185行)
+7. react.py         (210行)  ← 最直观
+   看: Thought(从content提取) → FC Action(可靠) → Observation → 循环
+   看: emit() 调用 — Thought/Action/Observation 事件透传给 Web UI
+
+8. reflexion.py     (185行)
    看: evaluate_result() → generate_reflection() → 教训跨任务累积
 
-8. plan_execute.py  (162行)
+9. plan_execute.py  (162行)
    看: create_plan() → evaluate_step() → revise_plan() 失败重规划
 
-9. tree_of_thought.py (262行)  ← 最复杂
-   看: generate_candidates() → score_candidates(批量) → backtrack
+10. tree_of_thought.py (262行)  ← 最复杂
+    看: generate_candidates() → score_candidates(批量) → backtrack
 ```
 
 ### 辅助模块（最后扫）
@@ -485,9 +498,9 @@ Agent.run(task, strategy)
 ```
 第1层  config.py → memory.py              地基
 第2层  llm.py                              后端抽象
-第3层  tools.py                            工具系统 (最长)
+第3层  tools/ (7个子模块)                   工具系统 (最长)
 第4层  agent.py                            核心循环 (最重要)
-第5层  react.py → reflexion.py            策略 (读两个就够)
+第5层  base.py → react.py → reflexion.py  策略 (读两个就够)
        → plan_execute.py → tree_of_thought.py
 第6层  orient.py → logging_config.py → run.py   辅助
 ```
@@ -500,9 +513,10 @@ Agent.run(task, strategy)
 nano_agent_plus/
 ├── run.py                           # CLI 入口
 ├── web/
-│   ├── server.py                    # FastAPI 服务 (SSE 流式)
+│   ├── server.py                    # FastAPI 服务 (SSE 流式 + SQLite 会话持久化)
 │   ├── static/index.html            # 聊天界面
-│   └── usage.json                   # 使用次数统计 (gitignored)
+│   ├── usage.json                   # 使用次数统计 (gitignored)
+│   └── sessions.db                  # 会话历史持久化 (gitignored)
 ├── requirements.txt                 # 依赖
 ├── .env.example                     # 配置模板
 ├── .gitignore                       # 忽略 .env + 运行时文件
@@ -512,16 +526,24 @@ nano_agent_plus/
 │   ├── config.py                    # 环境变量配置
 │   ├── logging_config.py            # 统一日志配置 (stderr, 可选文件日志)
 │   ├── llm.py                       # 多后端 LLM (懒加载, 3次重试)
-│   ├── tools.py                     # 14个工具 (安全加固)
-│   ├── memory.py                    # 双层记忆 (窗口+文件)
-│   ├── agent.py                     # Agent 核心 + 策略路由
+│   ├── tools/                       # 工具包 (模块化)
+│   │   ├── __init__.py              #   ToolRegistry + 兼容委托
+│   │   ├── sandbox.py               #   PathSandbox 路径沙箱
+│   │   ├── file_ops.py              #   read, write, edit, glob, grep
+│   │   ├── shell.py                 #   bash, calculate
+│   │   ├── search.py                #   web_search, fetch_url, search_and_fetch
+│   │   ├── weather.py               #   get_weather
+│   │   └── stock.py                 #   stock_info, stock_history, stock_chart
+│   ├── memory.py                    # 双层记忆 (窗口+文件, 自动轮转)
+│   ├── agent.py                     # Agent 核心 + 策略注册表路由
 │   ├── orient.py                    # 显式 Orient 阶段 + 规则加载
 │   └── strategies/
-│       ├── __init__.py
-│       ├── react.py                  # ReAct (FC驱动, Thought显式可见)
-│       ├── plan_execute.py          # Plan-Execute (分解→执行→评估→重规划)
-│       ├── reflexion.py             # Reflexion (自评→反思→重试→教训)
-│       └── tree_of_thought.py       # Tree-of-Thought (多候选→打分→回溯)
+│       ├── __init__.py              #   STRATEGY_REGISTRY 注册表
+│       ├── base.py                  #   BaseStrategy 基类 (接口约束 + 事件回调 + JSON重试)
+│       ├── react.py                 #   ReAct (FC驱动, Thought显式可见, 事件透传)
+│       ├── plan_execute.py          #   Plan-Execute (分解→执行→评估→重规划)
+│       ├── reflexion.py             #   Reflexion (自评→反思→重试→教训)
+│       └── tree_of_thought.py       #   Tree-of-Thought (多候选→打分→回溯)
 └── tests/
     ├── __init__.py
     ├── test_tools.py                # 工具单元测试 (26)
@@ -535,17 +557,43 @@ nano_agent_plus/
 
 | 模块 | 行数 | 职责 |
 |------|:---:|------|
-| `tools.py` | 917 | 14个工具 + PathSandbox + ToolRegistry |
-| `agent.py` | 262 | Agent 类 + O-O-D-A 循环 + 5策略路由 |
+| `tools/` 包 | 1,000 | 14个工具, 分 7 个子模块 (sandbox/file_ops/shell/search/weather/stock) |
+| `agent.py` | 240 | Agent 类 + O-O-D-A 循环 + 策略注册表路由 |
 | `llm.py` | 233 | LLM 抽象 (Anthropic/OpenAI) + 重试 + Anthropic消息转换 |
 | `orient.py` | 170 | 显式 Orient: 解读→关联→规则→建议 |
-| `memory.py` | 94 | 窗口 + 持久记忆 |
+| `memory.py` | 104 | 窗口 + 持久记忆 (自动轮转) |
 | `config.py` | 74 | 配置管理 |
 | `logging_config.py` | 49 | 统一日志配置 |
+| `strategies/base.py` | 55 | BaseStrategy 基类 (接口约束 + 事件回调 + JSON重试) |
 | 4个策略文件 | 813 | ReAct + Plan-Execute + Reflexion + ToT |
-| **总计** | **~2,612** | 全部自己掌控 |
+| **总计** | **~2,738** | 全部自己掌控 |
 
 ## 更新日志
+
+### 2026-06-22 深夜续 (架构审查 + 修复)
+
+- **策略基类 `BaseStrategy`**：新建 `strategies/base.py`，定义统一接口契约（`run()` 抽象方法）、事件回调（`emit()`）、JSON 解析重试（`_chat_json()`）。4 个策略全部继承，`Agent._run_strategy` 透传 `_emit` 回调。
+- **ReAct 事件透传**：ReAct 之前绕过 `agent_loop_fn` 自己调 LLM + tools，Web UI 看不到中间过程。现在加了 3 个 emit 点：Thought（text 事件）、Action（tool_call 事件）、Observation（tool_result 事件）。
+- **max_iterations 警告**：`_agent_loop` 达到最大迭代次数时加 `logger.warning`，记录最后一次工具名，方便调试。
+- **JSON 解析重试**：`BaseStrategy._chat_json()` 方法封装「调 LLM → 清理 → 解析 JSON → 失败重试」逻辑，默认重试 2 次。替换了 4 个策略中 8 处 `json.loads + except JSONDecodeError` 的静默降级模式。
+- **持久记忆自动轮转**：`agent_memory.md` 超过 200 行时自动截断保留最近条目，避免无限增长（之前已膨胀到 1796 行）。`load_persistent()` 同步改为读最后 200 行。
+- **system_prompt 循环前缓存**：`_agent_loop` 在进入循环前构建一次 `_system_prompt()`，不再每轮迭代重复读文件（10 轮迭代从 10 次文件读取降到 1 次）。
+
+### 2026-06-22 深夜 (P1 架构重构)
+
+- **拆分 `tools.py` (917行) → `tools/` 包 (7 个子模块)**：
+  - `sandbox.py` (19行) — PathSandbox 路径沙箱
+  - `file_ops.py` (91行) — read, write, edit, glob, grep
+  - `shell.py` (106行) — bash, calculate
+  - `search.py` (317行) — web_search, fetch_url, search_and_fetch + 五级搜索引擎
+  - `weather.py` (81行) — get_weather
+  - `stock.py` (212行) — stock_info, stock_history, stock_chart
+  - `__init__.py` (174行) — ToolRegistry + `__getattr__` 兼容委托（旧测试零改动通过）
+- **策略注册表 `STRATEGY_REGISTRY`**：替代 `agent.py` 的 4 个 `if/elif` 分支，新增策略只需在 `strategies/__init__.py` 注册表加一行
+- **`requirements.txt` 补全**：新增 fastapi, uvicorn, akshare, yfinance, matplotlib
+- **模型名迁移**：`deepseek-chat` → `deepseek-v4-flash`（前者 2026/7/24 弃用）
+- **Web 会话 SQLite 持久化**：`web/sessions.db`，服务重启后自动恢复会话历史，`.gitignore` 加入 `sessions.db`
+- **测试修复**：`MockLLM` 替代 `MagicMock`，修复 16 个策略测试 error，76 tests 全过
 
 ### 2026-06-22 晚
 

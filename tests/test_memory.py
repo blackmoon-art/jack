@@ -74,12 +74,12 @@ class TestPersistentMemory(unittest.TestCase):
 
     def test_truncate_long_persistent(self):
         mem = Memory(window_size=5, file_path=self.file_path)
-        # 写入超过 50 行的内容
-        for i in range(60):
+        # 写入超过 200 行的内容
+        for i in range(80):
             mem.save_persistent(f"task {i}", f"result {i}")
         content = mem.load_persistent()
         lines = content.split("\n")
-        self.assertLessEqual(len(lines), 50)
+        self.assertLessEqual(len(lines), 200)
 
     def test_get_summary(self):
         mem = Memory(window_size=5, file_path=self.file_path)

@@ -21,18 +21,17 @@ from typing import Optional
 from ..config import Config
 from ..llm import LLM
 from ..tools import ToolRegistry
+from .base import BaseStrategy
 
 logger = logging.getLogger("nano_agent.strategies.reflexion")
 
 
-class ReflexionStrategy:
+class ReflexionStrategy(BaseStrategy):
     """Reflexion 推理策略 — 自我反思 + 智能重试。"""
 
     def __init__(self, config: Config, llm: LLM, tools: ToolRegistry,
                  max_retries: int = 3):
-        self.config = config
-        self.llm = llm
-        self.tools = tools
+        super().__init__(config, llm, tools)
         self.max_retries = max_retries
         self.reflection_memory: list[str] = []  # 跨任务累积的教训
 
@@ -58,12 +57,10 @@ class ReflexionStrategy:
                 f'"score": 0-10}}'
             ),
         }]
-        response = self.llm.chat(messages=messages, tools=[], system="")
-        text = self.llm.clean_json_response(response["text"])
-        try:
-            return json.loads(text)
-        except json.JSONDecodeError:
-            return {"status": "success", "reason": "fallback", "missing": "", "score": 5}
+        data = self._chat_json(messages)
+        if data and isinstance(data, dict):
+            return data
+        return {"status": "success", "reason": "fallback", "missing": "", "score": 5}
 
     def generate_reflection(self, task: str, result: str, eval_result: dict,
                             attempt: int) -> str:

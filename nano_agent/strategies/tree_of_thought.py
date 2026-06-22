@@ -27,18 +27,17 @@ from typing import Optional
 from ..config import Config
 from ..llm import LLM
 from ..tools import ToolRegistry
+from .base import BaseStrategy
 
 logger = logging.getLogger("nano_agent.strategies.tot")
 
 
-class TreeOfThoughtStrategy:
+class TreeOfThoughtStrategy(BaseStrategy):
     """Tree-of-Thought 推理策略 — 多路径探索 + 评估选择 + 回溯。"""
 
     def __init__(self, config: Config, llm: LLM, tools: ToolRegistry,
                  num_candidates: int = 3, score_threshold: int = 6):
-        self.config = config
-        self.llm = llm
-        self.tools = tools
+        super().__init__(config, llm, tools)
         self.num_candidates = num_candidates     # 每层生成的候选数
         self.score_threshold = score_threshold   # 合格分数阈值
         self._explored_paths: list[dict] = []    # 记录探索路径
@@ -62,15 +61,11 @@ class TreeOfThoughtStrategy:
                 f"'expected_outcome' (what success looks like)."
             ),
         }]
-        response = self.llm.chat(messages=messages, tools=[], system="")
-        text = self.llm.clean_json_response(response["text"])
-        try:
-            data = json.loads(text)
+        data = self._chat_json(messages)
+        if data and isinstance(data, dict):
             candidates = data.get("candidates", [])
             if candidates and isinstance(candidates, list):
                 return candidates[:self.num_candidates]
-        except json.JSONDecodeError:
-            pass
         # Fallback: single approach
         return [{"approach": task, "reasoning": "direct", "expected_outcome": "task completed"}]
 
@@ -102,26 +97,23 @@ class TreeOfThoughtStrategy:
                 f"No markdown, no explanation — just the JSON array."
             ),
         }]
-        response = self.llm.chat(messages=messages, tools=[], system="")
-        text = self.llm.clean_json_response(response["text"])
+        scores = self._chat_json(messages)
 
         # 解析批量评分
-        try:
-            scores = json.loads(text)
-            if isinstance(scores, list):
-                for i, c in enumerate(candidates):
-                    if i < len(scores) and isinstance(scores[i], dict):
-                        s = scores[i]
-                        c["score"] = s.get("score", 5)
-                        c["confidence"] = s.get("confidence", 5)
-                        c["risks"] = s.get("risks", "")
-                        c["verdict"] = s.get("verdict", "risky")
-                    else:
-                        c["score"] = 5
-                        c["confidence"] = 5
-                        c["risks"] = ""
-                        c["verdict"] = "unknown"
-        except (json.JSONDecodeError, TypeError):
+        if isinstance(scores, list):
+            for i, c in enumerate(candidates):
+                if i < len(scores) and isinstance(scores[i], dict):
+                    s = scores[i]
+                    c["score"] = s.get("score", 5)
+                    c["confidence"] = s.get("confidence", 5)
+                    c["risks"] = s.get("risks", "")
+                    c["verdict"] = s.get("verdict", "risky")
+                else:
+                    c["score"] = 5
+                    c["confidence"] = 5
+                    c["risks"] = ""
+                    c["verdict"] = "unknown"
+        else:
             # 回退：所有候选默认中分
             for c in candidates:
                 c["score"] = 5
@@ -152,12 +144,10 @@ class TreeOfThoughtStrategy:
                 f'"reason": "<1 sentence>"}}'
             ),
         }]
-        response = self.llm.chat(messages=messages, tools=[], system="")
-        text = self.llm.clean_json_response(response["text"])
-        try:
-            return json.loads(text)
-        except json.JSONDecodeError:
-            return {"score": 5, "solved": True, "reason": "fallback"}
+        data = self._chat_json(messages)
+        if data and isinstance(data, dict):
+            return data
+        return {"score": 5, "solved": True, "reason": "fallback"}
 
     def run(self, task: str, agent_loop_fn) -> str:
         """

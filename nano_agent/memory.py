@@ -60,27 +60,37 @@ class Memory:
     # ── 持久记忆 (file) ─────────────────────────────────
 
     def load_persistent(self) -> str:
-        """从文件加载持久记忆（最近 50 行）。"""
+        """从文件加载持久记忆（最近 200 行）。"""
         if not self.file_path or not os.path.exists(self.file_path):
             return ""
         try:
             content = Path(self.file_path).read_text(encoding="utf-8")
             lines = content.split("\n")
-            return "\n".join(lines[-50:]) if len(lines) > 50 else content
+            return "\n".join(lines[-200:]) if len(lines) > 200 else content
         except Exception as e:
             logger.warning(f"Failed to load persistent memory: {e}")
             return ""
 
     def save_persistent(self, task: str, result: str):
-        """追加任务结果到持久记忆文件。"""
+        """追加任务结果到持久记忆文件。文件超过上限时自动截断保留最近条目。"""
         if not self.file_path:
             return
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         entry = f"\n## {timestamp}\n**Task:** {task}\n**Result:** {result[:500]}\n"
         try:
-            Path(self.file_path).parent.mkdir(parents=True, exist_ok=True)
-            with open(self.file_path, "a", encoding="utf-8") as f:
+            path = Path(self.file_path)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with open(path, "a", encoding="utf-8") as f:
                 f.write(entry)
+            # 轮转：超过 max_lines 行时只保留最近 max_lines 行
+            max_lines = 200
+            content = path.read_text(encoding="utf-8")
+            lines = content.split("\n")
+            if len(lines) > max_lines:
+                truncated = "\n".join(lines[-max_lines:])
+                path.write_text(truncated, encoding="utf-8")
+                logger.info(f"Persistent memory truncated to {max_lines} lines "
+                            f"(was {len(lines)} lines)")
         except Exception as e:
             logger.warning(f"Failed to save persistent memory: {e}")
 

@@ -20,17 +20,16 @@ from typing import Optional
 from ..config import Config
 from ..llm import LLM
 from ..tools import ToolRegistry
+from .base import BaseStrategy
 
 logger = logging.getLogger("nano_agent.strategies.plan_execute")
 
 
-class PlanExecuteStrategy:
+class PlanExecuteStrategy(BaseStrategy):
     """Plan-Execute 推理策略。"""
 
     def __init__(self, config: Config, llm: LLM, tools: ToolRegistry):
-        self.config = config
-        self.llm = llm
-        self.tools = tools
+        super().__init__(config, llm, tools)
 
     def create_plan(self, task: str) -> list[str]:
         """调用 LLM 将任务分解为有序步骤。"""
@@ -43,14 +42,11 @@ class PlanExecuteStrategy:
                 f"No markdown, no explanation.\n\nTask: {task}"
             ),
         }]
-        response = self.llm.chat(messages=messages, tools=[], system="")
-        text = self.llm.clean_json_response(response["text"])
-        try:
-            plan_data = json.loads(text)
+        plan_data = self._chat_json(messages)
+        if plan_data and isinstance(plan_data, dict):
             steps = plan_data.get("steps", [task])
-        except json.JSONDecodeError:
-            steps = [task]
-        return [str(s) for s in steps] if isinstance(steps, list) and steps else [task]
+            return [str(s) for s in steps] if isinstance(steps, list) and steps else [task]
+        return [task]
 
     def evaluate_step(self, task: str, step: str, result: str) -> str:
         """评估单步执行是否成功。"""
@@ -81,12 +77,10 @@ class PlanExecuteStrategy:
                 f"If the task is now impossible, return an empty array."
             ),
         }]
-        response = self.llm.chat(messages=messages, tools=[], system="")
-        text = self.llm.clean_json_response(response["text"])
-        try:
-            return json.loads(text).get("steps", remaining_steps)
-        except json.JSONDecodeError:
-            return remaining_steps
+        data = self._chat_json(messages)
+        if data and isinstance(data, dict):
+            return data.get("steps", remaining_steps)
+        return remaining_steps
 
     def run(self, task: str, agent_loop_fn) -> str:
         """

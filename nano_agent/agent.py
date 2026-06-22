@@ -28,6 +28,7 @@ from .llm import LLM
 from .memory import Memory
 from .orient import Orient
 from .tools import ToolRegistry
+from .strategies import STRATEGY_REGISTRY
 
 logger = logging.getLogger("nano_agent.agent")
 
@@ -46,6 +47,7 @@ class Agent:
         self.orient_engine = Orient(self.config, self.llm)
         self._strategy_instance = None
         self._last_orientation: Optional[dict] = None  # 最近一次 Orient 结果
+        self._on_event = None
 
     # ── 主入口 ──────────────────────────────────────────
 
@@ -70,21 +72,9 @@ class Agent:
 
         base_messages = self._build_messages(task)
 
-        if strategy == "react":
-            from .strategies import ReActStrategy
-            final = self._run_strategy(ReActStrategy, task)
-        elif strategy == "plan-execute":
-            from .strategies import PlanExecuteStrategy
-            final = self._run_strategy(PlanExecuteStrategy, task)
-        elif strategy == "reflexion":
-            from .strategies import ReflexionStrategy
-            final = self._run_strategy(ReflexionStrategy, task,
-                                       max_retries=strategy_kwargs.get("max_retries", 3))
-        elif strategy == "tree-of-thought":
-            from .strategies import TreeOfThoughtStrategy
-            final = self._run_strategy(TreeOfThoughtStrategy, task,
-                                       num_candidates=strategy_kwargs.get("num_candidates", 3),
-                                       score_threshold=strategy_kwargs.get("score_threshold", 6))
+        strategy_cls = STRATEGY_REGISTRY.get(strategy)
+        if strategy_cls:
+            final = self._run_strategy(strategy_cls, task, **strategy_kwargs)
         else:  # default
             final, _ = self._agent_loop(base_messages)
 
@@ -105,8 +95,9 @@ class Agent:
     # ── 策略实现 ────────────────────────────────────────
 
     def _run_strategy(self, strategy_cls, task: str, **kwargs) -> str:
-        """通用策略执行：实例化 → 缓存 → 运行。"""
+        """通用策略执行：实例化 → 注入事件回调 → 缓存 → 运行。"""
         s = strategy_cls(self.config, self.llm, self.tools, **kwargs)
+        s._emit = self._emit  # 透传事件回调，让策略能发事件
         self._strategy_instance = s
         return s.run(task, self._agent_loop)
 
@@ -122,12 +113,15 @@ class Agent:
         if exclude_tools:
             schemas = [s for s in schemas if s["function"]["name"] not in exclude_tools]
 
+        # system_prompt 在循环内不变，构建一次复用
+        system_prompt = self._system_prompt()
+
         for _ in range(self.config.max_iterations):
             # ── Decide: LLM 决策 ──
             response = self.llm.chat(
                 messages=messages,
                 tools=schemas,
-                system=self._system_prompt(),
+                system=system_prompt,
             )
 
             assistant_msg: dict[str, Any] = {"role": "assistant", "content": response["text"]}
@@ -173,6 +167,9 @@ class Agent:
                         "role": "tool", "tool_call_id": tc["id"], "content": raw_result,
                     })
 
+        logger.warning(f"Max iterations ({self.config.max_iterations}) reached, "
+                        f"forcing stop. Last tool: "
+                        f"{response.get('tool_calls', [{}])[0].get('name', 'N/A') if response.get('tool_calls') else 'N/A'}")
         return "Max iterations reached.", messages
 
     # ── Orient 阶段 ─────────────────────────────────────

@@ -19,11 +19,12 @@ from typing import Optional
 from ..config import Config
 from ..llm import LLM
 from ..tools import ToolRegistry
+from .base import BaseStrategy
 
 logger = logging.getLogger("nano_agent.strategies.react")
 
 
-class ReActStrategy:
+class ReActStrategy(BaseStrategy):
     """
     ReAct 推理策略 — FC 驱动的显式思考 + 行动 + 观察循环。
 
@@ -35,9 +36,7 @@ class ReActStrategy:
 
     def __init__(self, config: Config, llm: LLM, tools: ToolRegistry,
                  max_steps: int = 10):
-        self.config = config
-        self.llm = llm
-        self.tools = tools
+        super().__init__(config, llm, tools)
         self.max_steps = max_steps
         self.thought_trail: list[dict] = []
 
@@ -138,6 +137,7 @@ Final Answer: The current directory contains 2 files: agent.py and README.md."""
             self.thought_trail.append(trail_entry)
 
             logger.info(f"💭 Thought: {thought[:300]}")
+            self.emit("text", {"text": f"💭 {thought}"})
 
             # 检查 Final Answer
             final = self._extract_final_answer(llm_text)
@@ -168,10 +168,12 @@ Final Answer: The current directory contains 2 files: agent.py and README.md."""
                     name = tc["name"]
                     args = tc["arguments"] if isinstance(tc["arguments"], dict) else {}
                     logger.info(f"🔧 Action: {name}({json.dumps(args, ensure_ascii=False)[:200]})")
+                    self.emit("tool_call", {"name": name, "args": args})
 
                     # 执行工具（使用 ToolRegistry，而非正则解析）
                     result = self.tools.execute(name, args)
                     logger.info(f"📤 Observation: {result[:300]}")
+                    self.emit("tool_result", {"name": name, "result": result})
 
                     trail_entry["action"] = {"name": name, "args": args}
                     trail_entry["observation"] = result[:500]
