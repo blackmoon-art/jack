@@ -94,6 +94,14 @@ async def chat(request: Request):
     strategy = body.get("strategy", "default")
     session_id = body.get("session_id", "")
 
+    # 访问控制：如果设置了 WEB_ACCESS_CODE，需要验证
+    access_code = os.getenv("WEB_ACCESS_CODE", "")
+    if access_code and body.get("code") != access_code:
+        return StreamingResponse(
+            iter([f"event: error\ndata: {json.dumps({'text': '访问码错误'})}\n\n"]),
+            media_type="text/event-stream",
+        )
+
     if not task:
         return {"error": "Empty message"}
 
