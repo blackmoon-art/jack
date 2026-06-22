@@ -89,7 +89,11 @@ class PlanExecuteStrategy(BaseStrategy):
         """
         执行 Plan-Execute 策略。
 
-        简单任务短路：如果 LLM 认为任务只需一步，直接执行跳过评估。
+        改进:
+        - 步骤间传递上下文（前面步骤的结果）
+        - 最终输出由 LLM 整合，不是拼接
+        - 执行过程发送事件（Web UI 可见）
+        - 成功的步骤跳过评估，减少 LLM 调用
         """
         logger.info(f"{'='*60}")
         logger.info(f"[Plan-Execute] Task: {task}")
@@ -101,53 +105,77 @@ class PlanExecuteStrategy(BaseStrategy):
         for i, s in enumerate(steps, 1):
             logger.info(f"  {i}. {s}")
 
-        # 简单任务短路：1 步直接执行，不需要评估
+        if self._emit:
+            self._emit("text", {"text": f"📋 计划 ({len(steps)} 步):\n" + chr(10).join(f"  {i}. {s}" for i, s in enumerate(steps, 1))})
+
+        # 简单任务短路：1 步直接执行
         if len(steps) == 1:
-            logger.info("[Plan] Single step — executing directly without evaluation")
+            logger.info("[Plan] Single step — executing directly")
             result, _ = agent_loop_fn([{"role": "user", "content": task}])
-            self._emit_safe("text", {"text": result})
             return result
 
-        # Phase 2: Execute with evaluation
+        # Phase 2: Execute with context passing
         results: list[str] = []
-        all_messages: list[dict] = []
         step_idx = 0
 
         while step_idx < len(steps):
             step = steps[step_idx]
             logger.info(f"[Step {step_idx+1}/{len(steps)}] {step}")
 
-            # 执行当前步骤
-            step_msg = [{"role": "user", "content": step}]
+            # 构建带上下文的消息：让后续步骤知道前面的结果
+            context_parts = [f"Original task: {task}"]
+            for i, (s, r) in enumerate(zip(steps[:step_idx], results)):
+                context_parts.append(f"Step {i+1} ({s}): {r[:500]}")
+            context_parts.append(f"\nNow execute Step {step_idx+1}: {step}")
+            step_msg = [{"role": "user", "content": "\n".join(context_parts)}]
+
             step_result, step_messages = agent_loop_fn(step_msg)
             results.append(step_result)
-            all_messages.extend(step_messages)
             logger.info(f"[Result] {step_result[:300]}...")
 
-            # Phase 3: Evaluate (只对非最后一步评估，减少 LLM 调用)
+            # Phase 3: Evaluate (只评估非最后一步，且只在可能失败时)
             if step_idx < len(steps) - 1:
-                eval_result = self.evaluate_step(task, step, step_result)
-                logger.info(f"[Evaluate] {eval_result}")
+                # 快速判断：如果结果包含错误信息，才评估
+                needs_eval = (
+                    "error" in step_result.lower()[:200]
+                    or "failed" in step_result.lower()[:200]
+                    or "timeout" in step_result.lower()[:200]
+                    or len(step_result.strip()) < 10  # 结果太短可能失败
+                )
 
-                if eval_result.lower().startswith("failed"):
-                    remaining = steps[step_idx + 1:]
-                    logger.info(f"[Revise] Replanning remaining {len(remaining)} steps...")
-                    revised = self.revise_plan(task, remaining, eval_result)
-                    if not revised:
-                        logger.info("[Revise] Task considered impossible, stopping.")
-                        break
-                    steps = steps[:step_idx + 1] + revised
-                    logger.info(f"[Revise] Updated plan ({len(steps)} steps total)")
-                elif eval_result.lower().startswith("partial"):
-                    remaining = steps[step_idx + 1:]
-                    revised = self.revise_plan(task, remaining, eval_result)
-                    if revised:
+                if needs_eval:
+                    eval_result = self.evaluate_step(task, step, step_result)
+                    logger.info(f"[Evaluate] {eval_result}")
+
+                    if eval_result.lower().startswith("failed"):
+                        remaining = steps[step_idx + 1:]
+                        logger.info(f"[Revise] Replanning {len(remaining)} remaining steps...")
+                        revised = self.revise_plan(task, remaining, eval_result)
+                        if not revised:
+                            logger.info("[Revise] Task impossible, stopping.")
+                            break
                         steps = steps[:step_idx + 1] + revised
-                        logger.info(f"[Revise] Adjusted remaining steps ({len(steps)} total)")
+                        logger.info(f"[Revise] Updated plan ({len(steps)} steps)")
+                    elif eval_result.lower().startswith("partial"):
+                        remaining = steps[step_idx + 1:]
+                        revised = self.revise_plan(task, remaining, eval_result)
+                        if revised:
+                            steps = steps[:step_idx + 1] + revised
+                            logger.info(f"[Revise] Adjusted ({len(steps)} steps)")
 
             step_idx += 1
 
-        # Phase 5: Summarize
-        final = "\n\n".join(f"Step {i+1}: {r[:500]}" for i, r in enumerate(results))
-        logger.info(f"[Plan-Execute] Complete: {len(results)} steps executed.")
+        # Phase 5: LLM 整合最终输出（不是拼接）
+        summary_msg = [{
+            "role": "user",
+            "content": (
+                f"Based on the following step results, provide a coherent final answer.\n"
+                f"Do NOT just repeat the steps. Synthesize the information.\n\n"
+                f"Original task: {task}\n\n"
+                + "\n".join(f"Step {i+1} result: {r[:1000]}" for i, r in enumerate(results))
+            ),
+        }]
+        response = self.llm.chat(messages=summary_msg, tools=[], system="Be concise and helpful.")
+        final = response["text"].strip()
+        logger.info(f"[Plan-Execute] Complete: {len(results)} steps, summary generated.")
         return final

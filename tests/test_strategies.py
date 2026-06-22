@@ -139,11 +139,10 @@ class TestPlanExecuteStrategy(unittest.TestCase):
         self.assertIn("fixed", revised[0])
 
     def test_run_successful_plan(self):
-        """所有步骤成功评估，无重规划。"""
+        """所有步骤成功，无重规划。"""
         llm = _make_llm([
             _plan_json(["step 1", "step 2"]),
-            _text_response("success"),  # evaluate step 1
-            _text_response("success"),  # evaluate step 2
+            _text_response("Final answer: step result"),  # LLM 整合最终输出
         ])
         s = PlanExecuteStrategy(self.config, llm, self.tools)
         result = s.run("test task", _simple_loop("step result"))
@@ -151,15 +150,26 @@ class TestPlanExecuteStrategy(unittest.TestCase):
 
     def test_run_with_failure_triggers_revision(self):
         """某步失败后触发重规划。"""
+        # 第一步返回 error，第二步返回 fixed
+        call_count = [0]
+        def _failing_loop(messages, exclude_tools=None):
+            call_count[0] += 1
+            if call_count[0] == 1:
+                text = "Error: step 1 failed"
+            else:
+                text = "fixed result"
+            return text, [{"role": "assistant", "content": text}]
+
         llm = _make_llm([
-            _plan_json(["step 1", "step 2"]),
-            _text_response("failed: step 1 crashed"),  # evaluate step 1
-            _plan_json(["step 1 retry", "step 2 adjusted"]),  # revise_plan
-            _text_response("success"),  # evaluate step 1 retry
-            _text_response("success"),  # evaluate step 2 adjusted
+            _plan_json(["step 1", "step 2"]),      # 1. create_plan
+            _text_response("failed: crashed"),       # 2. evaluate step 1 (error → needs_eval)
+            _plan_json(["step 1 retry"]),            # 3. revise_plan
+            # step 1 retry → "fixed result" (no error, no eval)
+            # step 2 → "fixed result" (no error, no eval)
+            _text_response("Final: fixed result"),   # 4. LLM 整合
         ])
         s = PlanExecuteStrategy(self.config, llm, self.tools)
-        result = s.run("test task", _simple_loop("fixed"))
+        result = s.run("test task", _failing_loop)
         self.assertIn("fixed", result)
 
 

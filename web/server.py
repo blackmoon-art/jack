@@ -202,6 +202,12 @@ async def chat(request: Request):
         return {"error": "Empty message"}
 
     session_id = get_or_create_session(session_id)
+    agent = sessions[session_id]["agent"]
+
+    # 模型切换
+    model = body.get("model", "")
+    if model:
+        agent.llm.set_model(model)
 
     return StreamingResponse(
         agent_stream(task, strategy, session_id),

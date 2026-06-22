@@ -61,6 +61,11 @@
     <option value="reflexion">Reflexion</option>
     <option value="tree-of-thought">Tree-of-Thought</option>
   </select>
+  <select id="model">
+    <option value="">⚡ Flash (默认)</option>
+    <option value="deepseek-chat">🔍 DeepSeek V4</option>
+    <option value="deepseek-reasoner">🧠 DeepSeek R1</option>
+  </select>
   <span class="info" id="status">就绪</span>
 </header>
 
@@ -83,6 +88,7 @@ const $messages = document.getElementById('messages');
 const $input = document.getElementById('input');
 const $send = document.getElementById('send');
 const $strategy = document.getElementById('strategy');
+const $model = document.getElementById('model');
 const $status = document.getElementById('status');
 document.getElementById('session-info').textContent = `会话: ${SESSION_ID}`;
 

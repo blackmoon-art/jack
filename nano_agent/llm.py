@@ -31,6 +31,26 @@ class LLM:
     def __init__(self, config: Config):
         self.config = config
         self._client = None  # 懒初始化
+        self._model_override: str | None = None  # 运行时模型覆盖
+
+    def set_model(self, model: str):
+        """运行时覆盖模型名称。用于 Web UI 模型切换。"""
+        self._model_override = model
+        # 切换 provider 如果需要
+        if model.startswith("claude"):
+            self.config.provider = "anthropic"
+            self._client = None  # 重新创建客户端
+        elif any(model.startswith(p) for p in ("deepseek", "qwen", "glm", "moonshot")):
+            self.config.provider = "deepseek"
+            self._client = None
+        else:
+            # openrouter / openai 兼容
+            self.config.provider = "openai"
+            self._client = None
+
+    @property
+    def _model(self) -> str:
+        return self._model_override or self.config.model
 
     def _get_client(self):
         if self._client is None:
@@ -179,7 +199,7 @@ class LLM:
         anthropic_messages = self._convert_messages_for_anthropic(messages)
 
         response = self._get_client().messages.create(
-            model=self.config.model,
+            model=self._model,
             system=system,
             messages=anthropic_messages,
             tools=anthropic_tools,
@@ -213,7 +233,7 @@ class LLM:
         api_messages.extend(messages)
 
         response = self._get_client().chat.completions.create(
-            model=self.config.model,
+            model=self._model,
             messages=api_messages,
             tools=tools,
             tool_choice="auto",
