@@ -130,7 +130,7 @@ class ToolRegistry:
             "nodes": {"type": "string", "description": "Nodes: one per line, format 'id:label:type:x:y:width:height'. Type: rectangle, ellipse, diamond, parallelogram, cylinder. x/y/w/h optional."},
             "edges": {"type": "string", "description": "Edges: one per line, format 'source:target:label'. Label optional."},
         }, required=["nodes"])
-        self._register("generate_chart", "Generate a chart (line, bar, scatter, pie, histogram, area) and save as PNG image. Returns a URL for viewing. Data format: comma-separated numbers; multiple series separated by semicolons.", self._chart.generate_chart, {
+        self._register("generate_chart", "Generate charts and math plots. For data: use line/bar/pie etc. For math functions: chart_type='function', data='sin(x);-3;3' (expression;xmin;xmax). Supports x, sin/cos/tan/exp/log/sqrt/abs.", self._chart.generate_chart, {
             "chart_type": {"type": "string", "description": "Chart type: line, bar, scatter, pie, histogram, area (default: line)"},
             "title": {"type": "string", "description": "Chart title"},
             "data": {"type": "string", "description": "Data values: comma-separated numbers. Multiple series: separate with semicolons. E.g. '10,20,30' or '10,20;30,40'"},

@@ -111,6 +111,8 @@ class Chart:
                 self._draw_radar(ax, data_sets, label_sets, is_dark)
             elif chart_type == "bubble":
                 self._draw_bubble(ax, data_sets, label_sets, is_dark)
+            elif chart_type == "function":
+                self._draw_function(ax, data_sets, label_sets, is_dark)
             else:
                 return f"Error: Unknown chart type '{chart_type}'. Supported: line, curve, bar, scatter, pie, histogram, area, heatmap, radar, bubble"
         except Exception as e:
@@ -312,6 +314,31 @@ class Chart:
                     ax.annotate(lbl, (xs[i], ys[i]), textcoords="offset points", xytext=(0, 8),
                                 ha="center", fontsize=9, color="#ccc" if is_dark else "#333")
         plt.colorbar(sc, ax=ax)
+
+    def _draw_function(self, ax, data_sets, label_sets, is_dark=True):
+        """数学函数绘图 — data[0][0] 是 Python 表达式，例: x**2, sin(x), log(x)。"""
+        import numpy as np
+        expr = data_sets[0][0] if data_sets and data_sets[0] else "x"
+        x_range = (-5, 5)
+        if len(data_sets) > 1 and data_sets[1]:
+            x_range = (float(data_sets[1][0]) if data_sets[1] else -5,
+                       float(data_sets[1][1]) if len(data_sets[1]) > 1 else 5)
+        x = np.linspace(x_range[0], x_range[1], 500)
+        ns = {"x": x, "np": np, "sin": np.sin, "cos": np.cos, "tan": np.tan,
+              "exp": np.exp, "log": np.log, "sqrt": np.sqrt, "abs": np.abs,
+              "pi": np.pi, "e": np.e}
+        try:
+            y = eval(expr, {"__builtins__": {}}, ns)
+        except Exception:
+            ns["x"] = np.linspace(x_range[0], x_range[1], 500)
+            y = eval(expr, {"__builtins__": {}}, ns)
+        fg = "#e0e0e0" if is_dark else "#333"
+        ax.plot(x, y, color="#7c3aed", linewidth=2)
+        ax.axhline(y=0, color=fg, linewidth=0.5, alpha=0.5)
+        ax.axvline(x=0, color=fg, linewidth=0.5, alpha=0.5)
+        ax.set_title(f"y = {expr}", color=fg, fontsize=14, fontweight="bold")
+        ax.set_xlabel("x", color=fg)
+        ax.set_ylabel("y", color=fg)
 
     # ── 清理 ──
 
