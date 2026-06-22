@@ -89,10 +89,13 @@ class ToolRegistry:
             "pattern": {"type": "string", "description": "Regex pattern to search for"},
             "path": {"type": "string", "description": "Directory or file to search (default: '.')"},
         }, required=["pattern"])
-        self._register("web_search", "Search the web.", self.web_search, {
+        self._register("web_search", "Search the web using DuckDuckGo.", self.web_search, {
             "query": {"type": "string", "description": "Search query"},
             "max_results": {"type": "integer", "description": "Max results (default: 5)"},
         }, required=["query"])
+        self._register("fetch_url", "Fetch and extract text content from a URL.", self.fetch_url, {
+            "url": {"type": "string", "description": "URL to fetch"},
+        }, required=["url"])
         self._register("plan", "Break a complex task into steps and execute sequentially.", self.plan, {
             "task": {"type": "string", "description": "The task to plan"},
         }, required=["task"])
@@ -303,6 +306,40 @@ class ToolRegistry:
         if not results:
             return "No search results found."
         return f"Search results for '{query}':\n\n" + "\n\n".join(results)
+
+    def fetch_url(self, url: str) -> str:
+        """抓取网页并提取文本内容。"""
+        if not url.startswith(("http://", "https://")):
+            return "Error: URL must start with http:// or https://"
+        try:
+            req = urllib.request.Request(url, headers={
+                "User-Agent": (
+                    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+                ),
+                "Accept": "text/html,application/xhtml+xml",
+                "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+            })
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                content_type = resp.headers.get("Content-Type", "")
+                if "html" not in content_type and "text" not in content_type:
+                    return f"Error: Unsupported content type — {content_type}"
+                raw = resp.read().decode("utf-8", errors="ignore")
+        except urllib.error.HTTPError as e:
+            return f"Error: HTTP {e.code} — {e.reason}"
+        except urllib.error.URLError as e:
+            return f"Error: Cannot reach URL — {e.reason}"
+        except Exception as e:
+            return f"Error: {e}"
+
+        # 提取文本：去标签 + 去多余空白 + 截断
+        text = re.sub(r"<script[^>]*>.*?</script>", "", raw, flags=re.DOTALL)
+        text = re.sub(r"<style[^>]*>.*?</style>", "", text, flags=re.DOTALL)
+        text = re.sub(r"<[^>]+>", " ", text)
+        text = re.sub(r"&nbsp;", " ", text)
+        text = re.sub(r"&[a-z]+;", " ", text)
+        text = re.sub(r"\s+", " ", text).strip()
+        return text[:8000] if text else "(页面无文本内容)"
 
     # ── 天气查询（实时数据，Open-Meteo API）──────────────
 
