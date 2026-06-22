@@ -105,6 +105,9 @@ class ToolRegistry:
         self._register("get_weather", "Get real-time weather for a city using Open-Meteo API (free, no key).", self.get_weather, {
             "city": {"type": "string", "description": "City name in Chinese or English (e.g. 北京, Shanghai, Tokyo)"},
         }, required=["city"])
+        self._register("stock_info", "Get real-time stock quote and news. Supports US stocks (AAPL), HK (0700.HK), China (600519.SS). Data from Yahoo Finance.", self.stock_info, {
+            "symbol": {"type": "string", "description": "Stock symbol (e.g. AAPL, TSLA, 0700.HK, 600519.SS)"},
+        }, required=["symbol"])
 
     # ── 内部注册 ──────────────────────────────────────
 
@@ -531,6 +534,61 @@ class ToolRegistry:
             f"🌬️  风速: {c['wind_speed_10m']} km/h\n"
             f"🌀 气压: {c['pressure_msl']} hPa\n"
             f"☁️  天气: {weather}"
+        )
+
+    def stock_info(self, symbol: str) -> str:
+        """获取股票实时行情。数据来源 Yahoo Finance，免费无需 Key。"""
+        import json as _json
+
+        symbol = symbol.upper().strip()
+        try:
+            # Yahoo Finance v8 chart API (无需 API Key)
+            url = (
+                f"https://query1.finance.yahoo.com/v8/finance/chart/{urllib.parse.quote(symbol)}"
+                "?interval=1d&range=1mo"
+            )
+            req = urllib.request.Request(url, headers={
+                "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                              "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                "Accept": "application/json",
+            })
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                data = _json.loads(resp.read().decode("utf-8"))
+        except urllib.error.HTTPError as e:
+            return f"Error: Stock symbol not found — '{symbol}' (HTTP {e.code})"
+        except urllib.error.URLError as e:
+            return f"Error: Cannot reach Yahoo Finance — {e.reason}"
+        except Exception as e:
+            return f"Error: {e}"
+
+        result = data.get("chart", {}).get("result", [])
+        if not result:
+            return f"Error: No data for symbol '{symbol}'"
+
+        meta = result[0].get("meta", {})
+        quotes = result[0].get("indicators", {}).get("quote", [{}])[0]
+
+        price = meta.get("regularMarketPrice", "N/A")
+        prev_close = meta.get("previousClose", "N/A")
+        change = round(price - prev_close, 2) if isinstance(price, (int, float)) and isinstance(prev_close, (int, float)) else "N/A"
+        change_pct = round(change / prev_close * 100, 2) if isinstance(change, (int, float)) and prev_close else "N/A"
+        high = meta.get("regularMarketDayHigh", "N/A")
+        low = meta.get("regularMarketDayLow", "N/A")
+        volume = meta.get("regularMarketVolume", "N/A")
+        name = meta.get("longName") or meta.get("shortName") or symbol
+        currency = meta.get("currency", "USD")
+        exchange = meta.get("exchangeName", "")
+
+        sign = "+" if isinstance(change, (int, float)) and change >= 0 else ""
+        arrow = "📈" if isinstance(change, (int, float)) and change >= 0 else "📉"
+
+        return (
+            f"{arrow} {name} ({symbol}) — {exchange}\n"
+            f"💵 价格: {price} {currency}\n"
+            f"📊 涨跌: {sign}{change} ({sign}{change_pct}%)\n"
+            f"📈 最高: {high} | 📉 最低: {low}\n"
+            f"📦 成交量: {volume}\n"
+            f"🕐 昨收: {prev_close} {currency}"
         )
 
     def plan(self, task: str) -> str:
