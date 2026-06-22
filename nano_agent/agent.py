@@ -224,12 +224,10 @@ class Agent:
             "You are powered by large language models and equipped with tools to help users. "
             "Be concise, helpful, and act decisively. When asked who you are, say you are Sleeping Fox.",
             "",
-            "# Chart & Diagram Selection Guide",
-            "- Data charts (line/bar/pie/scatter/curve): use `generate_chart`",
-            "- Stock price charts (candlestick/line): use `stock_chart`",
-            "- Flowcharts, architecture diagrams, sequence diagrams: use `mermaid_chart` (generates image instantly)",
-            "- Complex diagrams that need manual editing: use `drawio_diagram` (opens in diagrams.net editor)",
-            "- Always include markdown image syntax `![title](url)` in your response so users see the image inline.",
+            "# Quick Chart Rules",
+            "- Data/numbers → generate_chart | Stocks → stock_chart | Flow/architecture → mermaid_chart | Editable → drawio_diagram",
+            "- Always show images with ![title](url)",
+            "- DO NOT overthink chart selection — pick the first match and proceed.",
         ]
         rules = self.orient_engine.load_rules()
         if rules:
