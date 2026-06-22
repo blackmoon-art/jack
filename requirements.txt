@@ -1,0 +1,8 @@
+# Nano Agent Plus 依赖
+
+# 核心依赖
+openai>=1.0.0
+python-dotenv>=1.0.0
+
+# Anthropic 后端 (可选)
+# anthropic>=0.40.0

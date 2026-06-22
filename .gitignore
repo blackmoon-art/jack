@@ -1,0 +1,17 @@
+# 环境配置（含真实凭证，勿提交）
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+
+# Agent 运行时
+agent_memory.md
+
+# IDE
+.vscode/
+.idea/
+.venv/
+*.egg-info/
