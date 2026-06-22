@@ -20,6 +20,7 @@ import re
 import urllib.parse
 import urllib.request
 from datetime import datetime, timedelta
+from pathlib import Path
 
 _PERIOD_DAYS = {'1mo': 30, '3mo': 90, '6mo': 180, '1y': 365, '3y': 1095, '5y': 1825}
 
@@ -572,7 +573,9 @@ class Stock:
         clean, is_a = self._parse_stock_symbol(symbol)
         days = _PERIOD_DAYS.get(period, 90)
 
-        charts_dir = os.path.join(self.work_dir, "charts")
+        # 保存到 web/static/charts/ 以便前端访问
+        web_static = Path(__file__).parent.parent.parent / "web" / "static"
+        charts_dir = str(web_static / "charts")
         os.makedirs(charts_dir, exist_ok=True)
         today = datetime.now().strftime('%Y%m%d')
         filename = f"{clean}_{period}_{chart_type}_{today}.png"
@@ -585,7 +588,8 @@ class Stock:
                 except OSError:
                     pass
         if os.path.exists(filepath):
-            return f"Chart (cached): {filepath}"
+            url = f"/charts/{filename}"
+            return f"Chart (cached): {url}\n![{clean}]({url})"
 
         try:
             if is_a:
@@ -649,7 +653,8 @@ class Stock:
 
         fig.savefig(filepath, dpi=150, bbox_inches='tight')
         plt.close(fig)
-        return f"Chart saved: {filepath}"
+        url = f"/charts/{filename}"
+        return f"Chart saved: {url}\n![{clean}]({url})"
 
     # ════════════════════════════════════════════════════
     #  数据源：腾讯行情 API
