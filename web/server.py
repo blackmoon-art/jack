@@ -29,7 +29,7 @@ sessions: dict[str, dict] = {}
 # ── 使用次数统计 ──────────────────────────────────────
 
 USAGE_FILE = Path(__file__).parent / "usage.json"
-DAILY_LIMIT = int(os.getenv("DAILY_LIMIT_PER_USER", "10"))
+DAILY_LIMIT = int(os.getenv("DAILY_LIMIT_PER_USER", "20"))
 
 
 def _today() -> str:
