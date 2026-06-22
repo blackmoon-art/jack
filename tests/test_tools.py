@@ -162,12 +162,6 @@ class TestToolRegistry(unittest.TestCase):
         result = self.registry.web_search("", max_results=1)
         self.assertIsInstance(result, str)
 
-    # ── plan ────────────────────────────────────────────
-
-    def test_plan_returns_trigger(self):
-        result = self.registry.plan("build a website")
-        self.assertIn("__PLAN_TRIGGER__", result)
-
     # ── tool execution via registry ─────────────────────
 
     def test_execute_bash_via_registry(self):

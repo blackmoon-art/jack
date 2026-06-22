@@ -4,7 +4,9 @@ Nano Agent Plus — Web UI (FastAPI + SSE Streaming)
 """
 
 import json
+import logging
 import os
+import sqlite3
 import sys
 import uuid
 from pathlib import Path
@@ -21,9 +23,85 @@ from fastapi.staticfiles import StaticFiles
 
 from nano_agent import Agent, Config
 
+logger = logging.getLogger("nano_agent.web")
+
 app = FastAPI(title="Nano Agent Plus")
 
-# Session storage: session_id -> {"agent": Agent, "history": list}
+# ── SQLite 持久化 ────────────────────────────────────
+
+DB_PATH = Path(__file__).parent / "sessions.db"
+
+
+def _get_db() -> sqlite3.Connection:
+    """获取 SQLite 连接（每次调用创建新连接，线程安全）。"""
+    conn = sqlite3.connect(str(DB_PATH))
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def _init_db():
+    """初始化数据库表。"""
+    with _get_db() as conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS session_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id TEXT NOT NULL,
+                role TEXT NOT NULL,
+                content TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            )
+        """)
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_session_id
+            ON session_history(session_id)
+        """)
+
+
+_init_db()
+
+
+def db_save_message(session_id: str, role: str, content: str):
+    """持久化一条消息到 SQLite。"""
+    try:
+        with _get_db() as conn:
+            conn.execute(
+                "INSERT INTO session_history (session_id, role, content) VALUES (?, ?, ?)",
+                (session_id, role, content),
+            )
+            conn.commit()
+    except Exception as e:
+        logger.warning(f"Failed to save session message: {e}")
+
+
+def db_load_history(session_id: str) -> list[dict]:
+    """从 SQLite 加载会话历史。"""
+    try:
+        with _get_db() as conn:
+            rows = conn.execute(
+                "SELECT role, content FROM session_history WHERE session_id = ? ORDER BY id",
+                (session_id,),
+            ).fetchall()
+            return [{"role": r["role"], "content": r["content"]} for r in rows]
+    except Exception as e:
+        logger.warning(f"Failed to load session history: {e}")
+        return []
+
+
+def db_clear_session(session_id: str):
+    """清除会话历史。"""
+    try:
+        with _get_db() as conn:
+            conn.execute(
+                "DELETE FROM session_history WHERE session_id = ?",
+                (session_id,),
+            )
+            conn.commit()
+    except Exception as e:
+        logger.warning(f"Failed to clear session: {e}")
+
+
+# Session storage: session_id -> {"agent": Agent (内存), "history": list (缓存)}
+# history 同步持久化到 SQLite, 重启后从 DB 恢复
 sessions: dict[str, dict] = {}
 
 # ── 使用次数统计 ──────────────────────────────────────
@@ -42,7 +120,8 @@ def load_usage() -> dict:
     if USAGE_FILE.exists():
         try:
             return json.loads(USAGE_FILE.read_text())
-        except (json.JSONDecodeError, OSError):
+        except (json.JSONDecodeError, OSError) as e:
+            logger.warning(f"Failed to load usage file: {e}")
             pass
     return {}
 
@@ -81,15 +160,19 @@ STATIC_DIR = Path(__file__).parent / "static"
 
 
 def get_or_create_session(session_id: Optional[str] = None) -> str:
-    """获取或创建会话。"""
+    """获取或创建会话。新 session 或内存中不存在时从 DB 恢复历史。"""
     if session_id and session_id in sessions:
         return session_id
     new_id = session_id or uuid.uuid4().hex[:12]
     if new_id not in sessions:
+        # 从 SQLite 恢复历史（如果有）
+        history = db_load_history(new_id)
         sessions[new_id] = {
             "agent": Agent(Config()),
-            "history": [],
+            "history": history,
         }
+        if history:
+            logger.info(f"Restored session {new_id}: {len(history)} messages from DB")
     return new_id
 
 
@@ -110,6 +193,7 @@ def agent_stream(task: str, strategy: str, session_id: str):
         try:
             agent.run(task, strategy=strategy, on_event=on_event)
         except Exception as e:
+            logger.exception(f"Agent run failed: {e}")
             queue.put({"event": "error", "data": {"text": str(e)}})
 
     thread = Thread(target=run)
@@ -127,12 +211,13 @@ def agent_stream(task: str, strategy: str, session_id: str):
             break
 
     thread.join()
-    # 记录历史
+    # 记录历史（内存 + SQLite）
     sessions[session_id]["history"].append({"role": "user", "content": task})
+    db_save_message(session_id, "user", task)
     if item and item["event"] == "done":
-        sessions[session_id]["history"].append(
-            {"role": "assistant", "content": item["data"]["text"]}
-        )
+        reply = item["data"]["text"]
+        sessions[session_id]["history"].append({"role": "assistant", "content": reply})
+        db_save_message(session_id, "assistant", reply)
 
 
 # ── API 路由 ──────────────────────────────────────────
@@ -180,7 +265,9 @@ async def chat(request: Request):
 async def get_history(session_id: str):
     """Get chat history for a session."""
     if session_id not in sessions:
-        return {"history": []}
+        # 内存中没有, 尝试从 DB 恢复
+        history = db_load_history(session_id)
+        return {"history": history}
     return {"history": sessions[session_id]["history"]}
 
 
@@ -190,6 +277,7 @@ async def clear_session(session_id: str):
     if session_id in sessions:
         sessions[session_id]["agent"].clear_memory()
         sessions[session_id]["history"] = []
+    db_clear_session(session_id)
     return {"ok": True}
 
 
@@ -219,9 +307,7 @@ if __name__ == "__main__":
     import uvicorn
 
     port = int(os.getenv("WEB_PORT", "8080"))
-    print(f"\n🤖 Nano Agent Plus Web UI")
-    print(f"   地址: http://localhost:{port}")
-    print(f"   模型: {Config().model}")
-    print(f"   后端: {Config().provider}\n")
+    logger.info(f"Nano Agent Plus Web UI — http://localhost:{port}")
+    logger.info(f"Model: {Config().model} | Provider: {Config().provider}")
 
     uvicorn.run(app, host="0.0.0.0", port=port, log_level="info")

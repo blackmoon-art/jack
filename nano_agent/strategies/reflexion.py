@@ -15,11 +15,14 @@ Reflexion 策略 — 自我反思 + 失败重试 + 教训学习。
 """
 
 import json
+import logging
 from typing import Optional
 
 from ..config import Config
 from ..llm import LLM
 from ..tools import ToolRegistry
+
+logger = logging.getLogger("nano_agent.strategies.reflexion")
 
 
 class ReflexionStrategy:
@@ -56,11 +59,7 @@ class ReflexionStrategy:
             ),
         }]
         response = self.llm.chat(messages=messages, tools=[], system="")
-        text = response["text"].strip()
-        if text.startswith("```"):
-            text = text.split("\n", 1)[-1]
-            if text.endswith("```"):
-                text = text[:-3]
+        text = self.llm.clean_json_response(response["text"])
         try:
             return json.loads(text)
         except json.JSONDecodeError:
@@ -103,17 +102,17 @@ class ReflexionStrategy:
             task: 用户任务
             agent_loop_fn: 核心循环 f(messages, exclude_tools) -> (text, messages)
         """
-        print(f"\n{'='*60}")
-        print(f"[Reflexion] Task: {task}")
-        print(f"{'='*60}")
+        logger.info(f"{'='*60}")
+        logger.info(f"[Reflexion] Task: {task}")
+        logger.info(f"{'='*60}")
 
         best_result = ""
         best_score = -1
         all_reflections: list[str] = []
 
         for attempt in range(self.max_retries):
-            print(f"\n{'─'*40}")
-            print(f"[Attempt {attempt+1}/{self.max_retries}]")
+            logger.info(f"{'─'*40}")
+            logger.info(f"[Attempt {attempt+1}/{self.max_retries}]")
 
             # 构建消息（包含历史反思）
             user_content = task
@@ -137,8 +136,8 @@ class ReflexionStrategy:
             eval_result = self.evaluate_result(task, result)
             score = eval_result.get("score", 5)
 
-            print(f"[Evaluate] status={eval_result['status']}, score={score}/10")
-            print(f"[Evaluate] reason={eval_result.get('reason', 'N/A')}")
+            logger.info(f"[Evaluate] status={eval_result['status']}, score={score}/10")
+            logger.info(f"[Evaluate] reason={eval_result.get('reason', 'N/A')}")
 
             # 保留最佳结果
             if score > best_score:
@@ -147,20 +146,20 @@ class ReflexionStrategy:
 
             # 成功 → 结束
             if eval_result["status"] == "success" and score >= 7:
-                print(f"[Reflexion] Success! (attempt {attempt+1})")
+                logger.info(f"[Reflexion] Success! (attempt {attempt+1})")
                 break
 
             # 最后一次不反思
             if attempt == self.max_retries - 1:
-                print(f"[Reflexion] Max retries reached. Returning best result.")
+                logger.info(f"[Reflexion] Max retries reached. Returning best result.")
                 break
 
             # 失败 → 反思
-            print(f"[Reflect] Generating reflection...")
+            logger.info(f"[Reflect] Generating reflection...")
             reflection = self.generate_reflection(task, result, eval_result, attempt)
             all_reflections.append(reflection)
             self.reflection_memory.append(reflection)
-            print(f"[Reflect] {reflection[:300]}...")
+            logger.info(f"[Reflect] {reflection[:300]}...")
 
         # 保存反思教训到持久记忆（如果配置了）
         if self.reflection_memory:

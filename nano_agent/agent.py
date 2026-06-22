@@ -20,7 +20,7 @@ O-O-D-A 阶段:
 """
 
 import json
-from pathlib import Path
+import logging
 from typing import Any, Callable, Optional
 
 from .config import Config
@@ -28,6 +28,8 @@ from .llm import LLM
 from .memory import Memory
 from .orient import Orient
 from .tools import ToolRegistry
+
+logger = logging.getLogger("nano_agent.agent")
 
 
 class Agent:
@@ -42,7 +44,6 @@ class Agent:
                                    brave_api_key=self.config.brave_api_key or "")
         self.memory = Memory(self.config.memory_window, self.config.memory_file)
         self.orient_engine = Orient(self.config, self.llm)
-        self._plan_steps: list[str] = []
         self._strategy_instance = None
         self._last_orientation: Optional[dict] = None  # 最近一次 Orient 结果
 
@@ -70,13 +71,20 @@ class Agent:
         base_messages = self._build_messages(task)
 
         if strategy == "react":
-            final = self._run_react(task)
+            from .strategies import ReActStrategy
+            final = self._run_strategy(ReActStrategy, task)
         elif strategy == "plan-execute":
-            final = self._run_plan_execute(task)
+            from .strategies import PlanExecuteStrategy
+            final = self._run_strategy(PlanExecuteStrategy, task)
         elif strategy == "reflexion":
-            final = self._run_reflexion(task, **strategy_kwargs)
+            from .strategies import ReflexionStrategy
+            final = self._run_strategy(ReflexionStrategy, task,
+                                       max_retries=strategy_kwargs.get("max_retries", 3))
         elif strategy == "tree-of-thought":
-            final = self._run_tree_of_thought(task, **strategy_kwargs)
+            from .strategies import TreeOfThoughtStrategy
+            final = self._run_strategy(TreeOfThoughtStrategy, task,
+                                       num_candidates=strategy_kwargs.get("num_candidates", 3),
+                                       score_threshold=strategy_kwargs.get("score_threshold", 6))
         else:  # default
             final, _ = self._agent_loop(base_messages)
 
@@ -91,40 +99,14 @@ class Agent:
         if self._on_event:
             try:
                 self._on_event(event_type, data)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(f"Event callback error ({event_type}): {e}")
 
     # ── 策略实现 ────────────────────────────────────────
 
-    def _run_react(self, task: str) -> str:
-        from .strategies import ReActStrategy
-
-        s = ReActStrategy(self.config, self.llm, self.tools)
-        self._strategy_instance = s
-        return s.run(task, self._agent_loop)
-
-    def _run_plan_execute(self, task: str) -> str:
-        from .strategies import PlanExecuteStrategy
-
-        s = PlanExecuteStrategy(self.config, self.llm, self.tools)
-        self._strategy_instance = s
-        return s.run(task, self._agent_loop)
-
-    def _run_reflexion(self, task: str, max_retries: int = 3) -> str:
-        from .strategies import ReflexionStrategy
-
-        s = ReflexionStrategy(self.config, self.llm, self.tools,
-                              max_retries=max_retries)
-        self._strategy_instance = s
-        return s.run(task, self._agent_loop)
-
-    def _run_tree_of_thought(self, task: str, num_candidates: int = 3,
-                             score_threshold: int = 6) -> str:
-        from .strategies import TreeOfThoughtStrategy
-
-        s = TreeOfThoughtStrategy(self.config, self.llm, self.tools,
-                                  num_candidates=num_candidates,
-                                  score_threshold=score_threshold)
+    def _run_strategy(self, strategy_cls, task: str, **kwargs) -> str:
+        """通用策略执行：实例化 → 缓存 → 运行。"""
+        s = strategy_cls(self.config, self.llm, self.tools, **kwargs)
         self._strategy_instance = s
         return s.run(task, self._agent_loop)
 
@@ -167,44 +149,29 @@ class Agent:
                 name = tc["name"]
                 args = tc["arguments"] if isinstance(tc["arguments"], dict) else {}
                 self._emit("tool_call", {"name": name, "args": args})
-                print(f"\033[33m[Tool] {name}({json.dumps(args, ensure_ascii=False)[:200]})\033[0m")
+                logger.info(f"[Tool] {name}({json.dumps(args, ensure_ascii=False)[:200]})")
 
-                if name == "plan":
-                    plan_result = self._handle_plan(args.get("task", ""))
+                # ── Act: 执行 ──
+                raw_result = self.tools.execute(name, args)
+                self._emit("tool_result", {"name": name, "result": raw_result})
+                logger.debug(f"[Tool Result] {raw_result[:200]}")
+
+                # ── Orient: 显式解读 ──
+                orientation = self._orient(raw_result, args.get("task", ""))
+                if orientation:
+                    self._emit("orient", orientation)
+                    enriched = (
+                        f"{raw_result}\n\n"
+                        f"[Orient] interpretation={orientation.get('interpretation', '')[:200]}\n"
+                        f"[Orient] implication={orientation.get('implication', '')[:200]}"
+                    )
                     messages.append({
-                        "role": "tool", "tool_call_id": tc["id"], "content": plan_result,
+                        "role": "tool", "tool_call_id": tc["id"], "content": enriched,
                     })
-                    if self._plan_steps:
-                        results = []
-                        for i, step in enumerate(self._plan_steps, 1):
-                            print(f"\n[Plan Step {i}/{len(self._plan_steps)}] {step}")
-                            messages.append({"role": "user", "content": step})
-                            r, messages = self._agent_loop(messages, exclude_tools=["plan"])
-                            results.append(r)
-                        self._plan_steps = []
-                        return "\n".join(results), messages
                 else:
-                    # ── Act: 执行 ──
-                    raw_result = self.tools.execute(name, args)
-                    self._emit("tool_result", {"name": name, "result": raw_result})
-                    print(raw_result[:200])
-
-                    # ── Orient: 显式解读 ──
-                    orientation = self._orient(raw_result, args.get("task", ""))
-                    if orientation:
-                        self._emit("orient", orientation)
-                        enriched = (
-                            f"{raw_result}\n\n"
-                            f"[Orient] interpretation={orientation.get('interpretation', '')[:200]}\n"
-                            f"[Orient] implication={orientation.get('implication', '')[:200]}"
-                        )
-                        messages.append({
-                            "role": "tool", "tool_call_id": tc["id"], "content": enriched,
-                        })
-                    else:
-                        messages.append({
-                            "role": "tool", "tool_call_id": tc["id"], "content": raw_result,
-                        })
+                    messages.append({
+                        "role": "tool", "tool_call_id": tc["id"], "content": raw_result,
+                    })
 
         return "Max iterations reached.", messages
 
@@ -229,51 +196,15 @@ class Agent:
             )
             self._last_orientation = orientation
             return orientation
-        except Exception:
+        except Exception as e:
+            logger.warning(f"Orient failed: {e}")
             return None
-
-    # ── 计划 ─────────────────────────────────────────────
-
-    def _create_plan(self, task: str) -> list[str]:
-        print("[Plan] Breaking down task...")
-        try:
-            messages = [{
-                "role": "user",
-                "content": (
-                    f"Break the following task into 3-5 simple, actionable steps. "
-                    f"Return ONLY a JSON object with a 'steps' array. "
-                    f"No markdown, no explanation.\n\nTask: {task}"
-                ),
-            }]
-            response = self.llm.chat(messages=messages, tools=[], system="")
-            text = response["text"].strip()
-            if text.startswith("```"):
-                text = text.split("\n", 1)[-1]
-                if text.endswith("```"):
-                    text = text[:-3]
-            plan_data = json.loads(text)
-            steps = plan_data.get("steps", [task])
-            if not isinstance(steps, list) or not steps:
-                steps = [task]
-            print(f"[Plan] {len(steps)} steps created")
-            for i, s in enumerate(steps, 1):
-                print(f"  {i}. {s}")
-            return [str(s) for s in steps]
-        except Exception:
-            print("[Plan] Failed, using raw task")
-            return [task]
-
-    def _handle_plan(self, task: str) -> str:
-        if self._plan_steps:
-            return "Error: Plan already in progress"
-        self._plan_steps = self._create_plan(task)
-        return f"Plan created with {len(self._plan_steps)} steps. Executing now..."
 
     # ── 消息构建 ────────────────────────────────────────
 
     def _system_prompt(self) -> str:
         parts = ["You are a coding agent. Use tools to solve tasks. Be concise and act."]
-        rules = self._load_rules()
+        rules = self.orient_engine.load_rules()
         if rules:
             parts.append(f"\n# Rules\n{rules}")
         persistent = self.memory.load_persistent()
@@ -296,28 +227,12 @@ class Agent:
         messages.append({"role": "user", "content": task})
         return messages
 
-    # ── 规则加载 ────────────────────────────────────────
-
-    def _load_rules(self) -> str:
-        rules_dir = self.config.rules_dir
-        if not rules_dir or not Path(rules_dir).exists():
-            return ""
-        try:
-            rules = []
-            for rule_file in sorted(Path(rules_dir).glob("*.md")):
-                content = rule_file.read_text(encoding="utf-8").strip()
-                if content:
-                    rules.append(f"## {rule_file.stem}\n{content}")
-            return "\n\n".join(rules) if rules else ""
-        except Exception:
-            return ""
-
     # ── 便利方法 ────────────────────────────────────────
 
     def clear_memory(self):
         self.memory.clear()
         self._last_orientation = None
-        print("Memory cleared.")
+        logger.info("Memory cleared.")
 
     @property
     def memory_summary(self) -> str:

@@ -25,11 +25,14 @@ Supports:
 
 import os
 import sys
+import logging
 
 # 确保项目根目录在 sys.path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from nano_agent import Agent, Config
+
+logger = logging.getLogger("nano_agent.cli")
 
 # 策略名称别名
 STRATEGY_MAP = {
@@ -130,7 +133,7 @@ def main():
     if task:
         print(f"Task: {task}")
         print(f"Strategy: {strategy}")
-        print()
+        logger.info(f"Running task with strategy={strategy}")
         result = agent.run(task, strategy=strategy)
         print(f"\n{result}")
     else:

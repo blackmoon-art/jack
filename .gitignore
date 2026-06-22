@@ -16,6 +16,7 @@ agent_memory.md
 .venv/
 *.egg-info/
 usage.json
+sessions.db
 *.swp
 cat.svg
 gen_liu_bei.py

@@ -29,6 +29,16 @@ class TestAgentLoop(unittest.TestCase):
 
     def _make_agent(self, mock_llm):
         """创建一个使用 mock LLM 的 Agent。"""
+        # mock 需要 clean_json_response 和 format_tool_call_for_message
+        mock_llm.clean_json_response = lambda text: text.strip()
+        mock_llm.format_tool_call_for_message = lambda tc: {
+            "id": tc.get("id", ""),
+            "type": "function",
+            "function": {
+                "name": tc.get("name", ""),
+                "arguments": str(tc.get("arguments", {})),
+            },
+        }
         agent = Agent(config=self.config)
         agent.llm = mock_llm
         return agent

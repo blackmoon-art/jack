@@ -12,6 +12,7 @@
 
 import glob as _glob
 import json
+import logging
 import os
 import re
 import shlex
@@ -21,6 +22,8 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 from typing import Any, Optional
+
+logger = logging.getLogger("nano_agent.tools")
 
 # ── 危险命令白名单（只允许这些前缀的命令通过）────────────
 _SAFE_COMMAND_PREFIXES = [
@@ -101,9 +104,6 @@ class ToolRegistry:
         self._register("search_and_fetch", "Search the web and auto-fetch top result content. Best for questions needing detailed answers.", self.search_and_fetch, {
             "query": {"type": "string", "description": "Search query"},
         }, required=["query"])
-        self._register("plan", "Break a complex task into steps and execute sequentially.", self.plan, {
-            "task": {"type": "string", "description": "The task to plan"},
-        }, required=["task"])
         self._register("calculate", "Evaluate a mathematical expression safely.", self.calculate, {
             "expression": {"type": "string", "description": "Math expression (e.g. 1+2*3)"},
         }, required=["expression"])
@@ -325,11 +325,9 @@ class ToolRegistry:
                     import gzip
                     raw = gzip.decompress(raw)
                 data = json.loads(raw.decode("utf-8"))
-        except Exception:
+        except Exception as e:
+            logger.debug(f"Brave search failed: {e}")
             return []
-
-        results = []
-        for item in data.get("web", {}).get("results", [])[:max_results]:
             title = item.get("title", "").strip()
             url = item.get("url", "")
             desc = item.get("description", "").strip()
@@ -356,10 +354,9 @@ class ToolRegistry:
             req = urllib.request.Request(url, data=data, headers=headers)
             with urllib.request.urlopen(req, timeout=15) as resp:
                 html = resp.read().decode("utf-8", errors="ignore")
-        except Exception:
+        except Exception as e:
+            logger.debug(f"DuckDuckGo search failed: {e}")
             return []
-
-        # 反爬检测
         if "anomaly" in html.lower():
             return []
 
@@ -446,10 +443,9 @@ class ToolRegistry:
                     html = resp.read().decode("utf-8", errors="ignore")
                 if html and len(html) > 1000:
                     break
-            except Exception:
+            except Exception as e:
+                logger.debug(f"Bing search failed ({base_url}): {e}")
                 continue
-
-        if not html:
             return []
 
         # 解析 Bing 结果 (<li class="b_algo">)
@@ -502,7 +498,8 @@ class ToolRegistry:
                         s = f" — {self._clean_html(snippet)[:200]}" if snippet else ""
                         results.append(f"{len(results)+1}. {title}\n   {url}{s}")
                 return results
-            except Exception:
+            except Exception as e:
+                logger.debug(f"SearXNG search failed ({base_url}): {e}")
                 continue
         return []
 
@@ -546,11 +543,12 @@ class ToolRegistry:
             )
             with urllib.request.urlopen(req, timeout=10) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
-        except Exception:
+        except Exception as e:
+            logger.debug(f"Wikipedia search failed: {e}")
             return []
 
-        results = []
         search_items = data.get("query", {}).get("search", [])
+        results = []
         for item in search_items:
             title = item["title"]
             snippet = re.sub(r'<[^>]+>', '', item.get("snippet", ""))
@@ -869,13 +867,6 @@ class ToolRegistry:
         fig.savefig(filepath, dpi=150, bbox_inches='tight')
         plt.close(fig)
         return f"Chart saved: {filepath}"
-
-    def plan(self, task: str) -> str:
-        """
-        占位工具 — plan 的逻辑在 Agent 层实现。
-        这里返回一个标记让 Agent.run 中的 plan handler 接管。
-        """
-        return f"__PLAN_TRIGGER__:{task}"
 
     def calculate(self, expression: str) -> str:
         """安全计算数学表达式（使用 ast 解析，无 eval）。"""

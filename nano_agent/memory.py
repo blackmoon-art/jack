@@ -6,10 +6,13 @@
   - nanoAgent: markdown 文件持久化 (agent_memory.md)
 """
 
+import logging
 import os
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
+
+logger = logging.getLogger("nano_agent.memory")
 
 
 class Memory:
@@ -64,7 +67,8 @@ class Memory:
             content = Path(self.file_path).read_text(encoding="utf-8")
             lines = content.split("\n")
             return "\n".join(lines[-50:]) if len(lines) > 50 else content
-        except Exception:
+        except Exception as e:
+            logger.warning(f"Failed to load persistent memory: {e}")
             return ""
 
     def save_persistent(self, task: str, result: str):
@@ -77,8 +81,8 @@ class Memory:
             Path(self.file_path).parent.mkdir(parents=True, exist_ok=True)
             with open(self.file_path, "a", encoding="utf-8") as f:
                 f.write(entry)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"Failed to save persistent memory: {e}")
 
     # ── 快捷方法 ────────────────────────────────────────
 

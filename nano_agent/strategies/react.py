@@ -13,11 +13,14 @@ ReAct 策略 — Reasoning + Acting：Function Calling + 显式 Thought。
 """
 
 import json
+import logging
 from typing import Optional
 
 from ..config import Config
 from ..llm import LLM
 from ..tools import ToolRegistry
+
+logger = logging.getLogger("nano_agent.strategies.react")
 
 
 class ReActStrategy:
@@ -104,9 +107,9 @@ Final Answer: The current directory contains 2 files: agent.py and README.md."""
         工具调用使用 native Function Calling（可靠），
         Thought 从 LLM content 提取（可见）。
         """
-        print(f"\n{'='*60}")
-        print(f"[ReAct] Task: {task}")
-        print(f"{'='*60}")
+        logger.info(f"{'='*60}")
+        logger.info(f"[ReAct] Task: {task}")
+        logger.info(f"{'='*60}")
 
         messages = [
             {"role": "system", "content": self._react_system_prompt()},
@@ -117,8 +120,8 @@ Final Answer: The current directory contains 2 files: agent.py and README.md."""
         tool_schemas = self.tools.get_schemas()
 
         for step in range(1, self.max_steps + 1):
-            print(f"\n{'─'*40}")
-            print(f"[ReAct Step {step}]")
+            logger.info(f"{'─'*40}")
+            logger.info(f"[ReAct Step {step}]")
 
             # 调用 LLM（传入 tools，使用 FC）
             response = self.llm.chat(
@@ -134,20 +137,20 @@ Final Answer: The current directory contains 2 files: agent.py and README.md."""
             trail_entry: dict = {"step": step, "thought": thought}
             self.thought_trail.append(trail_entry)
 
-            print(f"💭 Thought: {thought[:300]}")
+            logger.info(f"💭 Thought: {thought[:300]}")
 
             # 检查 Final Answer
             final = self._extract_final_answer(llm_text)
             if final and not tool_calls:
                 final_answer = final
-                print(f"✅ Final Answer: {final_answer[:300]}")
+                logger.info(f"✅ Final Answer: {final_answer[:300]}")
                 messages.append({"role": "assistant", "content": llm_text})
                 break
 
             # 有 Final Answer 也有 tool_calls → 优先 Final Answer
             if final and tool_calls:
                 final_answer = final
-                print(f"✅ Final Answer: {final_answer[:300]}")
+                logger.info(f"✅ Final Answer: {final_answer[:300]}")
                 messages.append({"role": "assistant", "content": llm_text})
                 break
 
@@ -164,11 +167,11 @@ Final Answer: The current directory contains 2 files: agent.py and README.md."""
                 for tc in tool_calls:
                     name = tc["name"]
                     args = tc["arguments"] if isinstance(tc["arguments"], dict) else {}
-                    print(f"🔧 Action: {name}({json.dumps(args, ensure_ascii=False)[:200]})")
+                    logger.info(f"🔧 Action: {name}({json.dumps(args, ensure_ascii=False)[:200]})")
 
                     # 执行工具（使用 ToolRegistry，而非正则解析）
                     result = self.tools.execute(name, args)
-                    print(f"📤 Observation: {result[:300]}")
+                    logger.info(f"📤 Observation: {result[:300]}")
 
                     trail_entry["action"] = {"name": name, "args": args}
                     trail_entry["observation"] = result[:500]
@@ -187,9 +190,9 @@ Final Answer: The current directory contains 2 files: agent.py and README.md."""
 
         if not final_answer:
             final_answer = "Max steps reached without final answer."
-            print(f"⚠️ {final_answer}")
+            logger.warning(final_answer)
 
-        print(f"\n[ReAct] Complete: {len(self.thought_trail)} steps, "
+        logger.info(f"[ReAct] Complete: {len(self.thought_trail)} steps, "
               f"{len([t for t in self.thought_trail if 'action' in t])} actions taken.")
 
         return final_answer

@@ -38,7 +38,7 @@ demo_1          demo_2          shared_AI       nanoAgent
          │             │             │
     ┌────▼────┐  ┌────▼────┐  ┌─────▼─────┐
     │   LLM   │  │  Tools  │  │  Memory   │
-    │ 多后端  │  │ 9个工具 │  │ 窗口+持久 │
+    │ 多后端  │  │ 14个工具 │  │ 窗口+持久 │
     └─────────┘  └─────────┘  └───────────┘
 ```
 
@@ -208,11 +208,14 @@ Generate 3 approaches → Score: A(9) B(7) C(3)
 | `edit` | 精确字符串替换（单次匹配） | 路径沙箱, 要求唯一匹配 |
 | `glob` | 文件名模糊搜索 | 限于工作目录内 |
 | `grep` | 正则搜索文件内容 | `shell=False` |
-| `web_search` | DDG → Bing → Wikipedia 三级降级搜索 | SSL 完整验证，无 API Key |
+| `web_search` | Brave→DDG→Bing→SearXNG→Wikipedia 五级降级搜索 | SSL 完整验证 |
 | `fetch_url` | 抓取网页全文，去标签提取文本 | 15s 超时，去 script/style，截断 8000 字符 |
+| `search_and_fetch` | 搜索 + 自动抓取首个结果内容 | 复用 web_search + fetch_url |
 | `calculate` | 数学表达式求值 | `ast` 安全解析，无 `eval` |
 | `get_weather` | 查询城市实时天气 (Open-Meteo API) | 免费，无需 API Key |
-| `plan` | 触发计划分解 | 纯 LLM 调用，无副作用 |
+| `stock_info` | 股票实时行情 (Yahoo Finance API) | 免费，无需 API Key |
+| `stock_history` | 股票历史日K数据 (A股 akshare / 美股 yfinance) | 免费，无需 API Key |
+| `stock_chart` | 生成股票走势图/K线图 PNG (matplotlib) | 同股票同周期自动缓存 |
 
 ## 记忆系统
 
@@ -249,6 +252,18 @@ AGENT_WORK_DIR=/your/project      # 工作目录（文件操作的根）
 AGENT_MEMORY_WINDOW=10            # 会话窗口保留轮数
 AGENT_MEMORY_FILE=agent_memory.md # 持久记忆文件路径
 AGENT_RULES_DIR=.agent/rules      # 自定义规则 .md 目录
+
+# ── 日志 ──
+AGENT_LOG_LEVEL=INFO              # DEBUG|INFO|WARNING|ERROR
+AGENT_LOG_FILE=                   # 可选: 日志文件路径 (默认仅 stderr)
+
+# ── 搜索 ──
+BRAVE_SEARCH_API_KEY=             # Brave Search API key (可选, 无则降级到免费源)
+
+# ── Web ──
+WEB_PORT=8080                     # Web 服务端口
+WEB_ACCESS_CODE=                  # 访问码 (可选, 不设则无限制)
+DAILY_LIMIT_PER_USER=20           # 每人每天使用次数 (0=不限)
 ```
 
 ## 安全设计（vs 源项目）
@@ -268,7 +283,7 @@ AGENT_RULES_DIR=.agent/rules      # 自定义规则 .md 目录
 python -m unittest discover tests -v
 
 # 输出：
-# Ran 77 tests in 5.4s
+# Ran 76 tests in 9.6s
 # OK
 ```
 
@@ -276,10 +291,11 @@ python -m unittest discover tests -v
 
 | 文件 | 测试数 | 覆盖内容 |
 |------|:---:|------|
-| `tests/test_tools.py` | 27 | bash 安全/超时, 路径沙箱, 文件读写/编辑, glob, grep, calculate, web_search |
+| `tests/test_tools.py` | 26 | bash 安全/超时, 路径沙箱, 文件读写/编辑, glob, grep, calculate, web_search |
 | `tests/test_memory.py` | 8 | 窗口记忆存取/淘汰, 持久记忆存取/截断 |
 | `tests/test_agent.py` | 8 | Agent 循环, 未知工具回退, 最大迭代, 记忆集成, 规则加载 |
-| `tests/test_strategies.py` | 25 | Plan-Execute(6), ReAct(8), Reflexion(5), Tree-of-Thought(6) |
+| `tests/test_orient.py` | 8 | Orient 解读, 规则加载/缓存/匹配 |
+| `tests/test_strategies.py` | 26 | Plan-Execute(6), ReAct(8), Reflexion(6), Tree-of-Thought(6) |
 
 全部使用 Mock LLM，不依赖真实 API，可在 CI 运行。
 
@@ -412,21 +428,23 @@ Agent.run(task, strategy)
 ### 第 3 层：工具系统（~40 分钟）← 最长最重要的文件
 
 ```
-4. tools.py         (435行)
+4. tools.py         (917行)
    a) PathSandbox   → resolve() + relative_to() 怎么防越界
    b) _register()   → 工具 = func + OpenAI schema
    c) bash          → shlex → 白名单 → shell=False 三道防线
    d) read/write/edit → sandbox.safe_path() 每步校验
    e) calculate     → ast.parse 递归遍历，无 eval
    f) get_weather   → geocode → forecast，两次 HTTP
-   g) web_search, glob, grep, plan → 扫一遍
+   g) stock_info/history/chart → Yahoo Finance + akshare + matplotlib
+   h) web_search, fetch_url, search_and_fetch → 五级降级搜索链
+   i) glob, grep → 扫一遍
    问: LLM 让我执行 "rm -rf /"，哪道防线先拦住？
 ```
 
 ### 第 4 层：Agent 核心（~40 分钟）← 最重要的文件
 
 ```
-5. agent.py         (290行)
+5. agent.py         (262行)
    a) __init__() → 5 个组件怎么装配
    b) run()      → 策略路由 if/elif
    c) _agent_loop() → O-O-D-A 四步:
@@ -435,31 +453,31 @@ Agent.run(task, strategy)
         Orient: orient_engine.orient()
         [结果注入 → 回到 Decide]
    d) _system_prompt() + _build_messages()
-   跳过: _create_plan, _handle_plan (策略层再看)
    问: messages 列表在 _agent_loop 中经历了什么变化？
 ```
 
 ### 第 5 层：推理策略（~60 分钟）
 
 ```
-6. react.py         (177行)  ← 最直观，先读
+6. react.py         (204行)  ← 最直观，先读
    看: Thought(从content提取) → FC Action(可靠) → Observation → 循环
 
-7. reflexion.py     (182行)
+7. reflexion.py     (185行)
    看: evaluate_result() → generate_reflection() → 教训跨任务累积
 
-8. plan_execute.py  (163行)
+8. plan_execute.py  (162行)
    看: create_plan() → evaluate_step() → revise_plan() 失败重规划
 
-9. tree_of_thought.py (238行)  ← 最复杂
+9. tree_of_thought.py (262行)  ← 最复杂
    看: generate_candidates() → score_candidates(批量) → backtrack
 ```
 
 ### 辅助模块（最后扫）
 
 ```
-10. orient.py       (165行)  orient() → {interpretation, association, implication}
-11. run.py          (141行)  interactive() + parse_args()
+10. orient.py       (170行)  orient() → {interpretation, association, implication}
+11. logging_config.py (49行)  统一日志, stderr 输出, 环境变量控制
+12. run.py          (144行)  interactive() + parse_args()
 ```
 
 ### 阅读地图
@@ -471,7 +489,7 @@ Agent.run(task, strategy)
 第4层  agent.py                            核心循环 (最重要)
 第5层  react.py → reflexion.py            策略 (读两个就够)
        → plan_execute.py → tree_of_thought.py
-第6层  orient.py → run.py                  辅助
+第6层  orient.py → logging_config.py → run.py   辅助
 ```
 
 每层读完问自己的问题能回答出来，进下一层。
@@ -483,19 +501,21 @@ nano_agent_plus/
 ├── run.py                           # CLI 入口
 ├── web/
 │   ├── server.py                    # FastAPI 服务 (SSE 流式)
-│   └── static/index.html            # 聊天界面
-├── requirements.txt                 # 依赖 (openai, python-dotenv)
+│   ├── static/index.html            # 聊天界面
+│   └── usage.json                   # 使用次数统计 (gitignored)
+├── requirements.txt                 # 依赖
 ├── .env.example                     # 配置模板
 ├── .gitignore                       # 忽略 .env + 运行时文件
 ├── README.md
 ├── nano_agent/
-│   ├── __init__.py
+│   ├── __init__.py                  # 包入口, 自动初始化 logging
 │   ├── config.py                    # 环境变量配置
+│   ├── logging_config.py            # 统一日志配置 (stderr, 可选文件日志)
 │   ├── llm.py                       # 多后端 LLM (懒加载, 3次重试)
-│   ├── tools.py                     # 9个工具 (安全加固)
+│   ├── tools.py                     # 14个工具 (安全加固)
 │   ├── memory.py                    # 双层记忆 (窗口+文件)
 │   ├── agent.py                     # Agent 核心 + 策略路由
-│   ├── orient.py                    # 显式 Orient 阶段
+│   ├── orient.py                    # 显式 Orient 阶段 + 规则加载
 │   └── strategies/
 │       ├── __init__.py
 │       ├── react.py                  # ReAct (FC驱动, Thought显式可见)
@@ -504,27 +524,42 @@ nano_agent_plus/
 │       └── tree_of_thought.py       # Tree-of-Thought (多候选→打分→回溯)
 └── tests/
     ├── __init__.py
-    ├── test_tools.py                # 工具单元测试 (27)
+    ├── test_tools.py                # 工具单元测试 (26)
     ├── test_memory.py               # 记忆单元测试 (8)
     ├── test_agent.py                # Agent 循环测试 (8)
     ├── test_orient.py               # Orient 测试 (8)
-    └── test_strategies.py           # 策略测试 (25)
+    └── test_strategies.py           # 策略测试 (26)
 ```
 
 ## 核心代码量
 
 | 模块 | 行数 | 职责 |
 |------|:---:|------|
-| `tools.py` | 250 | 9个工具 + PathSandbox + ToolRegistry |
-| `agent.py` | 280 | Agent 类 + O-O-D-A 循环 + 5策略路由 |
-| `llm.py` | 180 | LLM 抽象 (Anthropic/OpenAI) + 重试 + Anthropic消息转换 |
-| `memory.py` | 100 | 窗口 + 持久记忆 |
-| `orient.py` | 130 | 显式 Orient: 解读→关联→规则→建议 |
-| `config.py` | 70 | 配置管理 |
-| 4个策略文件 | 430 | ReAct + Plan-Execute + Reflexion + ToT |
-| **总计** | **~1500** | 全部自己掌控 |
+| `tools.py` | 917 | 14个工具 + PathSandbox + ToolRegistry |
+| `agent.py` | 262 | Agent 类 + O-O-D-A 循环 + 5策略路由 |
+| `llm.py` | 233 | LLM 抽象 (Anthropic/OpenAI) + 重试 + Anthropic消息转换 |
+| `orient.py` | 170 | 显式 Orient: 解读→关联→规则→建议 |
+| `memory.py` | 94 | 窗口 + 持久记忆 |
+| `config.py` | 74 | 配置管理 |
+| `logging_config.py` | 49 | 统一日志配置 |
+| 4个策略文件 | 813 | ReAct + Plan-Execute + Reflexion + ToT |
+| **总计** | **~2,612** | 全部自己掌控 |
 
 ## 更新日志
+
+### 2026-06-22 晚
+
+- **统一日志系统**：新增 `logging_config.py`，全项目 `print()` → `logging`（39 处）。日志输出到 stderr，不干扰 CLI stdout 和 Web SSE 流。支持 `AGENT_LOG_LEVEL` 和 `AGENT_LOG_FILE` 环境变量。
+- **错误处理修复**：14 处静默 `except Exception: pass` → `logger.warning`/`logger.debug`。关键错误（Orient 失败、规则加载失败、持久记忆写入失败）不再被吞掉。
+- **删除重复代码**：
+  - 删除 `agent_noweb.py`（305 行）和 `generate_ppt.py`（425 行）——残留文件
+  - 删除 `Agent._create_plan()` / `_handle_plan()`——与 `PlanExecuteStrategy` 重复
+  - 删除 `Agent._load_rules()`——与 `Orient.load_rules()` 重复（统一到 Orient，有缓存）
+  - 删除 `_agent_loop` 里的 `plan` 工具分支——不再递归调用
+  - 删除 `tools.py` 的 `plan` 占位工具——返回 `__PLAN_TRIGGER__` 的旧设计残留
+  - 删除 `plan_execute.py` 的 `_format_result()`——从未被调用
+- **修复 Wikipedia 搜索 bug**：`results` 列表未初始化（之前被 `return []` 遮挡）
+- **净减 783 行代码**（-921 / +138），76 个测试全部通过
 
 ### 2026-06-22
 
@@ -538,6 +573,5 @@ nano_agent_plus/
 - **ReAct FC 驱动**：Native FC 调用工具，Thought 在 content 中显式可见。
 - **Anthropic 消息格式转换**：`_convert_messages_for_anthropic()` 多后端无缝切换。
 - **Orient 模块**：显式 O-O-D-A 循环，工具结果自动解读注入上下文。
-- 测试覆盖：77 tests OK
+- 测试覆盖：76 tests OK
 
-####  2026-06-23

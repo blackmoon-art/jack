@@ -21,11 +21,14 @@ Tree-of-Thought 策略 — 多路径探索 + 评估 + 选择最优 + 回溯。
 """
 
 import json
+import logging
 from typing import Optional
 
 from ..config import Config
 from ..llm import LLM
 from ..tools import ToolRegistry
+
+logger = logging.getLogger("nano_agent.strategies.tot")
 
 
 class TreeOfThoughtStrategy:
@@ -60,11 +63,7 @@ class TreeOfThoughtStrategy:
             ),
         }]
         response = self.llm.chat(messages=messages, tools=[], system="")
-        text = response["text"].strip()
-        if text.startswith("```"):
-            text = text.split("\n", 1)[-1]
-            if text.endswith("```"):
-                text = text[:-3]
+        text = self.llm.clean_json_response(response["text"])
         try:
             data = json.loads(text)
             candidates = data.get("candidates", [])
@@ -104,11 +103,7 @@ class TreeOfThoughtStrategy:
             ),
         }]
         response = self.llm.chat(messages=messages, tools=[], system="")
-        text = response["text"].strip()
-        if text.startswith("```"):
-            text = text.split("\n", 1)[-1]
-            if text.endswith("```"):
-                text = text[:-3]
+        text = self.llm.clean_json_response(response["text"])
 
         # 解析批量评分
         try:
@@ -135,7 +130,7 @@ class TreeOfThoughtStrategy:
                 c["verdict"] = "unknown"
 
         for i, c in enumerate(candidates):
-            print(f"  [{i+1}] score={c['score']}/10 conf={c['confidence']} "
+            logger.info(f"  [{i+1}] score={c['score']}/10 conf={c['confidence']} "
                   f"verdict={c['verdict']} — {c['approach'][:80]}")
 
         # 按 score * confidence 排序
@@ -158,11 +153,7 @@ class TreeOfThoughtStrategy:
             ),
         }]
         response = self.llm.chat(messages=messages, tools=[], system="")
-        text = response["text"].strip()
-        if text.startswith("```"):
-            text = text.split("\n", 1)[-1]
-            if text.endswith("```"):
-                text = text[:-3]
+        text = self.llm.clean_json_response(response["text"])
         try:
             return json.loads(text)
         except json.JSONDecodeError:
@@ -176,17 +167,17 @@ class TreeOfThoughtStrategy:
             task: 用户任务
             agent_loop_fn: 核心循环 f(messages, exclude_tools) -> (text, messages)
         """
-        print(f"\n{'='*60}")
-        print(f"[Tree-of-Thought] Task: {task}")
-        print(f"{'='*60}")
+        logger.info(f"{'='*60}")
+        logger.info(f"[Tree-of-Thought] Task: {task}")
+        logger.info(f"{'='*60}")
 
         # Phase 1: Generate candidates (breadth)
-        print(f"\n[ToT:Generate] Creating {self.num_candidates} candidate approaches...")
+        logger.info(f"[ToT:Generate] Creating {self.num_candidates} candidate approaches...")
         candidates = self.generate_candidates(task)
-        print(f"[ToT:Generate] Got {len(candidates)} candidates")
+        logger.info(f"[ToT:Generate] Got {len(candidates)} candidates")
 
         # Phase 2: Score candidates (lookahead evaluation)
-        print(f"\n[ToT:Evaluate] Scoring candidates...")
+        logger.info(f"[ToT:Evaluate] Scoring candidates...")
         candidates = self.score_candidates(task, candidates)
 
         # Phase 3: Execute best-first with backtracking
@@ -195,13 +186,13 @@ class TreeOfThoughtStrategy:
 
         for attempt_idx, candidate in enumerate(candidates):
             if candidate.get("score", 0) < 3:
-                print(f"\n[ToT:Skip] Candidate {attempt_idx+1} score too low, skipping.")
+                logger.info(f"\n[ToT:Skip] Candidate {attempt_idx+1} score too low, skipping.")
                 continue
 
-            print(f"\n{'─'*40}")
-            print(f"[ToT:Execute] Path {attempt_idx+1}/{len(candidates)} "
+            logger.info(f"{'─'*40}")
+            logger.info(f"[ToT:Execute] Path {attempt_idx+1}/{len(candidates)} "
                   f"(score={candidate['score']}, conf={candidate['confidence']})")
-            print(f"[ToT:Execute] Approach: {candidate['approach']}")
+            logger.info(f"[ToT:Execute] Approach: {candidate['approach']}")
 
             # 将候选方案转化为执行 prompt
             execution_prompt = (
@@ -219,8 +210,8 @@ class TreeOfThoughtStrategy:
             actual_score = eval_result.get("score", 5)
             is_solved = eval_result.get("solved", False)
 
-            print(f"[ToT:Result] score={actual_score}/10, solved={is_solved}")
-            print(f"[ToT:Result] {eval_result.get('reason', '')}")
+            logger.info(f"[ToT:Result] score={actual_score}/10, solved={is_solved}")
+            logger.info(f"[ToT:Result] {eval_result.get('reason', '')}")
 
             # 记录路径
             path_record = {
@@ -239,14 +230,14 @@ class TreeOfThoughtStrategy:
 
             # 成功 → 结束
             if is_solved and actual_score >= self.score_threshold:
-                print(f"[ToT:Done] Task solved via path {attempt_idx+1}!")
+                logger.info(f"[ToT:Done] Task solved via path {attempt_idx+1}!")
                 break
             else:
-                print(f"[ToT:Backtrack] Score {actual_score} < threshold "
+                logger.info(f"[ToT:Backtrack] Score {actual_score} < threshold "
                       f"{self.score_threshold}. Trying next candidate...")
 
         # Phase 5: Summary
-        print(f"\n[ToT:Summary] Explored {len(self._explored_paths)} paths. "
+        logger.info(f"[ToT:Summary] Explored {len(self._explored_paths)} paths. "
               f"Best score: {best_overall_score}/10")
         return best_overall_result
 

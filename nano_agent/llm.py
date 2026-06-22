@@ -43,6 +43,16 @@ class LLM:
     # ── 公开 API ──────────────────────────────────────────
 
     @staticmethod
+    def clean_json_response(text: str) -> str:
+        """清理 LLM 返回的 JSON 文本：去 markdown 代码块包裹。"""
+        text = text.strip()
+        if text.startswith("```"):
+            text = text.split("\n", 1)[-1]
+            if text.endswith("```"):
+                text = text[:-3]
+        return text.strip()
+
+    @staticmethod
     def format_tool_call_for_message(tc: dict) -> dict:
         """
         将内部 tool_call 格式转为 OpenAI 兼容的 message 格式。

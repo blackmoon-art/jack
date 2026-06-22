@@ -21,11 +21,51 @@ from nano_agent.strategies.tree_of_thought import TreeOfThoughtStrategy
 
 # ── helpers ────────────────────────────────────────────
 
-def _make_llm(responses: list[dict]):
+class MockLLM:
+    """
+    智能 Mock LLM：按顺序返回预设响应，耗尽后返回默认响应。
+    避免 side_effect StopIteration 问题。
+    """
+
+    def __init__(self, responses: list[dict] = None):
+        self._responses = list(responses) if responses else []
+        self._idx = 0
+        self._default = {"text": "", "tool_calls": [], "stop_reason": "stop"}
+        self.call_count = 0
+
+    def chat(self, messages, tools, system=""):
+        self.call_count += 1
+        if self._idx < len(self._responses):
+            resp = self._responses[self._idx]
+            self._idx += 1
+            return resp
+        return dict(self._default)
+
+    @staticmethod
+    def clean_json_response(text: str) -> str:
+        """清理 markdown 代码块包裹。"""
+        text = text.strip()
+        if text.startswith("```"):
+            text = text.split("\n", 1)[-1]
+            if text.endswith("```"):
+                text = text[:-3]
+        return text.strip()
+
+    @staticmethod
+    def format_tool_call_for_message(tc):
+        return {
+            "id": tc.get("id", ""),
+            "type": "function",
+            "function": {
+                "name": tc.get("name", ""),
+                "arguments": json.dumps(tc.get("arguments", {}), ensure_ascii=False),
+            },
+        }
+
+
+def _make_llm(responses: list[dict] = None):
     """创建一个按顺序返回预设响应的 mock LLM。"""
-    mock = MagicMock()
-    mock.chat = MagicMock(side_effect=responses)
-    return mock
+    return MockLLM(responses)
 
 
 def _simple_loop(result_text="done"):
@@ -54,12 +94,17 @@ def _plan_json(steps: list[str]) -> dict:
     }
 
 
-def _eval_json(status: str) -> dict:
+def _eval_json(status: str, score: int = None) -> dict:
+    s = score if score is not None else (8 if status == "success" else 4)
     return {
-        "text": json.dumps({"status": status, "reason": "test", "missing": "", "score": 8 if status == "success" else 4}),
+        "text": json.dumps({"status": status, "reason": "test", "missing": "", "score": s}),
         "tool_calls": [],
         "stop_reason": "stop",
     }
+
+
+def _text_response(text: str) -> dict:
+    return {"text": text, "tool_calls": [], "stop_reason": "stop"}
 
 
 # ── Plan-Execute Tests ─────────────────────────────────
@@ -76,13 +121,13 @@ class TestPlanExecuteStrategy(unittest.TestCase):
         self.assertEqual(steps, ["step a", "step b", "step c"])
 
     def test_plan_fallback_single_step(self):
-        llm = _make_llm([{"text": "not json", "tool_calls": [], "stop_reason": "stop"}])
+        llm = _make_llm([_text_response("not json")])
         s = PlanExecuteStrategy(self.config, llm, self.tools)
         steps = s.create_plan("task")
         self.assertEqual(steps, ["task"])
 
     def test_evaluate_step_returns_status(self):
-        llm = _make_llm([{"text": "success", "tool_calls": [], "stop_reason": "stop"}])
+        llm = _make_llm([_text_response("success")])
         s = PlanExecuteStrategy(self.config, llm, self.tools)
         result = s.evaluate_step("task", "step", "step output")
         self.assertIn("success", result.lower())
@@ -96,12 +141,9 @@ class TestPlanExecuteStrategy(unittest.TestCase):
     def test_run_successful_plan(self):
         """所有步骤成功评估，无重规划。"""
         llm = _make_llm([
-            # create_plan
             _plan_json(["step 1", "step 2"]),
-            # evaluate step 1 → success
-            {"text": "success", "tool_calls": [], "stop_reason": "stop"},
-            # evaluate step 2 → success
-            {"text": "success", "tool_calls": [], "stop_reason": "stop"},
+            _text_response("success"),  # evaluate step 1
+            _text_response("success"),  # evaluate step 2
         ])
         s = PlanExecuteStrategy(self.config, llm, self.tools)
         result = s.run("test task", _simple_loop("step result"))
@@ -111,14 +153,10 @@ class TestPlanExecuteStrategy(unittest.TestCase):
         """某步失败后触发重规划。"""
         llm = _make_llm([
             _plan_json(["step 1", "step 2"]),
-            # evaluate step 1 → failed
-            {"text": "failed: step 1 crashed", "tool_calls": [], "stop_reason": "stop"},
-            # revise_plan → new 2 steps
-            _plan_json(["step 1 retry", "step 2 adjusted"]),
-            # evaluate step 1 retry → success
-            {"text": "success", "tool_calls": [], "stop_reason": "stop"},
-            # evaluate step 2 adjusted → success
-            {"text": "success", "tool_calls": [], "stop_reason": "stop"},
+            _text_response("failed: step 1 crashed"),  # evaluate step 1
+            _plan_json(["step 1 retry", "step 2 adjusted"]),  # revise_plan
+            _text_response("success"),  # evaluate step 1 retry
+            _text_response("success"),  # evaluate step 2 adjusted
         ])
         s = PlanExecuteStrategy(self.config, llm, self.tools)
         result = s.run("test task", _simple_loop("fixed"))
@@ -133,9 +171,7 @@ class TestReflexionStrategy(unittest.TestCase):
         self.tools = ToolRegistry(self.config.work_dir)
 
     def test_evaluate_result_success(self):
-        llm = _make_llm([
-            _eval_json("success")
-        ])
+        llm = _make_llm([_eval_json("success")])
         s = ReflexionStrategy(self.config, llm, self.tools)
         result = s.evaluate_result("task", "great output")
         self.assertEqual(result["status"], "success")
@@ -143,7 +179,8 @@ class TestReflexionStrategy(unittest.TestCase):
 
     def test_evaluate_result_failed(self):
         llm = _make_llm([
-            {"text": json.dumps({"status": "failed", "reason": "wrong approach", "missing": "correct answer", "score": 2}),
+            {"text": json.dumps({"status": "failed", "reason": "wrong approach",
+                                  "missing": "correct answer", "score": 2}),
              "tool_calls": [], "stop_reason": "stop"},
         ])
         s = ReflexionStrategy(self.config, llm, self.tools)
@@ -152,8 +189,8 @@ class TestReflexionStrategy(unittest.TestCase):
 
     def test_generate_reflection(self):
         llm = _make_llm([
-            {"text": "WHAT WENT WRONG: wrong tool\nROOT CAUSE: missing info\nFIX: use grep first\nLESSON: search before write",
-             "tool_calls": [], "stop_reason": "stop"},
+            _text_response("WHAT WENT WRONG: wrong tool\nROOT CAUSE: missing info\n"
+                           "FIX: use grep first\nLESSON: search before write"),
         ])
         s = ReflexionStrategy(self.config, llm, self.tools)
         reflection = s.generate_reflection(
@@ -166,45 +203,31 @@ class TestReflexionStrategy(unittest.TestCase):
 
     def test_run_stops_on_success(self):
         """首次成功即停止。"""
-        llm = _make_llm([
-            _eval_json("success"),
-            # 不应该被调用（首次已成功）
-        ])
+        llm = _make_llm([_eval_json("success")])
         s = ReflexionStrategy(self.config, llm, self.tools, max_retries=3)
         result = s.run("task", _simple_loop("good result"))
         self.assertEqual(result, "good result")
-        # 只调用了一次 evaluate（成功即停止）
-        self.assertEqual(llm.chat.call_count, 1)
+        self.assertEqual(llm.call_count, 1)
 
     def test_run_retries_on_failure(self):
         """失败后反思并重试。"""
-        call_idx = [0]
-
-        def sequential_responses(messages, tools, system=""):
-            call_idx[0] += 1
-            i = call_idx[0]
-            if i == 1:
-                return _eval_json("failed")
-            elif i == 2:
-                # generate_reflection
-                return {"text": "LESSON: be better", "tool_calls": [], "stop_reason": "stop"}
-            else:
-                return _eval_json("success")
-
-        llm = MagicMock()
-        llm.chat = MagicMock(side_effect=sequential_responses)
+        llm = _make_llm([
+            _eval_json("failed"),   # evaluate attempt 1
+            _text_response("LESSON: be better"),  # generate_reflection
+            _eval_json("success"),  # evaluate attempt 2
+        ])
         s = ReflexionStrategy(self.config, llm, self.tools, max_retries=2)
         result = s.run("task", _simple_loop("improved result"))
         self.assertEqual(result, "improved result")
-        self.assertGreaterEqual(llm.chat.call_count, 2)
+        self.assertGreaterEqual(llm.call_count, 2)
 
     def test_lessons_accumulate(self):
         """反思教训应累积。"""
         llm = _make_llm([
             _eval_json("failed"),
-            {"text": "LESSON: lesson 1", "tool_calls": [], "stop_reason": "stop"},
+            _text_response("LESSON: lesson 1"),
             _eval_json("failed"),
-            {"text": "LESSON: lesson 2", "tool_calls": [], "stop_reason": "stop"},
+            _text_response("LESSON: lesson 2"),
             _eval_json("success"),
         ])
         s = ReflexionStrategy(self.config, llm, self.tools, max_retries=3)
@@ -359,6 +382,7 @@ class TestReActStrategy(unittest.TestCase):
                 "stop_reason": "stop",
             },
         ]
+        mock_llm.format_tool_call_for_message = MockLLM.format_tool_call_for_message
         s = ReActStrategy(self.config, mock_llm, self.tools, max_steps=5)
         result = s.run("what files?", None)
         self.assertIn("agent.py", result)
@@ -396,6 +420,7 @@ class TestReActStrategy(unittest.TestCase):
                             "arguments": {"command": "pwd"}}],
             "stop_reason": "tool_calls",
         }
+        mock_llm.format_tool_call_for_message = MockLLM.format_tool_call_for_message
         s = ReActStrategy(self.config, mock_llm, self.tools, max_steps=3)
         result = s.run("task", None)
         self.assertIn("Max steps", result)
@@ -417,6 +442,7 @@ class TestReActStrategy(unittest.TestCase):
                 "stop_reason": "stop",
             },
         ]
+        mock_llm.format_tool_call_for_message = MockLLM.format_tool_call_for_message
         s = ReActStrategy(self.config, mock_llm, self.tools, max_steps=5)
         s.run("pwd?", None)
         trail = s.get_thought_trail()
