@@ -241,8 +241,11 @@ class ToolRegistry:
         safe = self.sandbox.safe_path(path)
         try:
             result = subprocess.run(
-                ["grep", "-rn", "--include=*.py", "--include=*.js", "--include=*.ts",
+                ["grep", "-rn",
+                 "--include=*.py", "--include=*.js", "--include=*.ts",
                  "--include=*.md", "--include=*.json", "--include=*.html", "--include=*.css",
+                 "--include=*.txt", "--include=*.yaml", "--include=*.yml",
+                 "--include=*.sh", "--include=*.toml", "--include=*.ini", "--include=*.cfg",
                  pattern, str(safe)],
                 capture_output=True, text=True, timeout=30,
             )
