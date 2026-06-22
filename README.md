@@ -73,11 +73,20 @@ python run.py --strategy tot "设计一个高性能缓存方案"
 | 策略 | 命令 | 流程 | 适用场景 |
 |------|------|------|---------|
 | **Default** | `--strategy default` | LLM ⇄ Tools 循环直到完成 | 日常任务 |
+| **ReAct** | `--strategy react` | Thought → FC Action → Observation → 循环, 推理完全可见 | 需要审计推理过程的任务 |
 | **Plan-Execute** | `--strategy plan` | 分解→逐步执行→评估→必要时重规划 | 多步骤复杂任务 |
 | **Reflexion** | `--strategy reflexion` | 执行→自评→反思→重试→教训累积 | 需要质量保证的试错型任务 |
 | **Tree-of-Thought** | `--strategy tot` | 生成N候选→打分→执行最优→失败回溯 | 有多种解法的不确定任务 |
 
 ### 策略细节
+
+**ReAct (FC 驱动版)：**
+```
+Thought: "需要列出文件" → [FC: bash(ls)] → Observation: "agent.py, README.md"
+→ Thought: "已看到文件列表" → Final Answer: "目录包含2个文件"
+```
+使用 Native Function Calling 执行工具调用（可靠），Thought 在 content 中显式输出（可见）。
+不再依赖正则文本解析，任何支持 FC 的模型都能稳定运行。
 
 **Plan-Execute：**
 ```
@@ -165,7 +174,7 @@ AGENT_RULES_DIR=.agent/rules      # 自定义规则 .md 目录
 python -m unittest discover tests -v
 
 # 输出：
-# Ran 60 tests in 5.4s
+# Ran 77 tests in 5.4s
 # OK
 ```
 
@@ -176,9 +185,202 @@ python -m unittest discover tests -v
 | `tests/test_tools.py` | 27 | bash 安全/超时, 路径沙箱, 文件读写/编辑, glob, grep, calculate, web_search |
 | `tests/test_memory.py` | 8 | 窗口记忆存取/淘汰, 持久记忆存取/截断 |
 | `tests/test_agent.py` | 8 | Agent 循环, 未知工具回退, 最大迭代, 记忆集成, 规则加载 |
-| `tests/test_strategies.py` | 17 | Plan-Execute(6), Reflexion(5), Tree-of-Thought(6) |
+| `tests/test_strategies.py` | 25 | Plan-Execute(6), ReAct(8), Reflexion(5), Tree-of-Thought(6) |
 
 全部使用 Mock LLM，不依赖真实 API，可在 CI 运行。
+
+## 设计逻辑
+
+### 决策 1：每个模块只做一件事
+
+```
+一个 agent.py 1000 行 → 改工具可能崩全局
+        vs
+7 个独立模块 → 改工具不改 LLM，改策略不改核心循环，加测试不改配置
+```
+
+### 决策 2：LLM 层统一返回格式
+
+Anthropic 返回 content blocks (`{"type": "tool_use", ...}`)，OpenAI 返回 `tool_calls`。
+`llm.py` 将两者统一为 `{"text", "tool_calls": [{id,name,arguments}], "stop_reason"}`。
+上层代码（Agent Loop、所有策略）不感知后端差异。
+
+消息格式转换：内部使用 OpenAI 风格格式，`_chat_anthropic()` 调用前通过
+`_convert_messages_for_anthropic()` 自动转为 Anthropic content blocks：
+
+```
+内部格式 (OpenAI 风格)              Anthropic 格式
+─────────────────────              ──────────────
+{"role":"assistant",               {"role":"assistant",
+ "tool_calls":[{...}]}              "content":[
+                                      {"type":"tool_use",...}]}
+
+{"role":"tool",                    {"role":"user",
+ "tool_call_id":"...",              "content":[
+ "content":"result"}                 {"type":"tool_result",...}]}
+```
+
+### 决策 3：安全纵深防御（三道防线）
+
+```
+bash:    shlex.split() → 白名单前缀 → shell=False
+文件:    Path.resolve() → .relative_to(work_dir) → PermissionError
+计算:    ast.parse() → 白名单运算符 → 无 eval
+```
+
+任何一道防线被绕过，下一道还能拦住。错误以**字符串返回**而非抛异常——
+LLM 看到 `"Error: Timeout"` 会自己调整策略，而不是整个 Agent Loop 崩溃。
+
+### 决策 4：策略是可插拔的控制流
+
+5 种策略共用 `_agent_loop` 和 `ToolRegistry`，区别只有控制流：
+
+| 策略 | 控制流 | 一句话 |
+|------|--------|--------|
+| default | LLM→tool→LLM→tool→...→done | 最快，推理隐式 |
+| react | Thought→FC→Obs→Thought→...→Final Answer | 推理完全可见 |
+| plan-execute | Plan→Step(eval)→Step(eval)→[失败Replan]→done | 多步复杂任务 |
+| reflexion | Attempt→eval(fail)→Reflect→Attempt(带教训)→done | 质量敏感 |
+| tree-of-thought | Candidates→Score→Best→[失败Backtrack]→done | 不确定任务 |
+
+加新策略只需加文件，不改 `agent.py` 核心循环。
+
+### 决策 5：Orient——在 Observe 和 Decide 之间插一层理解
+
+```
+没有 Orient:  工具结果 → LLM 自己理解
+有 Orient:    工具结果 → Orient解读(interpretation/association/implication)
+                       → LLM 带着结构化的理解做决策，更快更准
+```
+
+短结果 (<200字符) 跳过 Orient 以节省 token。
+
+### 决策 6：Memory 双层设计
+
+```
+窗口记忆: 保留最近N轮对话(FIFO淘汰)，进程内，会话结束即丢 → 当前上下文连贯
+持久记忆: 追加写入 agent_memory.md，跨会话保留，每次加载最近50行 → 长期知识累积
+```
+
+### 一次请求的完整流转
+
+```
+Agent.run(task, strategy)
+├─ Memory.get_window_messages()    ← 加载会话历史
+├─ _system_prompt()                ← 规则 + 持久记忆 + 上次Orient结论
+│
+├─ 策略路由
+│   └─ _agent_loop(messages)       ← 核心 O-O-D-A 循环
+│       │
+│       ┌────────────────────────────────────────┐
+│       │  Decide: LLM.chat(messages, tools)     │
+│       │    → tool_calls: [...]                 │
+│       │                                        │
+│       │  Act:    tools.execute(name, args)     │
+│       │    → raw_result                        │
+│       │                                        │
+│       │  Orient: orient_engine.orient(result)  │
+│       │    → 结构化解读注入 messages             │
+│       │                                        │
+│       │  Loop:  回到 Decide                    │
+│       └────────────────────────────────────────┘
+│
+├─ Memory.save_context(task, result)    ← 存会话记忆
+└─ Memory.save_persistent(task, result) ← 存持久记忆
+```
+
+## 阅读指南
+
+按 5 层递进阅读，每层读懂再进下一层。遇到看不懂的先标记，后面会回来。
+
+### 第 1 层：地基（~30 分钟）
+
+```
+1. config.py        (71行)  ← 最早读
+   看: @dataclass Config, 13个环境变量
+   问: 换一个模型改哪里？
+
+2. memory.py        (90行)
+   看: save_context(), get_window_messages(), save_persistent(), load_persistent()
+   问: 进程重启后窗口记忆还在吗？持久记忆呢？
+```
+
+### 第 2 层：LLM 抽象（~20 分钟）
+
+```
+3. llm.py           (202行)
+   第1遍: chat() → 统一入口 + 3次重试
+   第2遍: _chat_openai() + _chat_anthropic() → 两个后端怎么差异
+   第3遍: _convert_messages_for_anthropic() → 消息格式转换
+   问: 加一个新后端 (Gemini) 要改哪些？
+```
+
+### 第 3 层：工具系统（~40 分钟）← 最长最重要的文件
+
+```
+4. tools.py         (435行)
+   a) PathSandbox   → resolve() + relative_to() 怎么防越界
+   b) _register()   → 工具 = func + OpenAI schema
+   c) bash          → shlex → 白名单 → shell=False 三道防线
+   d) read/write/edit → sandbox.safe_path() 每步校验
+   e) calculate     → ast.parse 递归遍历，无 eval
+   f) get_weather   → geocode → forecast，两次 HTTP
+   g) web_search, glob, grep, plan → 扫一遍
+   问: LLM 让我执行 "rm -rf /"，哪道防线先拦住？
+```
+
+### 第 4 层：Agent 核心（~40 分钟）← 最重要的文件
+
+```
+5. agent.py         (290行)
+   a) __init__() → 5 个组件怎么装配
+   b) run()      → 策略路由 if/elif
+   c) _agent_loop() → O-O-D-A 四步:
+        Decide: LLM.chat()
+        Act:    tools.execute()
+        Orient: orient_engine.orient()
+        [结果注入 → 回到 Decide]
+   d) _system_prompt() + _build_messages()
+   跳过: _create_plan, _handle_plan (策略层再看)
+   问: messages 列表在 _agent_loop 中经历了什么变化？
+```
+
+### 第 5 层：推理策略（~60 分钟）
+
+```
+6. react.py         (177行)  ← 最直观，先读
+   看: Thought(从content提取) → FC Action(可靠) → Observation → 循环
+
+7. reflexion.py     (182行)
+   看: evaluate_result() → generate_reflection() → 教训跨任务累积
+
+8. plan_execute.py  (163行)
+   看: create_plan() → evaluate_step() → revise_plan() 失败重规划
+
+9. tree_of_thought.py (238行)  ← 最复杂
+   看: generate_candidates() → score_candidates(批量) → backtrack
+```
+
+### 辅助模块（最后扫）
+
+```
+10. orient.py       (165行)  orient() → {interpretation, association, implication}
+11. run.py          (141行)  interactive() + parse_args()
+```
+
+### 阅读地图
+
+```
+第1层  config.py → memory.py              地基
+第2层  llm.py                              后端抽象
+第3层  tools.py                            工具系统 (最长)
+第4层  agent.py                            核心循环 (最重要)
+第5层  react.py → reflexion.py            策略 (读两个就够)
+       → plan_execute.py → tree_of_thought.py
+第6层  orient.py → run.py                  辅助
+```
+
+每层读完问自己的问题能回答出来，进下一层。
 
 ## 项目结构
 
@@ -196,17 +398,20 @@ nano_agent_plus/
 │   ├── tools.py                     # 9个工具 (安全加固)
 │   ├── memory.py                    # 双层记忆 (窗口+文件)
 │   ├── agent.py                     # Agent 核心 + 策略路由
+│   ├── orient.py                    # 显式 Orient 阶段
 │   └── strategies/
 │       ├── __init__.py
+│       ├── react.py                  # ReAct (FC驱动, Thought显式可见)
 │       ├── plan_execute.py          # Plan-Execute (分解→执行→评估→重规划)
 │       ├── reflexion.py             # Reflexion (自评→反思→重试→教训)
 │       └── tree_of_thought.py       # Tree-of-Thought (多候选→打分→回溯)
 └── tests/
     ├── __init__.py
-    ├── test_tools.py                # 工具单元测试
-    ├── test_memory.py               # 记忆单元测试
-    ├── test_agent.py                # Agent 循环测试
-    └── test_strategies.py           # 策略测试
+    ├── test_tools.py                # 工具单元测试 (27)
+    ├── test_memory.py               # 记忆单元测试 (8)
+    ├── test_agent.py                # Agent 循环测试 (8)
+    ├── test_orient.py               # Orient 测试 (8)
+    └── test_strategies.py           # 策略测试 (25)
 ```
 
 ## 核心代码量
@@ -214,9 +419,19 @@ nano_agent_plus/
 | 模块 | 行数 | 职责 |
 |------|:---:|------|
 | `tools.py` | 250 | 9个工具 + PathSandbox + ToolRegistry |
-| `agent.py` | 230 | Agent 类 + 核心循环 + 策略路由 |
-| `llm.py` | 130 | LLM 抽象 (Anthropic/OpenAI) + 重试 |
+| `agent.py` | 280 | Agent 类 + O-O-D-A 循环 + 5策略路由 |
+| `llm.py` | 180 | LLM 抽象 (Anthropic/OpenAI) + 重试 + Anthropic消息转换 |
 | `memory.py` | 100 | 窗口 + 持久记忆 |
+| `orient.py` | 130 | 显式 Orient: 解读→关联→规则→建议 |
 | `config.py` | 70 | 配置管理 |
-| 3个策略文件 | 430 | Plan-Execute + Reflexion + ToT |
-| **总计** | **~1200** | 全部自己掌控 |
+| 4个策略文件 | 430 | ReAct + Plan-Execute + Reflexion + ToT |
+| **总计** | **~1500** | 全部自己掌控 |
+
+## 更新日志
+
+### 2026-06-22
+
+- **ReAct 策略升级为 FC 驱动**：工具调用改用 Native Function Calling（可靠），Thought 仍在 content 中显式输出（可见）。删除了脆弱的正则文本解析。
+- **LLM 层新增 Anthropic 消息格式转换**：`_convert_messages_for_anthropic()` 自动将内部 OpenAI 风格消息转为 Anthropic content blocks，多后端无缝切换。
+- **新增 Orient 模块**：显式 O-O-D-A 循环，工具结果执行后自动解读并注入上下文。
+- 测试覆盖：77 → 77 (ReAct 测试从文本解析版迁移到 FC 版)

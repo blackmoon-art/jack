@@ -132,16 +132,8 @@ class Agent:
 
             assistant_msg: dict[str, Any] = {"role": "assistant", "content": response["text"]}
             if response["tool_calls"]:
-                # 转换为 OpenAI 兼容格式: type=function + function{name, arguments(str)}
                 assistant_msg["tool_calls"] = [
-                    {
-                        "id": tc["id"],
-                        "type": "function",
-                        "function": {
-                            "name": tc["name"],
-                            "arguments": json.dumps(tc["arguments"], ensure_ascii=False) if isinstance(tc["arguments"], dict) else str(tc["arguments"]),
-                        },
-                    }
+                    self.llm.format_tool_call_for_message(tc)
                     for tc in response["tool_calls"]
                 ]
             messages.append(assistant_msg)

@@ -227,10 +227,13 @@ class TestTreeOfThoughtStrategy(unittest.TestCase):
         return {"text": json.dumps({"candidates": candidates}),
                 "tool_calls": [], "stop_reason": "stop"}
 
-    def _score_json(self, score: int, verdict: str = "promising") -> dict:
+    def _batch_score_json(self, scores: list[int]) -> dict:
+        """批量评分响应：一次 LLM 调用返回所有候选的评分数组。"""
+        arr = [{"score": s, "confidence": 8, "risks": "none",
+                "verdict": "promising" if s >= 5 else "unlikely"}
+               for s in scores]
         return {
-            "text": json.dumps({"score": score, "confidence": 8,
-                                "risks": "none", "verdict": verdict}),
+            "text": json.dumps(arr),
             "tool_calls": [], "stop_reason": "stop",
         }
 
@@ -248,11 +251,8 @@ class TestTreeOfThoughtStrategy(unittest.TestCase):
         self.assertEqual(candidates[0]["approach"], "approach a")
 
     def test_score_candidates_sorts_by_score(self):
-        llm = _make_llm([
-            self._score_json(7),   # 候选 1 → 7
-            self._score_json(9),   # 候选 2 → 9
-            self._score_json(5),   # 候选 3 → 5
-        ])
+        # 批量评分：一次 LLM 调用返回三个候选的分数
+        llm = _make_llm([self._batch_score_json([7, 9, 5])])
         s = TreeOfThoughtStrategy(self.config, llm, self.tools)
         candidates = [
             {"approach": "a", "reasoning": ""},
@@ -264,15 +264,10 @@ class TestTreeOfThoughtStrategy(unittest.TestCase):
         self.assertEqual(scored[0]["score"], 9)
 
     def test_run_picks_best_candidate(self):
-        """生成3个候选，评分，执行最佳，评估成功。"""
+        """批量评分 → 执行最佳 → 成功。"""
         llm = _make_llm([
-            # generate_candidates
             self._candidates_json(["approach x", "approach y"]),
-            # score candidate 1
-            self._score_json(6, "promising"),
-            # score candidate 2
-            self._score_json(9, "promising"),
-            # evaluate result (approach y)
+            self._batch_score_json([6, 9]),   # 一次调用返回两个评分
             self._eval_json(9, True),
         ])
         s = TreeOfThoughtStrategy(self.config, llm, self.tools, num_candidates=2)
@@ -283,11 +278,8 @@ class TestTreeOfThoughtStrategy(unittest.TestCase):
         """最佳候选失败，回溯到次优。"""
         llm = _make_llm([
             self._candidates_json(["path a", "path b"]),
-            self._score_json(9, "promising"),   # path a = 9
-            self._score_json(7, "promising"),   # path b = 7
-            # evaluate path a → failed
+            self._batch_score_json([9, 7]),   # path a=9, path b=7
             self._eval_json(3, False),
-            # evaluate path b → success
             self._eval_json(8, True),
         ])
         s = TreeOfThoughtStrategy(self.config, llm, self.tools, num_candidates=2,
@@ -296,10 +288,9 @@ class TestTreeOfThoughtStrategy(unittest.TestCase):
         self.assertEqual(result, "path b result")
 
     def test_explored_paths_recorded(self):
-        """探索的路径被记录。"""
         llm = _make_llm([
             self._candidates_json(["only path"]),
-            self._score_json(9),
+            self._batch_score_json([9]),
             self._eval_json(9, True),
         ])
         s = TreeOfThoughtStrategy(self.config, llm, self.tools)
@@ -312,14 +303,12 @@ class TestTreeOfThoughtStrategy(unittest.TestCase):
         """低分候选被跳过。"""
         llm = _make_llm([
             self._candidates_json(["bad", "ok"]),
-            self._score_json(2, "unlikely"),  # bad = 2
-            self._score_json(8, "promising"),  # ok = 8
+            self._batch_score_json([2, 8]),   # bad=2 (跳过), ok=8
             self._eval_json(8, True),
         ])
         s = TreeOfThoughtStrategy(self.config, llm, self.tools, num_candidates=2)
         s.run("task", _simple_loop("done"))
         paths = s.get_explored_paths()
-        # 只有 "ok" 被执行 (score >= 3)
         self.assertEqual(len(paths), 1)
 
 
@@ -334,21 +323,18 @@ class TestReActStrategy(unittest.TestCase):
 
     def test_extract_thought_from_content(self):
         s = ReActStrategy(self.config, MagicMock(), self.tools)
-        text = "Thought: I need to check the directory
-Some other text"
+        text = "Thought: I need to check the directory\nSome other text"
         self.assertIn("need to check", s._extract_thought(text))
 
     def test_extract_thought_before_final_answer(self):
         s = ReActStrategy(self.config, MagicMock(), self.tools)
-        text = "Thought: I have enough info
-Final Answer: Done."
+        text = "Thought: I have enough info\nFinal Answer: Done."
         self.assertIn("enough info", s._extract_thought(text))
         self.assertNotIn("Done", s._extract_thought(text))
 
     def test_extract_final_answer(self):
         s = ReActStrategy(self.config, MagicMock(), self.tools)
-        text = "Thought: done
-Final Answer: The result is 42."
+        text = "Thought: done\nFinal Answer: The result is 42."
         self.assertEqual(s._extract_final_answer(text), "The result is 42.")
 
     def test_extract_final_answer_none(self):
@@ -368,8 +354,7 @@ Final Answer: The result is 42."
                 "stop_reason": "tool_calls",
             },
             {
-                "text": "Thought: files listed
-Final Answer: found agent.py",
+                "text": "Thought: files listed\nFinal Answer: found agent.py",
                 "tool_calls": [],
                 "stop_reason": "stop",
             },
@@ -382,8 +367,7 @@ Final Answer: found agent.py",
         """Direct Final Answer, no tool calls."""
         mock_llm = MagicMock()
         mock_llm.chat.return_value = {
-            "text": "Thought: this is simple
-Final Answer: Hello!",
+            "text": "Thought: this is simple\nFinal Answer: Hello!",
             "tool_calls": [],
             "stop_reason": "stop",
         }
@@ -393,8 +377,7 @@ Final Answer: Hello!",
     def test_thought_trail_recorded(self):
         mock_llm = MagicMock()
         mock_llm.chat.return_value = {
-            "text": "Thought: done
-Final Answer: done.",
+            "text": "Thought: done\nFinal Answer: done.",
             "tool_calls": [],
             "stop_reason": "stop",
         }
@@ -429,8 +412,7 @@ Final Answer: done.",
                 "stop_reason": "tool_calls",
             },
             {
-                "text": "Thought: got it
-Final Answer: /tmp",
+                "text": "Thought: got it\nFinal Answer: /tmp",
                 "tool_calls": [],
                 "stop_reason": "stop",
             },

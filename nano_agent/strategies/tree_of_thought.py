@@ -77,43 +77,64 @@ class TreeOfThoughtStrategy:
 
     def score_candidates(self, task: str, candidates: list[dict]) -> list[dict]:
         """
-        对每个候选方案打分（顺序评估以节省 token）。
+        批量评估所有候选方案（一次 LLM 调用替代 N 次串行调用）。
 
         Returns:
-          candidates with 'score' field added.
+          candidates with 'score', 'confidence', 'risks', 'verdict' fields added.
         """
-        for i, c in enumerate(candidates):
-            messages = [{
-                "role": "user",
-                "content": (
-                    f"Evaluate this approach on a 0-10 scale. Be critical.\n\n"
-                    f"Task: {task}\n"
-                    f"Approach: {c['approach']}\n"
-                    f"Reasoning: {c.get('reasoning', '')}\n"
-                    f"Expected: {c.get('expected_outcome', '')}\n\n"
-                    f"Respond with ONLY a JSON object: "
-                    f'{{"score": <0-10 int>, "confidence": <0-10>, '
-                    f'"risks": "<potential issues>", "verdict": "promising"|"risky"|"unlikely"}}'
-                ),
-            }]
-            response = self.llm.chat(messages=messages, tools=[], system="")
-            text = response["text"].strip()
-            if text.startswith("```"):
-                text = text.split("\n", 1)[-1]
-                if text.endswith("```"):
-                    text = text[:-3]
-            try:
-                eval_data = json.loads(text)
-                c["score"] = eval_data.get("score", 5)
-                c["confidence"] = eval_data.get("confidence", 5)
-                c["risks"] = eval_data.get("risks", "")
-                c["verdict"] = eval_data.get("verdict", "risky")
-            except json.JSONDecodeError:
+        if not candidates:
+            return candidates
+
+        # 构建候选列表文本
+        candidate_text = "\n\n".join(
+            f"[{i+1}] {c['approach']}\n    Reasoning: {c.get('reasoning', '')}"
+            for i, c in enumerate(candidates)
+        )
+
+        messages = [{
+            "role": "user",
+            "content": (
+                f"Evaluate each approach below on a 0-10 scale. Be critical.\n\n"
+                f"Task: {task}\n\n"
+                f"{candidate_text}\n\n"
+                f"Return ONLY a JSON array with one object per candidate (in order):\n"
+                f'[{{"score": 0-10, "confidence": 0-10, '
+                f'"risks": "potential issues", "verdict": "promising|risky|unlikely"}}, ...]\n'
+                f"No markdown, no explanation — just the JSON array."
+            ),
+        }]
+        response = self.llm.chat(messages=messages, tools=[], system="")
+        text = response["text"].strip()
+        if text.startswith("```"):
+            text = text.split("\n", 1)[-1]
+            if text.endswith("```"):
+                text = text[:-3]
+
+        # 解析批量评分
+        try:
+            scores = json.loads(text)
+            if isinstance(scores, list):
+                for i, c in enumerate(candidates):
+                    if i < len(scores) and isinstance(scores[i], dict):
+                        s = scores[i]
+                        c["score"] = s.get("score", 5)
+                        c["confidence"] = s.get("confidence", 5)
+                        c["risks"] = s.get("risks", "")
+                        c["verdict"] = s.get("verdict", "risky")
+                    else:
+                        c["score"] = 5
+                        c["confidence"] = 5
+                        c["risks"] = ""
+                        c["verdict"] = "unknown"
+        except (json.JSONDecodeError, TypeError):
+            # 回退：所有候选默认中分
+            for c in candidates:
                 c["score"] = 5
                 c["confidence"] = 5
                 c["risks"] = ""
                 c["verdict"] = "unknown"
 
+        for i, c in enumerate(candidates):
             print(f"  [{i+1}] score={c['score']}/10 conf={c['confidence']} "
                   f"verdict={c['verdict']} — {c['approach'][:80]}")
 

@@ -149,15 +149,7 @@ Final Answer: The current directory contains 2 files: agent.py and README.md."""
                 # 追加 assistant 消息（含 tool_calls）
                 assistant_msg: dict = {"role": "assistant", "content": llm_text}
                 assistant_msg["tool_calls"] = [
-                    {
-                        "id": tc["id"],
-                        "type": "function",
-                        "function": {
-                            "name": tc["name"],
-                            "arguments": json.dumps(tc["arguments"], ensure_ascii=False)
-                            if isinstance(tc["arguments"], dict) else str(tc["arguments"]),
-                        },
-                    }
+                    self.llm.format_tool_call_for_message(tc)
                     for tc in tool_calls
                 ]
                 messages.append(assistant_msg)

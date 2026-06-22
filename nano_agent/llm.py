@@ -42,6 +42,27 @@ class LLM:
 
     # ── 公开 API ──────────────────────────────────────────
 
+    @staticmethod
+    def format_tool_call_for_message(tc: dict) -> dict:
+        """
+        将内部 tool_call 格式转为 OpenAI 兼容的 message 格式。
+
+        内部: {"id": str, "name": str, "arguments": dict}
+        输出: {"id": str, "type": "function", "function": {"name": str, "arguments": str}}
+        """
+        import json as _json
+        args = tc.get("arguments", {})
+        if isinstance(args, dict):
+            args = _json.dumps(args, ensure_ascii=False)
+        return {
+            "id": tc.get("id", ""),
+            "type": "function",
+            "function": {
+                "name": tc.get("name", ""),
+                "arguments": args if isinstance(args, str) else str(args),
+            },
+        }
+
     def chat(self, messages: list, tools: list, system: str = "") -> dict:
         """
         调用 LLM，返回统一格式:
