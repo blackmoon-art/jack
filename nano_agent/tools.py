@@ -260,15 +260,20 @@ class ToolRegistry:
             return f"Error: {e}"
 
     def web_search(self, query: str, max_results: int = 5) -> str:
-        """搜索网页：DuckDuckGo Lite 优先，被反爬时降级到 Wikipedia API。"""
+        """搜索网页：DuckDuckGo → Bing → Wikipedia 三级降级。"""
         max_results = min(max(max_results, 1), 10)
 
-        # 先试 DuckDuckGo Lite (POST)
+        # Level 1: DuckDuckGo Lite (POST)
         results = self._search_duckduckgo(query, max_results)
         if results:
             return f"Search results for '{query}':\n\n" + "\n\n".join(results)
 
-        # 降级: Wikipedia API (中英文自动检测)
+        # Level 2: Bing (国际版 → 国内版)
+        results = self._search_bing(query, max_results)
+        if results:
+            return f"Search results for '{query}' (Bing):\n\n" + "\n\n".join(results)
+
+        # Level 3: Wikipedia API
         results = self._search_wikipedia(query, max_results)
         if results:
             return f"Search results for '{query}' (Wikipedia):\n\n" + "\n\n".join(results)
@@ -324,6 +329,64 @@ class ToolRegistry:
                 continue
             seen.add(href)
             results.append(f"{len(results)+1}. {title_clean}\n   {href}")
+        return results
+
+    def _search_bing(self, query: str, max_results: int) -> list[str]:
+        """Bing 搜索 (国际版 → 国内版)。被反爬时返回空列表。"""
+        sources = [
+            ("https://www.bing.com/search", {
+                "User-Agent": (
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+                ),
+                "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+            }),
+            ("https://cn.bing.com/search", {
+                "User-Agent": (
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+                ),
+                "Accept-Language": "zh-CN,zh;q=0.9",
+            }),
+        ]
+        params = f"q={urllib.parse.quote_plus(query)}&count={max_results}"
+
+        html = ""
+        for base_url, headers in sources:
+            try:
+                req = urllib.request.Request(f"{base_url}?{params}", headers=headers)
+                with urllib.request.urlopen(req, timeout=15) as resp:
+                    html = resp.read().decode("utf-8", errors="ignore")
+                if html and len(html) > 1000:
+                    break
+            except Exception:
+                continue
+
+        if not html:
+            return []
+
+        # 解析 Bing 结果 (<li class="b_algo">)
+        blocks = re.findall(r'<li class="b_algo"[^>]*>(.*?)</li>', html, re.DOTALL)
+        results = []
+        seen = set()
+        for block in blocks:
+            if len(results) >= max_results:
+                break
+            title_m = re.search(r'<h2[^>]*>.*?<a[^>]*href="([^"]+)"[^>]*>(.*?)</a>.*?</h2>', block, re.DOTALL)
+            snippet_m = re.search(r'<p[^>]*>(.*?)</p>', block, re.DOTALL)
+            if not snippet_m:
+                snippet_m = re.search(r'<div class="b_caption"[^>]*>.*?<p[^>]*>(.*?)</p>', block, re.DOTALL)
+
+            if title_m:
+                href = title_m.group(1)
+                title = re.sub(r'<[^>]+>', '', title_m.group(2)).strip().replace("&#x27;", "'").replace("&amp;", "&").replace("&quot;", '"').replace("&lt;", "<").replace("&gt;", ">")
+                if not title or len(title) < 3 or href in seen:
+                    continue
+                seen.add(href)
+                snippet = ""
+                if snippet_m:
+                    snippet = " — " + re.sub(r'<[^>]+>', '', snippet_m.group(1)).strip()[:200]
+                results.append(f"{len(results)+1}. {title}\n   {href}{snippet}")
         return results
 
     def _search_wikipedia(self, query: str, max_results: int) -> list[str]:
