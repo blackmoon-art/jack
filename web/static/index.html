@@ -120,10 +120,11 @@ let thinkingCount = 0;  // 当前消息的思考步骤数
   } catch(e) { /* 忽略 */ }
 })();
 
-function addMessage(role, text) {
+function addMessage(role, text, extraHtml = '') {
   const div = document.createElement('div');
   div.className = `msg ${role}`;
-  div.innerHTML = text ? `<div class="content">${linkify(text)}</div>` : '';
+  const body = extraHtml + (text ? `<div class="content">${linkify(text)}</div>` : '');
+  div.innerHTML = body || '';
   $messages.appendChild(div);
   $messages.scrollTop = $messages.scrollHeight;
   renderMermaidBlocks(div);
@@ -322,7 +323,7 @@ async function send() {
                 document.querySelectorAll('.thinking-block.visible').forEach(b => b.classList.remove('visible'));
                 document.querySelectorAll('.thinking-summary.open').forEach(t => t.classList.remove('open'));
                 currentMsg = null;
-                addMessage('agent', (imgs ? imgs + '\n' : '') + data.text);
+                addMessage('agent', data.text, imgs);
               }
               $status.textContent = '就绪';
               break;
