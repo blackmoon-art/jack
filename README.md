@@ -125,6 +125,30 @@ ngrok http 8080
 | `GET` | `/api/health` | 健康检查 + 会话数 + Token 消耗 |
 | `DELETE` | `/api/sessions/:id` | 清除会话记忆 |
 
+### 使用次数限制
+
+默认每人每天 20 次，数据持久化到 `web/usage.json`（已加入 .gitignore）：
+
+```bash
+# 自定义限制
+DAILY_LIMIT_PER_USER=20    # 每人每天 20 次
+# DAILY_LIMIT_PER_USER=0   # 不限
+
+# 查看用量
+curl http://localhost:8080/api/health
+# {"today_usage": {"abc123": "5/20", "def456": "12/20"}, ...}
+```
+
+每天 0 点自动重置。
+
+### 自动启动（macOS）
+
+```bash
+# 已配置 launchd 托管：开机自启 + 崩溃自动重启
+launchctl list | grep nanoagent
+tail -f /tmp/nano_agent_web.log    # 查看日志
+```
+
 ### 架构细节
 
 Agent 层新增 `on_event` 回调，Web 层通过事件队列 + 后台线程实现 SSE 流式推送，不改核心循环逻辑：
@@ -184,7 +208,8 @@ Generate 3 approaches → Score: A(9) B(7) C(3)
 | `edit` | 精确字符串替换（单次匹配） | 路径沙箱, 要求唯一匹配 |
 | `glob` | 文件名模糊搜索 | 限于工作目录内 |
 | `grep` | 正则搜索文件内容 | `shell=False` |
-| `web_search` | DuckDuckGo 网页搜索 | SSL 验证保留 |
+| `web_search` | DDG → Bing → Wikipedia 三级降级搜索 | SSL 完整验证，无 API Key |
+| `fetch_url` | 抓取网页全文，去标签提取文本 | 15s 超时，去 script/style，截断 8000 字符 |
 | `calculate` | 数学表达式求值 | `ast` 安全解析，无 `eval` |
 | `get_weather` | 查询城市实时天气 (Open-Meteo API) | 免费，无需 API Key |
 | `plan` | 触发计划分解 | 纯 LLM 调用，无副作用 |
@@ -503,12 +528,16 @@ nano_agent_plus/
 
 ### 2026-06-22
 
-- **Web 界面**：FastAPI + SSE 流式输出，实时显示工具调用/结果/Orient。会话管理、访问码保护、API 端点。
-- **Agent 事件回调**：`on_event` 参数支持 (text/tool_call/tool_result/orient/done)，Web 层通过队列 + 后台线程实现流式推送。
-- **get_weather 工具**：接入 Open-Meteo API，真实天气数据，免费无需 Key。
-- **ReAct 策略升级为 FC 驱动**：工具调用改用 Native Function Calling（可靠），Thought 仍在 content 中显式输出（可见）。
-- **LLM 层新增 Anthropic 消息格式转换**：`_convert_messages_for_anthropic()` 多后端无缝切换。
-- **新增 Orient 模块**：显式 O-O-D-A 循环，工具结果执行后自动解读并注入上下文。
+- **Web 界面**：FastAPI + SSE 流式，实时显示工具调用/结果/Orient。会话管理、访问码保护。
+- **使用次数限制**：每人每天默认 20 次，`usage.json` 持久化，每天 0 点自动重置。
+- **自动启动**：macOS launchd 托管，开机自启 + 崩溃自动重启。
+- **web_search 三级降级**：DDG Lite POST → Bing（国际/国内）→ Wikipedia。反爬检测 + 中英文自动识别。
+- **fetch_url 工具**：抓取任意 URL，去标签提取文本，搜索后可深入阅读网页内容。
+- **Agent 事件回调**：`on_event` 支持流式，Web 层队列 + 后台线程推送。
+- **get_weather 工具**：Open-Meteo 实时天气，免费无需 Key。
+- **ReAct FC 驱动**：Native FC 调用工具，Thought 在 content 中显式可见。
+- **Anthropic 消息格式转换**：`_convert_messages_for_anthropic()` 多后端无缝切换。
+- **Orient 模块**：显式 O-O-D-A 循环，工具结果自动解读注入上下文。
 - 测试覆盖：77 tests OK
 
 ####  2026-06-23
