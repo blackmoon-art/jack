@@ -181,24 +181,14 @@ def get_or_create_session(session_id: Optional[str] = None) -> str:
 
 # ── SSE 流式响应 ──────────────────────────────────────
 
-def agent_stream(task: str, strategy: str, session_id: str, show_thinking: bool = False):
-    """Generator that yields SSE events as the agent runs.
-
-    Args:
-        show_thinking: 是否发送思考过程事件 (orient/tool_call/tool_result/text)
-                       仅管理员/调试模式启用。
-    """
+def agent_stream(task: str, strategy: str, session_id: str):
+    """Generator that yields SSE events as the agent runs."""
     agent = sessions[session_id]["agent"]
-
-    # 不显示思考过程时，只放行 done/error
-    _visible_events = {"done", "error"}
 
     # 用队列收集 agent 事件
     queue: Queue = Queue()
 
     def on_event(event_type: str, data: dict):
-        if not show_thinking and event_type not in _visible_events:
-            return  # 非管理员：静默丢弃思考过程事件
         queue.put({"event": event_type, "data": data})
 
     # 在后台线程运行 agent
@@ -250,14 +240,11 @@ async def chat(request: Request):
 
     # 访问控制：如果设置了 WEB_ACCESS_CODE，需要验证
     access_code = os.getenv("WEB_ACCESS_CODE", "")
-    is_admin = False
-    if access_code:
-        if body.get("code") != access_code:
-            return StreamingResponse(
-                iter([f"event: error\ndata: {json.dumps({'text': '访问码错误'})}\n\n"]),
-                media_type="text/event-stream",
-            )
-        is_admin = True  # 有正确 access_code 的是管理员
+    if access_code and body.get("code") != access_code:
+        return StreamingResponse(
+            iter([f"event: error\ndata: {json.dumps({'text': '访问码错误'})}\n\n"]),
+            media_type="text/event-stream",
+        )
 
     if not task:
         return {"error": "Empty message"}
@@ -273,7 +260,7 @@ async def chat(request: Request):
         )
 
     return StreamingResponse(
-        agent_stream(task, strategy, session_id, show_thinking=is_admin),
+        agent_stream(task, strategy, session_id),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",

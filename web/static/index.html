@@ -9,19 +9,11 @@
   body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
          background:#111; color:#e0e0e0; height:100vh; display:flex; flex-direction:column; }
   header { background:#1a1a2e; padding:12px 20px; display:flex; align-items:center;
-           gap:16px; border-bottom:1px solid #333; flex-wrap:wrap; }
+           gap:16px; border-bottom:1px solid #333; }
   header h1 { font-size:18px; color:#7c3aed; }
   header select { background:#222; color:#e0e0e0; border:1px solid #444;
                   padding:6px 12px; border-radius:6px; font-size:14px; cursor:pointer; }
   header .info { font-size:12px; color:#888; }
-  .toggle-group { display:flex; align-items:center; gap:6px; margin-left:auto; }
-  .toggle-group label { font-size:12px; color:#888; cursor:pointer; user-select:none; }
-  .toggle { position:relative; width:36px; height:20px; background:#444; border-radius:10px;
-            cursor:pointer; transition:background .2s; }
-  .toggle.active { background:#7c3aed; }
-  .toggle::after { content:''; position:absolute; top:2px; left:2px; width:16px; height:16px;
-                   background:#fff; border-radius:50%; transition:transform .2s; }
-  .toggle.active::after { transform:translateX(16px); }
   #messages { flex:1; overflow-y:auto; padding:20px; display:flex; flex-direction:column; gap:12px; }
   .msg { max-width:85%; padding:10px 14px; border-radius:12px; font-size:14px; line-height:1.6;
          word-wrap:break-word; }
@@ -38,12 +30,6 @@
                  color:#6ee7b7; background:#0a1a15; border-radius:0 6px 6px 0;
                  max-height:200px; overflow-y:auto; }
   .orient { padding:6px 10px; margin:4px 0; font-size:12px; color:#94a3b8; font-style:italic; }
-  /* 思考过程折叠 */
-  .thinking-toggle { font-size:11px; color:#7c3aed; cursor:pointer; user-select:none;
-                      padding:2px 8px; margin:4px 0; }
-  .thinking-toggle:hover { text-decoration:underline; }
-  .thinking-block { display:none; }
-  .thinking-block.visible { display:block; }
   footer { padding:16px 20px; border-top:1px solid #333; display:flex; gap:10px; background:#1a1a2e; }
   footer input { flex:1; background:#222; color:#e0e0e0; border:1px solid #444; padding:10px 16px;
                  border-radius:8px; font-size:14px; outline:none; }
@@ -66,10 +52,6 @@
     <option value="tree-of-thought">Tree-of-Thought</option>
   </select>
   <span class="info" id="status">就绪</span>
-  <div class="toggle-group">
-    <label for="think-toggle">🧠 思考过程</label>
-    <div class="toggle" id="think-toggle" title="显示/隐藏 Agent 思考过程"></div>
-  </div>
 </header>
 
 <div id="messages"></div>
@@ -92,28 +74,9 @@ const $input = document.getElementById('input');
 const $send = document.getElementById('send');
 const $strategy = document.getElementById('strategy');
 const $status = document.getElementById('status');
-const $thinkToggle = document.getElementById('think-toggle');
 document.getElementById('session-info').textContent = `会话: ${SESSION_ID}`;
 
-let showThinking = localStorage.getItem('nano_show_thinking') === 'true';
-if (showThinking) $thinkToggle.classList.add('active');
-
 let currentMsg = null;
-let thinkingCount = 0;  // 当前消息的思考过程块数
-
-// 切换思考过程显示
-$thinkToggle.addEventListener('click', () => {
-  showThinking = !showThinking;
-  $thinkToggle.classList.toggle('active', showThinking);
-  localStorage.setItem('nano_show_thinking', showThinking);
-  // 切换所有可见思考块的显示
-  document.querySelectorAll('.thinking-block').forEach(el => {
-    el.classList.toggle('visible', showThinking);
-  });
-  document.querySelectorAll('.thinking-toggle').forEach(el => {
-    el.style.display = showThinking ? 'none' : '';
-  });
-});
 
 // 页面加载时恢复历史对话
 (async function restoreHistory() {
@@ -138,39 +101,18 @@ function addMessage(role, text) {
   return div;
 }
 
-function addThinkingBlock(cls, text) {
-  const wrapper = document.createElement('div');
-  wrapper.className = 'thinking-block' + (showThinking ? ' visible' : '');
-
-  const inner = document.createElement('div');
-  inner.className = cls;
-  inner.textContent = text;
-  wrapper.appendChild(inner);
-
+function addBlock(cls, text) {
+  const div = document.createElement('div');
+  div.className = cls;
+  div.textContent = text;
   if (currentMsg) {
-    currentMsg.appendChild(wrapper);
+    currentMsg.appendChild(div);
   } else {
     currentMsg = addMessage('agent', '');
-    currentMsg.appendChild(wrapper);
+    currentMsg.appendChild(div);
   }
-
-  thinkingCount++;
-
-  // 如果思考过程隐藏，显示折叠提示
-  if (!showThinking) {
-    let hint = currentMsg.querySelector('.thinking-toggle');
-    if (!hint) {
-      hint = document.createElement('div');
-      hint.className = 'thinking-toggle';
-      hint.textContent = `🧠 ${thinkingCount} 步思考过程（点击 🧠 开关展开）`;
-      currentMsg.insertBefore(hint, currentMsg.firstChild.nextSibling || null);
-    } else {
-      hint.textContent = `🧠 ${thinkingCount} 步思考过程（点击 🧠 开关展开）`;
-    }
-  }
-
   $messages.scrollTop = $messages.scrollHeight;
-  return wrapper;
+  return div;
 }
 
 function escapeHtml(s) {
@@ -184,7 +126,6 @@ async function send() {
   $send.disabled = true;
   $input.disabled = true;
   $status.textContent = '思考中...';
-  thinkingCount = 0;
 
   addMessage('user', task);
   currentMsg = null;
@@ -198,7 +139,6 @@ async function send() {
         message: task,
         strategy: $strategy.value,
         session_id: SESSION_ID,
-        code: localStorage.getItem('nano_access_code') || '',
       }),
     });
 
@@ -231,20 +171,23 @@ async function send() {
 
           switch (eventType) {
             case 'text':
-              // text 事件是中间思考过程
-              if (data.text && !data.text.startsWith('Task:')) {
-                addThinkingBlock('thought', data.text);
+              if (data.text) {
+                if (!currentMsg) currentMsg = addMessage('agent', '');
+                const el = document.createElement('div');
+                el.textContent = data.text;
+                el.style.cssText = 'color:#94a3b8;font-size:12px;margin:4px 0;';
+                currentMsg.appendChild(el);
               }
               break;
             case 'tool_call':
-              addThinkingBlock('tool-call',
-                `🔧 ${data.name}(${JSON.stringify(data.args)})`);
+              addBlock('tool-call',
+                `🔧 <span class="name">${data.name}</span>(${JSON.stringify(data.args)})`);
               break;
             case 'tool_result':
-              addThinkingBlock('tool-result', data.result?.slice(0, 1000) || '');
+              addBlock('tool-result', data.result?.slice(0, 1000) || '');
               break;
             case 'orient':
-              addThinkingBlock('orient',
+              addBlock('orient',
                 `💡 ${data.implication || data.interpretation || ''}`.slice(0, 200));
               break;
             case 'done':
@@ -255,7 +198,7 @@ async function send() {
               $status.textContent = '就绪';
               break;
             case 'error':
-              addThinkingBlock('tool-result', `❌ ${data.text}`);
+              addBlock('tool-result', `❌ ${data.text}`);
               $status.textContent = '错误';
               break;
           }
@@ -264,7 +207,7 @@ async function send() {
       $messages.scrollTop = $messages.scrollHeight;
     }
   } catch (err) {
-    addThinkingBlock('tool-result', `❌ 网络错误: ${err.message}`);
+    addBlock('tool-result', `❌ 网络错误: ${err.message}`);
   }
 
   $send.disabled = false;
