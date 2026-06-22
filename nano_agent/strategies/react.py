@@ -65,6 +65,7 @@ Final Answer: <your complete answer to the user>
 3. Only output "Final Answer:" when you are truly done and have everything you need
 4. Be specific in your Thoughts — don't just say "I need to check"
 5. If a tool returns an error, think about what went wrong and try a different approach
+6. IMPORTANT: Be efficient. If a single tool call gives you enough information, immediately give the Final Answer. Do NOT make unnecessary additional tool calls.
 
 ## EXAMPLE
 
