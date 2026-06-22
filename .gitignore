@@ -15,3 +15,4 @@ agent_memory.md
 .idea/
 .venv/
 *.egg-info/
+usage.json
