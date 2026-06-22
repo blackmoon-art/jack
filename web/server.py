@@ -254,7 +254,10 @@ async def health():
 
 @app.get("/")
 async def index():
-    return HTMLResponse((STATIC_DIR / "index.html").read_text(encoding="utf-8"))
+    html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
+    import time
+    html = html.replace("{{TS}}", str(int(time.time())))
+    return HTMLResponse(html, headers={"Cache-Control": "no-cache, no-store"})
 
 
 # ── 启动 ──────────────────────────────────────────────

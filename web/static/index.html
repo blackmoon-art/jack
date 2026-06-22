@@ -3,6 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
 <title>Decisive Cat</title>
 <style>
   * { margin:0; padding:0; box-sizing:border-box; }
@@ -114,7 +115,7 @@ let thinkingCount = 0;  // 当前消息的思考步骤数
 function addMessage(role, text) {
   const div = document.createElement('div');
   div.className = `msg ${role}`;
-  div.innerHTML = text ? `<div class="content">${escapeHtml(text)}</div>` : '';
+  div.innerHTML = text ? `<div class="content">${linkify(text)}</div>` : '';
   $messages.appendChild(div);
   $messages.scrollTop = $messages.scrollHeight;
   return div;
@@ -131,7 +132,7 @@ function addThinkingBlock(cls, text) {
 
   const inner = document.createElement('div');
   inner.className = cls;
-  inner.textContent = text;
+  inner.innerHTML = linkify(text);
   block.appendChild(inner);
 
   thinkingCount++;
@@ -160,6 +161,46 @@ function ensureThinkingTag() {
 
 function escapeHtml(s) {
   return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+function renderMarkdown(text) {
+  // Simple markdown: bold, italic, headers, code
+  // 注意: 必须在 linkify 之后调用，因为 linkify 会生成 <a> 标签
+  let html = text;
+  // Headers
+  html = html.replace(/^### (.+)$/gm, '<h3 style="font-size:15px;margin:8px 0 4px;">$1</h3>');
+  html = html.replace(/^## (.+)$/gm, '<h2 style="font-size:16px;margin:8px 0 4px;">$1</h2>');
+  html = html.replace(/^# (.+)$/gm, '<h1 style="font-size:18px;margin:8px 0 4px;">$1</h1>');
+  // Bold (skip if inside <a> tag)
+  html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+  // Italic
+  html = html.replace(/\*(.+?)\*/g, '<em>$1</em>');
+  // Inline code
+  html = html.replace(/`([^`]+)`/g, '<code style="background:#333;padding:1px 5px;border-radius:3px;font-size:12px;">$1</code>');
+  return html;
+}
+
+function linkify(text) {
+  // 1. escape HTML
+  // 2. Markdown links: [text](url) → <a> (must be before bare URL)
+  // 3. Bare URLs → <a>
+  // 4. Render markdown (bold/italic/headers/code)
+  const escaped = escapeHtml(text);
+  // Markdown links first
+  let linked = escaped.replace(
+    /\[([^\]]+)\]\((https?:\/\/[^\s\)]+)\)/g,
+    '<a href="$2" target="_blank" rel="noopener" style="color:#7c3aed;text-decoration:underline;">$1</a>'
+  );
+  // Bare URLs
+  linked = linked.replace(
+    /(https?:\/\/[^\s<>"']+?)(?:[)}\]>,.!?;:*_~]+)?(?=\s|$)/g,
+    function(match, url) {
+      const trailing = match.slice(url.length);
+      return '<a href="' + url + '" target="_blank" rel="noopener" style="color:#7c3aed;text-decoration:underline;">' + url + '</a>' + trailing;
+    }
+  );
+  // Then render markdown
+  return renderMarkdown(linked);
 }
 
 async function send() {

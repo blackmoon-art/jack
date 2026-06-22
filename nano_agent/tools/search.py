@@ -118,6 +118,9 @@ class Search:
         except Exception as e:
             logger.debug(f"Brave search failed: {e}")
             return []
+
+        results = []
+        for item in data.get("web", {}).get("results", []):
             title = item.get("title", "").strip()
             url = item.get("url", "")
             desc = item.get("description", "").strip()
