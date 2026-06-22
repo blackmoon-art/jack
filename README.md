@@ -68,6 +68,74 @@ python run.py --strategy reflexion "调试这个内存泄漏 bug"
 python run.py --strategy tot "设计一个高性能缓存方案"
 ```
 
+## Web 界面
+
+```bash
+pip install fastapi uvicorn
+python web/server.py
+# → http://localhost:8080
+```
+
+一个干净的聊天界面，支持 SSE 流式输出：
+
+```
+┌──────────────────────────────────────────────┐
+│ 🤖 Nano Agent Plus   [策略▼]                 │
+├──────────────────────────────────────────────┤
+│ 🔧 bash({"command":"ls"})          ← 蓝色    │
+│ agent.py config.py llm.py         ← 绿色     │
+│ 💡 列出了3个文件                    ← 灰色    │
+│ 当前目录包含 agent.py...           ← 最终回答 │
+├──────────────────────────────────────────────┤
+│ [输入任务...]                        [发送]  │
+└──────────────────────────────────────────────┘
+```
+
+实时显示每一步：工具调用（蓝色）、工具结果（绿色）、Orient 解读（灰色）。
+
+### 访问控制
+
+```bash
+# 设置访问码（可选）
+echo "WEB_ACCESS_CODE=你的密码" >> .env
+```
+
+设置后，打开网页需要输入密码。不设则无限制。
+
+### 分享给局域网内其他人
+
+```
+http://192.168.x.x:8080    ← 你的局域网 IP
+```
+
+### 分享给外网（需要 ngrok）
+
+```bash
+brew install ngrok
+ngrok http 8080
+# → https://xxx.ngrok-free.app → 发给任何人
+```
+
+### API 端点
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| `GET` | `/` | 聊天界面 |
+| `POST` | `/api/chat` | SSE 流式聊天 `{"message","strategy","session_id","code?"}` |
+| `GET` | `/api/health` | 健康检查 + 会话数 + Token 消耗 |
+| `DELETE` | `/api/sessions/:id` | 清除会话记忆 |
+
+### 架构细节
+
+Agent 层新增 `on_event` 回调，Web 层通过事件队列 + 后台线程实现 SSE 流式推送，不改核心循环逻辑：
+
+```
+用户消息 → POST /api/chat
+          → Agent.run(task, on_event=queue.put)
+          → 后台线程运行 agent
+          → 主线程从 queue 取事件 → SSE 发送到浏览器
+```
+
 ## 推理策略
 
 | 策略 | 命令 | 流程 | 适用场景 |
@@ -118,6 +186,7 @@ Generate 3 approaches → Score: A(9) B(7) C(3)
 | `grep` | 正则搜索文件内容 | `shell=False` |
 | `web_search` | DuckDuckGo 网页搜索 | SSL 验证保留 |
 | `calculate` | 数学表达式求值 | `ast` 安全解析，无 `eval` |
+| `get_weather` | 查询城市实时天气 (Open-Meteo API) | 免费，无需 API Key |
 | `plan` | 触发计划分解 | 纯 LLM 调用，无副作用 |
 
 ## 记忆系统
@@ -387,6 +456,9 @@ Agent.run(task, strategy)
 ```
 nano_agent_plus/
 ├── run.py                           # CLI 入口
+├── web/
+│   ├── server.py                    # FastAPI 服务 (SSE 流式)
+│   └── static/index.html            # 聊天界面
 ├── requirements.txt                 # 依赖 (openai, python-dotenv)
 ├── .env.example                     # 配置模板
 ├── .gitignore                       # 忽略 .env + 运行时文件
@@ -431,9 +503,12 @@ nano_agent_plus/
 
 ### 2026-06-22
 
-- **ReAct 策略升级为 FC 驱动**：工具调用改用 Native Function Calling（可靠），Thought 仍在 content 中显式输出（可见）。删除了脆弱的正则文本解析。
-- **LLM 层新增 Anthropic 消息格式转换**：`_convert_messages_for_anthropic()` 自动将内部 OpenAI 风格消息转为 Anthropic content blocks，多后端无缝切换。
+- **Web 界面**：FastAPI + SSE 流式输出，实时显示工具调用/结果/Orient。会话管理、访问码保护、API 端点。
+- **Agent 事件回调**：`on_event` 参数支持 (text/tool_call/tool_result/orient/done)，Web 层通过队列 + 后台线程实现流式推送。
+- **get_weather 工具**：接入 Open-Meteo API，真实天气数据，免费无需 Key。
+- **ReAct 策略升级为 FC 驱动**：工具调用改用 Native Function Calling（可靠），Thought 仍在 content 中显式输出（可见）。
+- **LLM 层新增 Anthropic 消息格式转换**：`_convert_messages_for_anthropic()` 多后端无缝切换。
 - **新增 Orient 模块**：显式 O-O-D-A 循环，工具结果执行后自动解读并注入上下文。
-- 测试覆盖：77 → 77 (ReAct 测试从文本解析版迁移到 FC 版)
+- 测试覆盖：77 tests OK
 
 ####  2026-06-23
