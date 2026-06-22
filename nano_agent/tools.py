@@ -260,30 +260,49 @@ class ToolRegistry:
             return f"Error: {e}"
 
     def web_search(self, query: str, max_results: int = 5) -> str:
-        """使用 DuckDuckGo HTML 搜索（无 API key 需要）。"""
+        """搜索网页：DuckDuckGo Lite 优先，被反爬时降级到 Wikipedia API。"""
         max_results = min(max(max_results, 1), 10)
-        search_url = f"https://html.duckduckgo.com/html/?q={urllib.parse.quote_plus(query)}"
+
+        # 先试 DuckDuckGo Lite (POST)
+        results = self._search_duckduckgo(query, max_results)
+        if results:
+            return f"Search results for '{query}':\n\n" + "\n\n".join(results)
+
+        # 降级: Wikipedia API (中英文自动检测)
+        results = self._search_wikipedia(query, max_results)
+        if results:
+            return f"Search results for '{query}' (Wikipedia):\n\n" + "\n\n".join(results)
+
+        return f"No search results found for '{query}'."
+
+    def _search_duckduckgo(self, query: str, max_results: int) -> list[str]:
+        """DuckDuckGo Lite POST 搜索。被反爬时返回空列表。"""
+        data = urllib.parse.urlencode({"q": query, "kl": "us-en"}).encode()
+        url = "https://lite.duckduckgo.com/lite/"
         headers = {
             "User-Agent": (
                 "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
                 "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
             ),
+            "Content-Type": "application/x-www-form-urlencoded",
+            "Accept": "text/html",
             "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+            "Referer": "https://lite.duckduckgo.com/",
         }
-
         try:
-            req = urllib.request.Request(search_url, headers=headers)
+            req = urllib.request.Request(url, data=data, headers=headers)
             with urllib.request.urlopen(req, timeout=15) as resp:
                 html = resp.read().decode("utf-8", errors="ignore")
-        except urllib.error.URLError as e:
-            return f"Error: Network error — {e.reason}"
-        except Exception as e:
-            return f"Error: {e}"
+        except Exception:
+            return []
+
+        # 反爬检测
+        if "anomaly" in html.lower():
+            return []
 
         results = []
-        # 解析 DuckDuckGo HTML 结果
         result_blocks = re.findall(
-            r'<a[^>]*class="result__a"[^>]*href="([^"]*)"[^>]*>(.*?)</a>',
+            r'<a[^>]*rel="nofollow"[^>]*href="([^"]+)"[^>]*>(.*?)</a>',
             html, re.DOTALL,
         )
         seen: set[str] = set()
@@ -291,21 +310,53 @@ class ToolRegistry:
             if len(results) >= max_results:
                 break
             title_clean = re.sub(r'<[^>]+>', '', title).strip()
+            title_clean = (title_clean
+                .replace("&#x27;", "'")
+                .replace("&amp;", "&")
+                .replace("&quot;", '"')
+                .replace("&lt;", "<")
+                .replace("&gt;", ">"))
             if not title_clean or len(title_clean) < 3:
                 continue
-            # DuckDuckGo 重定向链接 → 真实 URL
-            if "uddg=" in href:
-                m = re.search(r'uddg=([^&]+)', href)
-                if m:
-                    href = urllib.parse.unquote(m.group(1))
+            if "duckduckgo" in href:
+                continue
             if href in seen:
                 continue
             seen.add(href)
             results.append(f"{len(results)+1}. {title_clean}\n   {href}")
+        return results
 
-        if not results:
-            return "No search results found."
-        return f"Search results for '{query}':\n\n" + "\n\n".join(results)
+    def _search_wikipedia(self, query: str, max_results: int) -> list[str]:
+        """Wikipedia API 搜索 (中英文自动检测，无需 API key)。"""
+        # 检测中文：含中文字符则用中文 Wikipedia
+        has_cjk = any('\u4e00' <= ch <= '\u9fff' for ch in query)
+        lang = "zh" if has_cjk else "en"
+        api_url = f"https://{lang}.wikipedia.org/w/api.php"
+        params = urllib.parse.urlencode({
+            "action": "query",
+            "list": "search",
+            "srsearch": query,
+            "format": "json",
+            "srlimit": str(max_results),
+        })
+        try:
+            req = urllib.request.Request(
+                f"{api_url}?{params}",
+                headers={"User-Agent": "nano_agent_plus/1.0"},
+            )
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+        except Exception:
+            return []
+
+        results = []
+        search_items = data.get("query", {}).get("search", [])
+        for item in search_items:
+            title = item["title"]
+            snippet = re.sub(r'<[^>]+>', '', item.get("snippet", ""))
+            page_url = f"https://{lang}.wikipedia.org/wiki/{urllib.parse.quote(title.replace(' ', '_'))}"
+            results.append(f"{len(results)+1}. {title}\n   {page_url}\n   {snippet[:200]}")
+        return results
 
     def fetch_url(self, url: str) -> str:
         """抓取网页并提取文本内容。"""
