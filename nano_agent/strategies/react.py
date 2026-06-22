@@ -144,6 +144,13 @@ Final Answer: The current directory contains 2 files: agent.py and README.md."""
                 messages.append({"role": "assistant", "content": llm_text})
                 break
 
+            # 有 Final Answer 也有 tool_calls → 优先 Final Answer
+            if final and tool_calls:
+                final_answer = final
+                print(f"✅ Final Answer: {final_answer[:300]}")
+                messages.append({"role": "assistant", "content": llm_text})
+                break
+
             # 有工具调用 → 执行
             if tool_calls:
                 # 追加 assistant 消息（含 tool_calls）
@@ -171,13 +178,6 @@ Final Answer: The current directory contains 2 files: agent.py and README.md."""
                         "tool_call_id": tc["id"],
                         "content": f"Observation: {result}",
                     })
-
-            elif final:
-                # 有 Final Answer 但也有 tool_calls 边缘情况，优先 Final Answer
-                final_answer = final
-                print(f"✅ Final Answer: {final_answer[:300]}")
-                messages.append({"role": "assistant", "content": llm_text})
-                break
 
             else:
                 # 无工具调用也无 Final Answer — 作为纯文本回复
