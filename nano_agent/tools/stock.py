@@ -1,13 +1,22 @@
-"""股票工具：stock_info, stock_history, stock_chart。
+"""股票工具：stock_info, stock_history, stock_chart, stock_indicators, stock_market。
 
-数据来源：
-  - A 股: akshare (前复权日线)
-  - 美股/港股: yfinance
-  - 实时行情: Yahoo Finance v8 chart API
+数据源（国内可达，无需 Key）：
+  - 实时行情: 腾讯行情 API (qt.gtimg.cn)
+  - K线数据: 腾讯 K线 API (web.ifzq.gtimg.cn)
+  - 大盘/板块: 腾讯行情 + 新浪行业板块
+  - 美股/港股: Yahoo Finance → 腾讯行情 fallback
+
+技术指标（纯计算，无额外数据源）：
+  - MA (5/10/20/60)
+  - RSI (14)
+  - MACD (12/26/9)
+  - BOLL (20,2)
 """
 
 import json as _json
+import math
 import os
+import re
 import urllib.parse
 import urllib.request
 from datetime import datetime, timedelta
@@ -19,51 +28,37 @@ class Stock:
     def __init__(self, work_dir: str):
         self.work_dir = work_dir
 
-    # ── 实时行情 ──────────────────────────────────────
+    # ════════════════════════════════════════════════════
+    #  实时行情
+    # ════════════════════════════════════════════════════
 
     def stock_info(self, symbol: str) -> str:
-        """获取股票实时行情。A 股走 akshare，美股/港股走 Yahoo Finance。"""
+        """获取股票实时行情。A 股走腾讯行情，美股/港股走 Yahoo → 腾讯 fallback。"""
         raw = symbol.upper().strip()
         clean, is_a = self._parse_stock_symbol(raw)
 
         if is_a:
-            return self._stock_info_akshare(clean)
+            return self._stock_info_tencent_a(clean)
         return self._stock_info_yahoo(raw)
 
-    def _stock_info_akshare(self, symbol: str) -> str:
-        """A 股实时行情 — 腾讯行情 API（国内可达，无需 Key）。"""
+    def _stock_info_tencent_a(self, symbol: str) -> str:
+        """A 股实时行情 — 腾讯行情 API。"""
         try:
-            # 判断市场前缀: 6/9开头=沪(sh), 0/3开头=深(sz)
             prefix = 'sh' if symbol.startswith(('6', '9')) else 'sz'
             code = f"{prefix}{symbol}"
-            url = f"http://qt.gtimg.cn/q={code}"
-            req = urllib.request.Request(url, headers={
-                "User-Agent": "Mozilla/5.0",
-                "Referer": "https://gu.qq.com/",
-            })
-            with urllib.request.urlopen(req, timeout=10) as resp:
-                raw = resp.read().decode('gbk', errors='replace')
-
-            # 格式: v_sh000001="1~名称~代码~现价~昨收~开~成交量~..."
-            if f'v_{code}="' not in raw:
+            data = self._tencent_quote(code)
+            if not data:
                 return f"Error: A-share symbol not found — '{symbol}'"
 
-            val = raw.split('="', 1)[1].rstrip('";')
-            fields = val.split('~')
-
-            # 腾讯行情字段索引 (关键):
-            # 1=名称, 2=代码, 3=现价, 4=昨收, 5=今开,
-            # 31=涨跌额, 32=涨跌幅(%), 33=最高, 34=最低,
-            # 6=成交量(手), 37=成交额(万)
-            name = fields[1] if len(fields) > 1 else symbol
-            price = float(fields[3]) if len(fields) > 3 and fields[3] else 0
-            prev_close = float(fields[4]) if len(fields) > 4 and fields[4] else 0
-            change = float(fields[31]) if len(fields) > 31 and fields[31] else price - prev_close
-            change_pct = float(fields[32]) if len(fields) > 32 and fields[32] else (change / prev_close * 100 if prev_close else 0)
-            volume = float(fields[6]) if len(fields) > 6 and fields[6] else 0
-            turnover = float(fields[37]) if len(fields) > 37 and fields[37] else 0
-            high = float(fields[33]) if len(fields) > 33 and fields[33] else 0
-            low = float(fields[34]) if len(fields) > 34 and fields[34] else 0
+            name = data.get('name', symbol)
+            price = data.get('price', 0)
+            prev_close = data.get('prev_close', 0)
+            change = data.get('change', 0)
+            change_pct = data.get('change_pct', 0)
+            high = data.get('high', 0)
+            low = data.get('low', 0)
+            volume = data.get('volume', 0)
+            turnover = data.get('turnover', 0)
 
             sign = "+" if change >= 0 else ""
             arrow = "📈" if change >= 0 else "📉"
@@ -83,7 +78,6 @@ class Stock:
 
     def _stock_info_yahoo(self, symbol: str) -> str:
         """美股/港股实时行情 — Yahoo Finance → 腾讯行情 fallback。"""
-        # 先尝试 Yahoo
         try:
             url = (
                 f"https://query1.finance.yahoo.com/v8/finance/chart/{urllib.parse.quote(symbol)}"
@@ -125,11 +119,10 @@ class Stock:
                 f"🕐 昨收: {prev_close} {currency}"
             )
         except Exception:
-            pass  # Yahoo 失败，尝试腾讯行情
+            pass
 
-        # Fallback: 腾讯行情（支持美股 .US / 港股 .HK）
+        # Fallback: 腾讯行情
         try:
-            # 转换符号: AAPL → usAAPL, 0700.HK → hk0700
             if '.' in symbol.upper():
                 base, mkt = symbol.upper().split('.', 1)
                 if mkt == 'HK':
@@ -139,29 +132,19 @@ class Stock:
             else:
                 qt_code = f'us{symbol.upper()}'
 
-            url = f"http://qt.gtimg.cn/q={qt_code}"
-            req = urllib.request.Request(url, headers={
-                "User-Agent": "Mozilla/5.0",
-                "Referer": "https://gu.qq.com/",
-            })
-            with urllib.request.urlopen(req, timeout=10) as resp:
-                raw = resp.read().decode('gbk', errors='replace')
-
-            if f'v_{qt_code}="' not in raw:
+            data = self._tencent_quote(qt_code, is_foreign=True)
+            if not data:
                 return f"Error: Stock symbol not found — '{symbol}'"
 
-            val = raw.split('="', 1)[1].rstrip('";')
-            fields = val.split('~')
-
-            name = fields[1] if len(fields) > 1 else symbol
-            price = float(fields[3]) if len(fields) > 3 and fields[3] else 0
-            prev_close = float(fields[4]) if len(fields) > 4 and fields[4] else 0
-            change = float(fields[31]) if len(fields) > 31 and fields[31] else price - prev_close
-            change_pct = float(fields[32]) if len(fields) > 32 and fields[32] else (change / prev_close * 100 if prev_close else 0)
-            high = float(fields[33]) if len(fields) > 33 and fields[33] else 0
-            low = float(fields[34]) if len(fields) > 34 and fields[34] else 0
-            volume = float(fields[6]) if len(fields) > 6 and fields[6] else 0
-            currency = fields[82] if len(fields) > 82 and fields[82] else "USD"
+            name = data.get('name', symbol)
+            price = data.get('price', 0)
+            prev_close = data.get('prev_close', 0)
+            change = data.get('change', 0)
+            change_pct = data.get('change_pct', 0)
+            high = data.get('high', 0)
+            low = data.get('low', 0)
+            volume = data.get('volume', 0)
+            currency = data.get('currency', 'USD')
 
             sign = "+" if change >= 0 else ""
             arrow = "📈" if change >= 0 else "📉"
@@ -177,7 +160,595 @@ class Stock:
         except Exception as e:
             return f"Error: Stock lookup failed for '{symbol}' — {e}"
 
-    # ── 历史行情 ──────────────────────────────────────
+    # ════════════════════════════════════════════════════
+    #  历史行情
+    # ════════════════════════════════════════════════════
+
+    def stock_history(self, symbol: str, period: str = "1mo") -> str:
+        """获取股票历史行情。A 股走腾讯 K线 API，美股/港股走 yfinance。"""
+        clean, is_a = self._parse_stock_symbol(symbol)
+        days = _PERIOD_DAYS.get(period, 30)
+
+        try:
+            if is_a:
+                klines = self._tencent_klines(clean, days=days)
+                if not klines:
+                    return f"Error: No data for A-share '{clean}'"
+                return self._format_tencent_history(klines, clean, period)
+            else:
+                import yfinance as yf
+                hist = yf.Ticker(clean).history(period=period)
+                if hist.empty:
+                    return f"Error: No data for '{clean}'"
+                return self._format_yfinance_history(hist, clean, period)
+        except Exception as e:
+            return f"Error: {e}"
+
+    def _format_tencent_history(self, klines: list, symbol: str, period: str,
+                                 max_rows: int = 16) -> str:
+        """格式化腾讯 K线数据。"""
+        header = f"{'日期':<12} {'开盘':>10} {'收盘':>10} {'最高':>10} {'最低':>10} {'涨跌幅':>8} {'成交额':>14}"
+
+        total = len(klines)
+        if total <= max_rows:
+            show = klines
+            truncated = False
+        else:
+            show = klines[:max_rows // 2] + klines[-(max_rows // 2):]
+            truncated = True
+
+        lines = [f"📊 {symbol} 最近 {period} 历史行情 (A股前复权)\n", header]
+        for kl in show:
+            date = kl['date']
+            open_p = kl['open']
+            close_p = kl['close']
+            high_p = kl['high']
+            low_p = kl['low']
+            vol = kl['volume']
+            # 计算涨跌幅
+            if open_p > 0:
+                pct = (close_p - open_p) / open_p * 100
+                pct_str = f"{pct:+.2f}%"
+            else:
+                pct_str = "N/A"
+            vol_str = f"{vol/1e8:.2f}亿" if vol > 1e8 else f"{vol/1e4:.0f}万"
+            lines.append(f"{date:<12} {open_p:>10.2f} {close_p:>10.2f} {high_p:>10.2f} {low_p:>10.2f} {pct_str:>8} {vol_str:>14}")
+
+        if truncated:
+            closes = [k['close'] for k in klines]
+            highs = [k['high'] for k in klines]
+            lows = [k['low'] for k in klines]
+            lines.append(f"\n... ({total - max_rows} rows omitted) ...")
+            lines.append(f"Summary: mean close {sum(closes)/len(closes):.2f}, "
+                         f"high {max(highs):.2f}, low {min(lows):.2f}, total rows {total}")
+
+        return '\n'.join(lines)
+
+    @staticmethod
+    def _format_yfinance_history(df, symbol: str, period: str, max_rows: int = 16) -> str:
+        """格式化 yfinance 历史数据。"""
+        header = f"{'Date':<12} {'Open':>10} {'Close':>10} {'High':>10} {'Low':>10} {'Volume':>12}"
+
+        total = len(df)
+        if total <= max_rows:
+            rows = df
+            truncated = False
+        else:
+            rows = df.head(max_rows // 2)._append(df.tail(max_rows // 2))
+            truncated = True
+
+        lines = [f"📊 {symbol} 最近 {period} 历史行情 (US/HK)\n", header]
+        for _, row in rows.iterrows():
+            lines.append(f"{row.name.strftime('%Y-%m-%d'):<12} {row['Open']:>10.2f} {row['Close']:>10.2f} {row['High']:>10.2f} {row['Low']:>10.2f} {int(row['Volume']):>12,}")
+
+        if truncated:
+            lines.append(f"\n... ({total - max_rows} rows omitted) ...")
+            lines.append(f"Summary: mean close {df['Close'].mean():.2f}, high {df['High'].max():.2f}, low {df['Low'].min():.2f}, total rows {total}")
+
+        return '\n'.join(lines)
+
+    # ════════════════════════════════════════════════════
+    #  技术指标
+    # ════════════════════════════════════════════════════
+
+    def stock_indicators(self, symbol: str, period: str = "6mo") -> str:
+        """
+        计算技术指标：MA/RSI/MACD/BOLL。
+        A 股走腾讯 K线，美股/港股走 yfinance。
+        """
+        clean, is_a = self._parse_stock_symbol(symbol)
+        days = _PERIOD_DAYS.get(period, 180)
+
+        try:
+            if is_a:
+                klines = self._tencent_klines(clean, days=days)
+                if not klines:
+                    return f"Error: No data for A-share '{clean}'"
+                closes = [k['close'] for k in klines]
+                dates = [k['date'] for k in klines]
+            else:
+                import yfinance as yf
+                hist = yf.Ticker(clean).history(period=period)
+                if hist.empty:
+                    return f"Error: No data for '{clean}'"
+                closes = hist['Close'].tolist()
+                dates = [d.strftime('%Y-%m-%d') for d in hist.index]
+        except Exception as e:
+            return f"Error: {e}"
+
+        if len(closes) < 26:
+            return f"Error: Not enough data ({len(closes)} bars) for indicators (need ≥26)"
+
+        # 计算指标
+        ma5 = self._sma(closes, 5)
+        ma10 = self._sma(closes, 10)
+        ma20 = self._sma(closes, 20)
+        ma60 = self._sma(closes, 60)
+        rsi14 = self._rsi(closes, 14)
+        macd_line, signal_line, histogram = self._macd(closes)
+        boll_upper, boll_mid, boll_lower = self._boll(closes)
+
+        last = len(closes) - 1
+        price = closes[last]
+
+        lines = [f"📊 {clean} 技术指标 ({period})\n"]
+        lines.append(f"💰 当前价: {price:.2f}\n")
+
+        # MA
+        lines.append("📈 移动平均线 (MA)")
+        lines.append(f"  MA5:  {ma5[last]:.2f}  {'↑ 多头' if price > ma5[last] else '↓ 空头'}")
+        lines.append(f"  MA10: {ma10[last]:.2f}  {'↑ 多头' if price > ma10[last] else '↓ 空头'}")
+        lines.append(f"  MA20: {ma20[last]:.2f}  {'↑ 多头' if price > ma20[last] else '↓ 空头'}")
+        if ma60[last] is not None and not math.isnan(ma60[last]):
+            lines.append(f"  MA60: {ma60[last]:.2f}  {'↑ 多头' if price > ma60[last] else '↓ 空头'}")
+        else:
+            lines.append(f"  MA60: N/A (数据不足)")
+
+        # 多空判断
+        above = sum(1 for m in [ma5[last], ma10[last], ma20[last]] if price > m)
+        trend = "多头排列 🐂" if above >= 2 else "空头排列 🐻"
+        lines.append(f"  → 趋势: {trend}")
+
+        # RSI
+        lines.append("\n📉 RSI (14)")
+        rsi_val = rsi14[last]
+        if rsi_val is not None and not math.isnan(rsi_val):
+            if rsi_val > 70:
+                status = "⚠️ 超买"
+            elif rsi_val < 30:
+                status = "⚠️ 超卖"
+            else:
+                status = "正常"
+            lines.append(f"  RSI14: {rsi_val:.1f}  {status}")
+        else:
+            lines.append(f"  RSI14: N/A")
+
+        # MACD
+        lines.append("\n📊 MACD (12/26/9)")
+        if macd_line[last] is not None and not math.isnan(macd_line[last]):
+            m = macd_line[last]
+            s = signal_line[last]
+            h = histogram[last]
+            cross = "金叉 ↑" if m > s else "死叉 ↓"
+            lines.append(f"  DIF:   {m:.3f}")
+            lines.append(f"  DEA:   {s:.3f}")
+            lines.append(f"  MACD:  {h:.3f}")
+            lines.append(f"  → 信号: {cross}")
+        else:
+            lines.append(f"  MACD: N/A (数据不足)")
+
+        # BOLL
+        lines.append("\n📐 布林带 (20,2)")
+        if boll_upper[last] is not None and not math.isnan(boll_upper[last]):
+            u = boll_upper[last]
+            m_val = boll_mid[last]
+            l = boll_lower[last]
+            lines.append(f"  上轨: {u:.2f}")
+            lines.append(f"  中轨: {m_val:.2f}")
+            lines.append(f"  下轨: {l:.2f}")
+            if price >= u:
+                pos = "触及上轨 ⚠️ 超买"
+            elif price <= l:
+                pos = "触及下轨 ⚠️ 超卖"
+            else:
+                pct_pos = (price - l) / (u - l) * 100 if u != l else 50
+                pos = f"带内 ({pct_pos:.0f}% 位置)"
+            lines.append(f"  → 位置: {pos}")
+        else:
+            lines.append(f"  BOLL: N/A (数据不足)")
+
+        return '\n'.join(lines)
+
+    # ── 指标计算 ──────────────────────────────────────
+
+    @staticmethod
+    def _sma(data: list, period: int) -> list:
+        """简单移动平均。前 period-1 个为 NaN。"""
+        result = [float('nan')] * len(data)
+        for i in range(period - 1, len(data)):
+            result[i] = sum(data[i - period + 1:i + 1]) / period
+        return result
+
+    @staticmethod
+    def _rsi(data: list, period: int = 14) -> list:
+        """RSI 指标。"""
+        result = [float('nan')] * len(data)
+        if len(data) < period + 1:
+            return result
+
+        gains, losses = [], []
+        for i in range(1, period + 1):
+            diff = data[i] - data[i - 1]
+            gains.append(max(diff, 0))
+            losses.append(max(-diff, 0))
+
+        avg_gain = sum(gains) / period
+        avg_loss = sum(losses) / period
+
+        if avg_loss == 0:
+            result[period] = 100.0
+        else:
+            result[period] = 100.0 - (100.0 / (1 + avg_gain / avg_loss))
+
+        for i in range(period + 1, len(data)):
+            diff = data[i] - data[i - 1]
+            gain = max(diff, 0)
+            loss = max(-diff, 0)
+            avg_gain = (avg_gain * (period - 1) + gain) / period
+            avg_loss = (avg_loss * (period - 1) + loss) / period
+            if avg_loss == 0:
+                result[i] = 100.0
+            else:
+                result[i] = 100.0 - (100.0 / (1 + avg_gain / avg_loss))
+
+        return result
+
+    @staticmethod
+    def _macd(data: list, fast: int = 12, slow: int = 26, signal: int = 9):
+        """MACD 指标。返回 (macd_line, signal_line, histogram)。"""
+        def ema(vals, period):
+            result = [float('nan')] * len(vals)
+            if len(vals) < period:
+                return result
+            result[period - 1] = sum(vals[:period]) / period
+            k = 2 / (period + 1)
+            for i in range(period, len(vals)):
+                result[i] = vals[i] * k + result[i - 1] * (1 - k)
+            return result
+
+        ema_fast = ema(data, fast)
+        ema_slow = ema(data, slow)
+
+        dif = [float('nan')] * len(data)
+        for i in range(len(data)):
+            if not math.isnan(ema_fast[i]) and not math.isnan(ema_slow[i]):
+                dif[i] = ema_fast[i] - ema_slow[i]
+
+        # Signal = EMA of DIF
+        valid_dif = [v for v in dif if not math.isnan(v)]
+        dea = ema(valid_dif, signal) if len(valid_dif) >= signal else [float('nan')] * len(data)
+
+        # 对齐 dea 到 dif 的位置
+        dea_aligned = [float('nan')] * len(data)
+        j = 0
+        for i in range(len(data)):
+            if not math.isnan(dif[i]):
+                if j < len(dea):
+                    dea_aligned[i] = dea[j]
+                    j += 1
+
+        hist = [float('nan')] * len(data)
+        for i in range(len(data)):
+            if not math.isnan(dif[i]) and not math.isnan(dea_aligned[i]):
+                hist[i] = 2 * (dif[i] - dea_aligned[i])
+
+        return dif, dea_aligned, hist
+
+    @staticmethod
+    def _boll(data: list, period: int = 20, std_dev: int = 2):
+        """布林带。返回 (upper, mid, lower)。"""
+        upper = [float('nan')] * len(data)
+        mid = [float('nan')] * len(data)
+        lower = [float('nan')] * len(data)
+
+        for i in range(period - 1, len(data)):
+            window = data[i - period + 1:i + 1]
+            avg = sum(window) / period
+            variance = sum((x - avg) ** 2 for x in window) / period
+            std = math.sqrt(variance)
+            mid[i] = avg
+            upper[i] = avg + std_dev * std
+            lower[i] = avg - std_dev * std
+
+        return upper, mid, lower
+
+    # ════════════════════════════════════════════════════
+    #  大盘 & 板块
+    # ════════════════════════════════════════════════════
+
+    def stock_market(self) -> str:
+        """获取 A 股大盘指数 + 行业板块涨跌排行。"""
+        lines = []
+
+        # ── 大盘指数 ──
+        indices = {
+            'sh000001': '上证指数',
+            'sz399001': '深证成指',
+            'sz399006': '创业板指',
+        }
+        codes = ','.join(indices.keys())
+        try:
+            url = f"http://qt.gtimg.cn/q={codes}"
+            req = urllib.request.Request(url, headers={
+                "User-Agent": "Mozilla/5.0",
+                "Referer": "https://gu.qq.com/",
+            })
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                raw = resp.read().decode('gbk', errors='replace')
+
+            lines.append("🏛️ 大盘指数")
+            lines.append(f"{'指数':<10} {'现价':>12} {'涨跌':>10} {'涨幅':>10}")
+            lines.append("─" * 45)
+
+            for line in raw.strip().split(';'):
+                line = line.strip()
+                if not line or '="' not in line:
+                    continue
+                _, val = line.split('="', 1)
+                val = val.rstrip('";')
+                fields = val.split('~')
+                if len(fields) > 32 and fields[1]:
+                    name = fields[1]
+                    price = fields[3]
+                    try:
+                        change = float(fields[31])
+                        pct = float(fields[32])
+                    except (ValueError, IndexError):
+                        change = 0
+                        pct = 0
+                    arrow = "📈" if pct >= 0 else "📉"
+                    lines.append(f"{arrow} {name:<8} {price:>12} {change:>+10.2f} {pct:>+9.2f}%")
+        except Exception as e:
+            lines.append(f"大盘数据获取失败: {e}")
+
+        # ── 行业板块 ──
+        lines.append("\n🏭 行业板块涨跌")
+        lines.append(f"{'板块':<10} {'涨幅':>8}")
+        lines.append("─" * 22)
+        try:
+            sectors = self._sina_sectors()
+            # 涨幅前5
+            lines.append("📈 涨幅前5:")
+            for name, pct in sectors[:5]:
+                lines.append(f"  {name:<10} {pct:>+7.2f}%")
+            # 跌幅前5
+            lines.append("📉 跌幅前5:")
+            for name, pct in sectors[-5:]:
+                lines.append(f"  {name:<10} {pct:>+7.2f}%")
+        except Exception as e:
+            lines.append(f"板块数据获取失败: {e}")
+
+        return '\n'.join(lines)
+
+    def _sina_sectors(self) -> list[tuple[str, float]]:
+        """从新浪获取行业板块涨跌排行。返回 [(name, change_pct)] 按涨幅降序。"""
+        url = 'https://vip.stock.finance.sina.com.cn/q/view/newSinaHy.php'
+        req = urllib.request.Request(url, headers={
+            'User-Agent': 'Mozilla/5.0',
+            'Referer': 'https://finance.sina.com.cn',
+        })
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            raw = resp.read().decode('gbk', errors='replace')
+
+        m = re.search(r'=\s*(\{.*\})', raw, re.DOTALL)
+        if not m:
+            return []
+        data = _json.loads(m.group(1))
+
+        sectors = []
+        for k, v in data.items():
+            parts = v.split(',')
+            if len(parts) > 5:
+                name = parts[1]
+                try:
+                    chg_pct = float(parts[5])
+                    sectors.append((name, chg_pct))
+                except (ValueError, IndexError):
+                    continue
+
+        sectors.sort(key=lambda x: x[1], reverse=True)
+        return sectors
+
+    # ════════════════════════════════════════════════════
+    #  K线图
+    # ════════════════════════════════════════════════════
+
+    def stock_chart(self, symbol: str, period: str = "3mo", chart_type: str = "line") -> str:
+        """生成股票走势图（含成交量子图）。同股票同日自动缓存。"""
+        import matplotlib
+        matplotlib.use('Agg')
+        import matplotlib.pyplot as plt
+
+        clean, is_a = self._parse_stock_symbol(symbol)
+        days = _PERIOD_DAYS.get(period, 90)
+
+        charts_dir = os.path.join(self.work_dir, "charts")
+        os.makedirs(charts_dir, exist_ok=True)
+        today = datetime.now().strftime('%Y%m%d')
+        filename = f"{clean}_{period}_{chart_type}_{today}.png"
+        filepath = os.path.join(charts_dir, filename)
+        # 清理旧缓存（同股票同周期不同日期）
+        for f in os.listdir(charts_dir):
+            if f.startswith(f"{clean}_{period}_{chart_type}_") and f != filename:
+                try:
+                    os.remove(os.path.join(charts_dir, f))
+                except OSError:
+                    pass
+        if os.path.exists(filepath):
+            return f"Chart (cached): {filepath}"
+
+        try:
+            if is_a:
+                klines = self._tencent_klines(clean, days=days)
+                if not klines:
+                    return f"Error: No data for A-share '{clean}'"
+                closes = [k['close'] for k in klines]
+                opens = [k['open'] for k in klines]
+                highs = [k['high'] for k in klines]
+                lows = [k['low'] for k in klines]
+                volumes = [k['volume'] for k in klines]
+                date_labels = [k['date'] for k in klines]
+            else:
+                import yfinance as yf
+                hist = yf.Ticker(clean).history(period=period)
+                if hist.empty:
+                    return f"Error: No data for '{clean}'"
+                closes = hist['Close'].tolist()
+                opens = hist['Open'].tolist()
+                highs = hist['High'].tolist()
+                lows = hist['Low'].tolist()
+                volumes = hist['Volume'].tolist()
+                date_labels = [d.strftime('%Y-%m-%d') for d in hist.index]
+        except Exception as e:
+            return f"Error: {e}"
+
+        dates = list(range(len(closes)))
+
+        # 双子图：价格 + 成交量
+        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 8),
+                                         gridspec_kw={'height_ratios': [3, 1]},
+                                         sharex=True)
+
+        if chart_type == "candle":
+            from matplotlib.patches import Rectangle
+            for i in range(len(dates)):
+                color = 'red' if closes[i] >= opens[i] else 'green'
+                ax1.plot([i, i], [lows[i], highs[i]], color=color, linewidth=0.8)
+                bottom = min(opens[i], closes[i])
+                height = max(abs(closes[i] - opens[i]), 0.001)
+                ax1.add_patch(Rectangle((i - 0.3, bottom), 0.6, height,
+                                        facecolor=color, edgecolor=color))
+        else:
+            ax1.plot(dates, closes, color='#2196F3', linewidth=1.5)
+            ax1.fill_between(dates, closes, alpha=0.1, color='#2196F3')
+
+        # 成交量柱状图
+        colors = ['red' if closes[i] >= opens[i] else 'green' for i in range(len(dates))]
+        ax2.bar(dates, volumes, color=colors, alpha=0.7, width=0.8)
+
+        step = max(1, len(dates) // 10)
+        ax2.set_xticks(dates[::step])
+        ax2.set_xticklabels(date_labels[::step], rotation=45, ha='right')
+
+        ax1.set_title(f"{clean} ({period})", fontsize=14, fontweight='bold')
+        ax1.set_ylabel('Price', fontsize=12)
+        ax1.grid(True, alpha=0.3)
+        ax2.set_ylabel('Volume', fontsize=10)
+        ax2.grid(True, alpha=0.3)
+        fig.tight_layout()
+
+        fig.savefig(filepath, dpi=150, bbox_inches='tight')
+        plt.close(fig)
+        return f"Chart saved: {filepath}"
+
+    # ════════════════════════════════════════════════════
+    #  数据源：腾讯行情 API
+    # ════════════════════════════════════════════════════
+
+    def _tencent_quote(self, code: str, is_foreign: bool = False) -> dict:
+        """
+        腾讯实时行情。
+        code: sh600519 / sz000001 / usAAPL / hk0700
+        """
+        url = f"http://qt.gtimg.cn/q={code}"
+        req = urllib.request.Request(url, headers={
+            "User-Agent": "Mozilla/5.0",
+            "Referer": "https://gu.qq.com/",
+        })
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            raw = resp.read().decode('gbk', errors='replace')
+
+        if f'v_{code}="' not in raw:
+            return {}
+
+        val = raw.split('="', 1)[1].rstrip('";')
+        fields = val.split('~')
+
+        if len(fields) < 35:
+            return {}
+
+        result = {
+            'name': fields[1] if len(fields) > 1 else '',
+            'price': float(fields[3]) if fields[3] else 0,
+            'prev_close': float(fields[4]) if fields[4] else 0,
+            'change': float(fields[31]) if len(fields) > 31 and fields[31] else 0,
+            'change_pct': float(fields[32]) if len(fields) > 32 and fields[32] else 0,
+            'high': float(fields[33]) if len(fields) > 33 and fields[33] else 0,
+            'low': float(fields[34]) if len(fields) > 34 and fields[34] else 0,
+            'volume': float(fields[6]) if len(fields) > 6 and fields[6] else 0,
+            'turnover': float(fields[37]) if len(fields) > 37 and fields[37] else 0,
+        }
+
+        if is_foreign and len(fields) > 82 and fields[82]:
+            result['currency'] = fields[82]
+        elif not is_foreign:
+            result['currency'] = 'CNY'
+        else:
+            result['currency'] = 'USD'
+
+        return result
+
+    def _tencent_klines(self, symbol: str, days: int = 90) -> list[dict]:
+        """
+        腾讯 K线 API（前复权）。
+
+        Args:
+            symbol: 纯数字代码如 '000001', '600519'
+            days: 需要的天数
+
+        Returns:
+            [{"date", "open", "close", "high", "low", "volume"}]
+        """
+        prefix = 'sh' if symbol.startswith(('6', '9')) else 'sz'
+        code = f"{prefix}{symbol}"
+
+        start = (datetime.now() - timedelta(days=days)).strftime('%Y-%m-%d')
+        end = datetime.now().strftime('%Y-%m-%d')
+        # 请求更多K线以确保足够
+        count = min(days + 30, 500)
+
+        url = (
+            f"https://web.ifzq.gtimg.cn/appstock/app/fqkline/get"
+            f"?param={code},day,{start},{end},{count},qfq"
+        )
+        req = urllib.request.Request(url, headers={
+            "User-Agent": "Mozilla/5.0",
+            "Referer": "https://gu.qq.com/",
+        })
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = _json.loads(resp.read().decode('utf-8'))
+
+        code_data = data.get('data', {}).get(code, {})
+        raw_klines = code_data.get('qfqday', code_data.get('day', []))
+
+        result = []
+        for kl in raw_klines:
+            # 格式: [date, open, close, high, low, volume]
+            if len(kl) < 6:
+                continue
+            result.append({
+                'date': kl[0],
+                'open': float(kl[1]),
+                'close': float(kl[2]),
+                'high': float(kl[3]),
+                'low': float(kl[4]),
+                'volume': float(kl[5]),
+            })
+        return result
+
+    # ════════════════════════════════════════════════════
+    #  通用工具
+    # ════════════════════════════════════════════════════
 
     @staticmethod
     def _parse_stock_symbol(symbol: str) -> tuple[str, bool]:
@@ -190,7 +761,7 @@ class Stock:
 
     @staticmethod
     def _format_history(df, symbol: str, period: str, is_a: bool, max_rows: int = 16) -> str:
-        """格式化历史数据。>max_rows 时只显示头尾 + 统计。"""
+        """格式化历史数据（yfinance DataFrame 兼容）。"""
         if is_a:
             header = f"{'日期':<12} {'开盘':>10} {'收盘':>10} {'最高':>10} {'最低':>10} {'涨跌幅':>8} {'成交额':>14}"
         else:
@@ -221,97 +792,6 @@ class Stock:
             if is_a:
                 lines.append(f"Summary: mean close {df['收盘'].mean():.2f}, high {df['最高'].max()}, low {df['最低'].min()}, total rows {total}")
             else:
-                lines.append(f"Summary: mean close {df['Close'].mean():.2f}, high {df['High'].max()}, low {df['Low'].min()}, total rows {total}")
+                lines.append(f"Summary: mean close {df['Close'].mean():.2f}, high {df['High'].max():.2f}, low {df['Low'].min():.2f}, total rows {total}")
 
         return '\n'.join(lines)
-
-    def stock_history(self, symbol: str, period: str = "1mo") -> str:
-        """获取股票历史行情。支持 A 股（akshare）和美股/港股（yfinance）。"""
-        symbol, is_a = self._parse_stock_symbol(symbol)
-        days = _PERIOD_DAYS.get(period, 30)
-
-        try:
-            if is_a:
-                import akshare as ak
-                start = (datetime.now() - timedelta(days=days)).strftime('%Y%m%d')
-                end = datetime.now().strftime('%Y%m%d')
-                df = ak.stock_zh_a_hist(symbol=symbol, period="daily",
-                                         start_date=start, end_date=end, adjust="qfq")
-                if df is None or df.empty:
-                    return f"Error: No data for A-share '{symbol}'"
-                return self._format_history(df, symbol, period, is_a=True)
-            else:
-                import yfinance as yf
-                hist = yf.Ticker(symbol).history(period=period)
-                if hist.empty:
-                    return f"Error: No data for '{symbol}'"
-                return self._format_history(hist, symbol, period, is_a=False)
-        except Exception as e:
-            return f"Error: {e}"
-
-    def stock_chart(self, symbol: str, period: str = "3mo", chart_type: str = "line") -> str:
-        """生成股票走势图并保存为图片。同股票同周期自动缓存。"""
-        import matplotlib
-        matplotlib.use('Agg')
-        import matplotlib.pyplot as plt
-
-        symbol, is_a = self._parse_stock_symbol(symbol)
-        days = _PERIOD_DAYS.get(period, 90)
-
-        charts_dir = os.path.join(self.work_dir, "charts")
-        os.makedirs(charts_dir, exist_ok=True)
-        filename = f"{symbol}_{period}_{chart_type}.png"
-        filepath = os.path.join(charts_dir, filename)
-        if os.path.exists(filepath):
-            return f"Chart (cached): {filepath}"
-
-        try:
-            if is_a:
-                import akshare as ak
-                start = (datetime.now() - timedelta(days=days)).strftime('%Y%m%d')
-                end = datetime.now().strftime('%Y%m%d')
-                df = ak.stock_zh_a_hist(symbol=symbol, period="daily",
-                                         start_date=start, end_date=end, adjust="qfq")
-                if df is None or df.empty:
-                    return f"Error: No data for A-share '{symbol}'"
-                closes, opens = df['收盘'].tolist(), df['开盘'].tolist()
-                highs, lows = df['最高'].tolist(), df['最低'].tolist()
-                date_labels = [str(d)[:10] for d in df['日期'].tolist()]
-            else:
-                import yfinance as yf
-                hist = yf.Ticker(symbol).history(period=period)
-                if hist.empty:
-                    return f"Error: No data for '{symbol}'"
-                closes, opens = hist['Close'].tolist(), hist['Open'].tolist()
-                highs, lows = hist['High'].tolist(), hist['Low'].tolist()
-                date_labels = [d.strftime('%Y-%m-%d') for d in hist.index]
-        except Exception as e:
-            return f"Error: {e}"
-
-        dates = list(range(len(closes)))
-        fig, ax = plt.subplots(figsize=(12, 6))
-
-        if chart_type == "candle":
-            from matplotlib.patches import Rectangle
-            for i in range(len(dates)):
-                color = 'red' if closes[i] >= opens[i] else 'green'
-                ax.plot([i, i], [lows[i], highs[i]], color=color, linewidth=0.8)
-                bottom = min(opens[i], closes[i])
-                height = max(abs(closes[i] - opens[i]), 0.001)
-                ax.add_patch(Rectangle((i - 0.3, bottom), 0.6, height,
-                                       facecolor=color, edgecolor=color))
-        else:
-            ax.plot(dates, closes, color='#2196F3', linewidth=1.5)
-            ax.fill_between(dates, closes, alpha=0.15, color='#2196F3')
-
-        step = max(1, len(dates) // 10)
-        ax.set_xticks(dates[::step])
-        ax.set_xticklabels(date_labels[::step], rotation=45, ha='right')
-        ax.set_title(f"{symbol} ({period})", fontsize=14, fontweight='bold')
-        ax.set_ylabel('Price', fontsize=12)
-        ax.grid(True, alpha=0.3)
-        fig.tight_layout()
-
-        fig.savefig(filepath, dpi=150, bbox_inches='tight')
-        plt.close(fig)
-        return f"Chart saved: {filepath}"

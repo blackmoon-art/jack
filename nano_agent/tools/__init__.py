@@ -82,18 +82,23 @@ class ToolRegistry:
         self._register("get_weather", "Get real-time weather for a city using Open-Meteo API (free, no key).", self._weather.get_weather, {
             "city": {"type": "string", "description": "City name in Chinese or English (e.g. 北京, Shanghai, Tokyo)"},
         }, required=["city"])
-        self._register("stock_info", "Get real-time stock quote and news. Supports US stocks (AAPL), HK (0700.HK), China (600519.SS). Data from Yahoo Finance.", self._stock.stock_info, {
-            "symbol": {"type": "string", "description": "Stock symbol (e.g. AAPL, TSLA, 0700.HK, 600519.SS)"},
+        self._register("stock_info", "Get real-time stock quote. A-shares via Tencent API (600519, 000001), US/HK via Yahoo Finance with Tencent fallback (AAPL, 0700.HK).", self._stock.stock_info, {
+            "symbol": {"type": "string", "description": "Stock symbol (e.g. 600519, 000001, AAPL, TSLA, 0700.HK)"},
         }, required=["symbol"])
-        self._register("stock_history", "Get historical stock prices. Requires: pip install akshare yfinance. A-shares via akshare (600519), US/HK via yfinance (AAPL). Period: 1mo/3mo/6mo/1y/3y/5y.", self._stock.stock_history, {
+        self._register("stock_history", "Get historical stock prices. A-shares via Tencent K-line API, US/HK via yfinance. Period: 1mo/3mo/6mo/1y/3y/5y.", self._stock.stock_history, {
             "symbol": {"type": "string", "description": "Stock symbol (e.g. 600519, AAPL, 0700.HK)"},
             "period": {"type": "string", "description": "Time range: 1mo, 3mo, 6mo, 1y, 3y, 5y (default: 1mo)"},
         }, required=["symbol"])
-        self._register("stock_chart", "Generate stock price chart (PNG). Requires: pip install akshare yfinance matplotlib. Supports line and candle charts. Saves to charts/ directory.", self._stock.stock_chart, {
+        self._register("stock_chart", "Generate stock price chart (PNG) with volume subplot. A-shares via Tencent API, US/HK via yfinance. Supports line and candle charts. Cached per day.", self._stock.stock_chart, {
             "symbol": {"type": "string", "description": "Stock symbol (e.g. 600519, AAPL)"},
             "period": {"type": "string", "description": "Time range: 1mo, 3mo, 6mo, 1y (default: 3mo)"},
             "chart_type": {"type": "string", "description": "line or candle (default: line)"},
         }, required=["symbol"])
+        self._register("stock_indicators", "Calculate technical indicators: MA (5/10/20/60), RSI (14), MACD (12/26/9), Bollinger Bands (20,2). Pure computation from historical data.", self._stock.stock_indicators, {
+            "symbol": {"type": "string", "description": "Stock symbol (e.g. 600519, AAPL)"},
+            "period": {"type": "string", "description": "Time range for calculation: 3mo, 6mo, 1y (default: 6mo)"},
+        }, required=["symbol"])
+        self._register("stock_market", "Get A-share market overview: major indices (Shanghai, Shenzhen, ChiNext) + sector rankings (top/bottom 5). Data from Tencent + Sina.", self._stock.stock_market, {}, required=[])
 
     # ── 内部注册 ──────────────────────────────────────
 
@@ -175,6 +180,8 @@ class ToolRegistry:
         "stock_info": "_stock",
         "stock_history": "_stock",
         "stock_chart": "_stock",
+        "stock_indicators": "_stock",
+        "stock_market": "_stock",
         "_search_brave": ("_search", "_search_brave"),
         "_search_duckduckgo": ("_search", "_search_duckduckgo"),
         "_search_bing": ("_search", "_search_bing"),
