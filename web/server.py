@@ -26,9 +26,6 @@ app = FastAPI(title="Nano Agent Plus")
 # Session storage: session_id -> {"agent": Agent, "history": list}
 sessions: dict[str, dict] = {}
 
-# Token 消耗统计
-token_stats: dict[str, int] = {"_total_requests": 0}
-
 STATIC_DIR = Path(__file__).parent / "static"
 
 
@@ -110,18 +107,6 @@ async def chat(request: Request):
 
     session_id = get_or_create_session(session_id)
 
-    # Token 消耗统计
-    token_stats["_total_requests"] += 1
-    token_stats[session_id] = token_stats.get(session_id, 0) + 1
-
-    # 日限额检查（可选，设置 DAILY_LIMIT_PER_USER=10 启用）
-    daily_limit = int(os.getenv("DAILY_LIMIT_PER_USER", "0"))
-    if daily_limit > 0 and token_stats.get(session_id, 0) > daily_limit:
-        return StreamingResponse(
-            iter([f"event: error\ndata: {json.dumps({'text': f'今日请求次数已达上限 ({daily_limit})，请明天再试'})}\n\n"]),
-            media_type="text/event-stream",
-        )
-
     return StreamingResponse(
         agent_stream(task, strategy, session_id),
         media_type="text/event-stream",
@@ -154,7 +139,6 @@ async def health():
     return {
         "status": "ok",
         "sessions": len(sessions),
-        "total_requests": token_stats["_total_requests"],
         "model": Config().model,
         "provider": Config().provider,
     }
