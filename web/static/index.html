@@ -165,9 +165,6 @@ function escapeHtml(s) {
 
 function renderMarkdown(text) {
   let html = text;
-  // Images: ![alt](url) — must be before links
-  html = html.replace(/!\[([^\]]*)\]\(([^)]+)\)/g,
-    '<img src="$2" alt="$1" style="max-width:100%;border-radius:8px;margin:8px 0;" />');
   // Headers
   html = html.replace(/^### (.+)$/gm, '<h3 style="font-size:15px;margin:8px 0 4px;">$1</h3>');
   html = html.replace(/^## (.+)$/gm, '<h2 style="font-size:16px;margin:8px 0 4px;">$1</h2>');
@@ -183,12 +180,18 @@ function renderMarkdown(text) {
 
 function linkify(text) {
   // 1. escape HTML
-  // 2. Markdown links: [text](url) → <a> (must be before bare URL)
-  // 3. Bare URLs → <a>
-  // 4. Render markdown (bold/italic/headers/code)
+  // 2. Markdown images: ![alt](url) → <img> (must be before links)
+  // 3. Markdown links: [text](url) → <a>
+  // 4. Bare URLs → <a>
+  // 5. Render markdown (bold/italic/headers/code)
   const escaped = escapeHtml(text);
-  // Markdown links first
+  // Images first (before links, so ![alt](url) isn't consumed by link regex)
   let linked = escaped.replace(
+    /!\[([^\]]*)\]\(([^)]+)\)/g,
+    '<img src="$2" alt="$1" style="max-width:100%;border-radius:8px;margin:8px 0;" />'
+  );
+  // Markdown links
+  linked = linked.replace(
     /\[([^\]]+)\]\((https?:\/\/[^\s\)]+)\)/g,
     '<a href="$2" target="_blank" rel="noopener" style="color:#7c3aed;text-decoration:underline;">$1</a>'
   );
@@ -200,7 +203,7 @@ function linkify(text) {
       return '<a href="' + url + '" target="_blank" rel="noopener" style="color:#7c3aed;text-decoration:underline;">' + url + '</a>' + trailing;
     }
   );
-  // Then render markdown
+  // Then render markdown (headers/bold/italic/code)
   return renderMarkdown(linked);
 }
 
