@@ -313,13 +313,14 @@ async function send() {
               break;
             case 'done':
               if (data.text && data.text !== 'Max iterations reached.') {
-                // 提取思考块里的图片到最终回答
+                // 从工具返回里提取 markdown 图片 ![alt](url)
                 let imgs = '';
-                document.querySelectorAll('.thinking-block .tool-result img, .thinking-block .tool-result a[href$=".png"]').forEach(el => {
-                  const src = el.src || el.href;
-                  if (src && !imgs.includes(src)) imgs += `<img src="${src}" style="max-width:100%;border-radius:8px;margin:8px 0;" />`;
+                document.querySelectorAll('.tool-result').forEach(el => {
+                  const matches = el.textContent.matchAll(/!\[[^\]]*\]\((\/charts\/[^)]+)\)/g);
+                  for (const m of matches) {
+                    if (!imgs.includes(m[1])) imgs += `<img src="${m[1]}" style="max-width:100%;border-radius:8px;margin:8px 0;" />`;
+                  }
                 });
-                // 自动折叠所有思考块
                 document.querySelectorAll('.thinking-block.visible').forEach(b => b.classList.remove('visible'));
                 document.querySelectorAll('.thinking-summary.open').forEach(t => t.classList.remove('open'));
                 currentMsg = null;
