@@ -10,7 +10,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from nano_agent.memory import Memory
+from nano_agent.memory import Memory, LongTermMemory
 
 
 class TestWindowMemory(unittest.TestCase):
@@ -83,8 +83,76 @@ class TestPersistentMemory(unittest.TestCase):
 
     def test_get_summary(self):
         mem = Memory(window_size=5, file_path=self.file_path)
+        # 写入一条记录使文件存在
+        mem.save_persistent("test", "result")
         summary = mem.get_summary()
-        self.assertIn("会话轮数", summary)
+        self.assertIn("Working:", summary)
+        self.assertIn("Persistent:", summary)
+
+
+class TestLongTermMemory(unittest.TestCase):
+    """长期记忆 (SQLite FTS5) 测试。"""
+
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.db_path = os.path.join(self.tmpdir.name, "test_long_term.db")
+
+    def tearDown(self):
+        self.tmpdir.cleanup()
+
+    def test_init_creates_db(self):
+        ltm = LongTermMemory(self.db_path)
+        self.assertTrue(os.path.exists(self.db_path))
+        self.assertEqual(ltm.count(), 0)
+
+    def test_add_and_count(self):
+        ltm = LongTermMemory(self.db_path)
+        ltm.add("calculate 1+1", "result is 2")
+        ltm.add("write a file", "file written")
+        self.assertEqual(ltm.count(), 2)
+
+    def test_search_exact_match(self):
+        ltm = LongTermMemory(self.db_path)
+        ltm.add("calculate 1+1", "result is 2")
+        ltm.add("write a file", "file written")
+        results = ltm.search("calculate")
+        self.assertEqual(len(results), 1)
+        self.assertIn("calculate", results[0]["task"])
+
+    def test_search_no_match(self):
+        ltm = LongTermMemory(self.db_path)
+        ltm.add("hello world", "hi")
+        results = ltm.search("nonexistent_query_xyz")
+        self.assertEqual(len(results), 0)
+
+    def test_search_top_k(self):
+        ltm = LongTermMemory(self.db_path)
+        for i in range(10):
+            ltm.add(f"task number {i}", f"result {i}")
+        results = ltm.search("task", top_k=3)
+        self.assertLessEqual(len(results), 3)
+
+    def test_clear(self):
+        ltm = LongTermMemory(self.db_path)
+        ltm.add("a", "b")
+        self.assertEqual(ltm.count(), 1)
+        ltm.clear()
+        self.assertEqual(ltm.count(), 0)
+
+    def test_memory_load_relevant(self):
+        """测试 Memory 门面的 load_relevant()。"""
+        mem = Memory(window_size=5, file_path=None, long_term_db=self.db_path)
+        mem.save_persistent("python web server", "use fastapi")
+        mem.save_persistent("data analysis", "use pandas")
+        result = mem.load_relevant("python server")
+        self.assertIn("fastapi", result)
+
+    def test_memory_summary_includes_long_term(self):
+        mem = Memory(window_size=5, file_path=None, long_term_db=self.db_path)
+        mem.save_persistent("test", "result")
+        summary = mem.get_summary()
+        self.assertIn("Long-term:", summary)
+        self.assertIn("1 entries", summary)
 
 
 if __name__ == "__main__":

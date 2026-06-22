@@ -134,6 +134,30 @@ class ToolRegistry:
         except Exception as e:
             return f"Error: {type(e).__name__}: {e}"
 
+    def execute_observed(self, name: str, arguments: dict) -> "Observation":
+        """执行工具，返回结构化 Observation（含 tool_name/success/args/metadata）。
+
+        与 execute() 的区别：返回 Observation 对象而非纯字符串。
+        Observation 兼容字符串操作（__str__/__contains__/__eq__），
+        旧代码无需修改。
+        """
+        from .shell import Observation
+        if name not in self._tools:
+            return Observation(tool_name=name, result=f"Error: Unknown tool '{name}'",
+                               success=False, args=arguments)
+        try:
+            result = self._tools[name]["func"](**arguments)
+            return Observation(tool_name=name, result=result, success=True, args=arguments)
+        except TypeError as e:
+            return Observation(tool_name=name, result=f"Error: Invalid arguments — {e}",
+                               success=False, args=arguments)
+        except PermissionError as e:
+            return Observation(tool_name=name, result=f"Error: {e}",
+                               success=False, args=arguments)
+        except Exception as e:
+            return Observation(tool_name=name, result=f"Error: {type(e).__name__}: {e}",
+                               success=False, args=arguments)
+
     # ── 向后兼容委托（旧测试直接调 registry.write_file() 等）──
 
     _DELEGATES = {

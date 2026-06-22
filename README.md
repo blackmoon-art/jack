@@ -227,20 +227,28 @@ Generate 3 approaches → Score: A(9) B(7) C(3)
 ## 记忆系统
 
 ```
-┌─ 窗口记忆 (会话级) ──────────────┐
+┌─ Working Memory (内存) ──────────┐
 │ 保留最近 N 轮对话                │
 │ 自动淘汰旧消息                   │
 │ 用于：上下文连贯性               │
 └──────────────────────────────────┘
                 +
-┌─ 持久记忆 (文件级) ──────────────┐
+┌─ Persistent Memory (文件) ───────┐
 │ 追加写入 agent_memory.md         │
 │ 跨会话保留                       │
 │ 自动轮转 (上限 200 行)           │
-│ 加载最近 200 行                  │
 │ 用于：长期知识累积               │
 └──────────────────────────────────┘
+                +
+┌─ Reflection Memory (文件) ───────┐
+│ 追加写入 reflection_traces.md    │
+│ 跨会话保留                       │
+│ 自动轮转 (上限 200 行)           │
+│ 用于：反思教训复用               │
+└──────────────────────────────────┘
 ```
+
+三层记忆由 `Memory` 门面统一管理，策略和 Agent 不感知存储细节。
 
 ## 配置项
 
@@ -257,8 +265,18 @@ AGENT_MAX_ITERATIONS=10           # 最大工具调用轮数
 AGENT_MAX_TOKENS=8000             # LLM 输出 token 上限
 AGENT_BASH_TIMEOUT=120            # bash 命令超时 (秒)
 AGENT_WORK_DIR=/your/project      # 工作目录（文件操作的根）
+AGENT_ORIENT_MIN_CHARS=200        # Orient 触发阈值 (工具结果字符数)
+
+# ── 记忆 ──
 AGENT_MEMORY_WINDOW=10            # 会话窗口保留轮数
 AGENT_MEMORY_FILE=agent_memory.md # 持久记忆文件路径
+AGENT_REFLECTION_FILE=reflection_traces.md # 反思记忆文件路径
+
+# ── 策略参数 ──
+AGENT_REACT_MAX_STEPS=10          # ReAct 最大步数
+AGENT_REFLEXION_MAX_RETRIES=3     # Reflexion 最大重试次数
+AGENT_TOT_CANDIDATES=3            # ToT 候选方案数
+AGENT_TOT_SCORE_THRESHOLD=6       # ToT 合格分数阈值
 AGENT_RULES_DIR=.agent/rules      # 自定义规则 .md 目录
 
 # ── 日志 ──
@@ -300,7 +318,7 @@ python -m unittest discover tests -v
 | 文件 | 测试数 | 覆盖内容 |
 |------|:---:|------|
 | `tests/test_tools.py` | 26 | bash 安全/超时, 路径沙箱, 文件读写/编辑, glob, grep, calculate, web_search |
-| `tests/test_memory.py` | 8 | 窗口记忆存取/淘汰, 持久记忆存取/截断 |
+| `tests/test_memory.py` | 8 | 窗口记忆存取/淘汰, 持久记忆存取/截断, 摘要 |
 | `tests/test_agent.py` | 8 | Agent 循环, 未知工具回退, 最大迭代, 记忆集成, 规则加载 |
 | `tests/test_orient.py` | 8 | Orient 解读, 规则加载/缓存/匹配 |
 | `tests/test_strategies.py` | 26 | Plan-Execute(6), ReAct(8), Reflexion(6), Tree-of-Thought(6) |
@@ -373,11 +391,12 @@ LLM 看到 `"Error: Timeout"` 会自己调整策略，而不是整个 Agent Loop
 
 短结果 (<200字符) 跳过 Orient 以节省 token。
 
-### 决策 6：Memory 双层设计
+### 决策 6：Memory 三层门面设计
 
 ```
 窗口记忆: 保留最近N轮对话(FIFO淘汰)，进程内，会话结束即丢 → 当前上下文连贯
 持久记忆: 追加写入 agent_memory.md，跨会话保留，自动轮转(上限200行) → 长期知识累积
+反思记忆: 追加写入 reflection_traces.md，跨会话保留，自动轮转 → Reflexion 教训复用
 ```
 
 ### 一次请求的完整流转
@@ -403,8 +422,9 @@ Agent.run(task, strategy)
 │       │  Loop:  回到 Decide                    │
 │       └────────────────────────────────────────┘
 │
-├─ Memory.save_context(task, result)    ← 存会话记忆
-└─ Memory.save_persistent(task, result) ← 存持久记忆
+├─ Memory.save_context(task, result)         ← 存会话记忆
+├─ Memory.save_persistent(task, result)      ← 存持久记忆
+└─ (Reflexion 策略额外存 Memory.save_reflection()) ← 存反思记忆
 ```
 
 ## 阅读指南
@@ -418,10 +438,10 @@ Agent.run(task, strategy)
    看: @dataclass Config, 13个环境变量
    问: 换一个模型改哪里？
 
-2. memory.py        (104行)
-   看: save_context(), get_window_messages(), save_persistent(), load_persistent()
-   看: save_persistent() 自动轮转 (超 200 行截断)
-   问: 进程重启后窗口记忆还在吗？持久记忆呢？
+2. memory.py        (120行)
+   看: 三层记忆 — save_context(), load_persistent(), save_reflection()
+   看: _append_with_rotation() 统一文件轮转
+   问: 进程重启后窗口记忆还在吗？持久记忆和反思记忆呢？
 ```
 
 ### 第 2 层：LLM 抽象（~20 分钟）
@@ -452,7 +472,7 @@ Agent.run(task, strategy)
 ### 第 4 层：Agent 核心（~40 分钟）← 最重要的文件
 
 ```
-5. agent.py         (240行)
+5. agent.py         (265行)
    a) __init__() → 5 个组件怎么装配
    b) run()      → 策略注册表查表 STRATEGY_REGISTRY.get(strategy)
    c) _agent_loop() → O-O-D-A 四步:\        Decide: LLM.chat()
@@ -534,16 +554,16 @@ nano_agent_plus/
 │   │   ├── search.py                #   web_search, fetch_url, search_and_fetch
 │   │   ├── weather.py               #   get_weather
 │   │   └── stock.py                 #   stock_info, stock_history, stock_chart
-│   ├── memory.py                    # 双层记忆 (窗口+文件, 自动轮转)
-│   ├── agent.py                     # Agent 核心 + 策略注册表路由
+│   ├── memory.py                    # 三层记忆门面 (Working+Persistent+Reflection, 自动轮转)
+│   ├── agent.py                     # Agent 核心 + 策略注册表路由 + 参数注入
 │   ├── orient.py                    # 显式 Orient 阶段 + 规则加载
 │   └── strategies/
 │       ├── __init__.py              #   STRATEGY_REGISTRY 注册表
 │       ├── base.py                  #   BaseStrategy 基类 (接口约束 + 事件回调 + JSON重试)
-│       ├── react.py                 #   ReAct (FC驱动, Thought显式可见, 事件透传)
+│       ├── react.py                 #   ReAct (FC驱动, Thought显式可见, 事件透传, 参数可配)
 │       ├── plan_execute.py          #   Plan-Execute (分解→执行→评估→重规划)
-│       ├── reflexion.py             #   Reflexion (自评→反思→重试→教训)
-│       └── tree_of_thought.py       #   Tree-of-Thought (多候选→打分→回溯)
+│       ├── reflexion.py             #   Reflexion (自评→反思→重试→教训持久化)
+│       └── tree_of_thought.py       #   Tree-of-Thought (多候选→打分→回溯, 参数可配)
 └── tests/
     ├── __init__.py
     ├── test_tools.py                # 工具单元测试 (26)
@@ -557,18 +577,65 @@ nano_agent_plus/
 
 | 模块 | 行数 | 职责 |
 |------|:---:|------|
-| `tools/` 包 | 1,000 | 14个工具, 分 7 个子模块 (sandbox/file_ops/shell/search/weather/stock) |
-| `agent.py` | 240 | Agent 类 + O-O-D-A 循环 + 策略注册表路由 |
+| `tools/` 包 | 1,050 | 14个工具, 分 7 个子模块 + Observation 结构化返回 |
+| `agent.py` | 265 | Agent 类 + O-O-D-A 循环 + 策略注册表路由 + 策略参数注入 |
 | `llm.py` | 233 | LLM 抽象 (Anthropic/OpenAI) + 重试 + Anthropic消息转换 |
 | `orient.py` | 170 | 显式 Orient: 解读→关联→规则→建议 |
-| `memory.py` | 104 | 窗口 + 持久记忆 (自动轮转) |
-| `config.py` | 74 | 配置管理 |
+| `memory.py` | 120 | 三层记忆门面 (Working + Persistent + Reflection) |
+| `config.py` | 90 | 配置管理 (含策略参数 + Orient 阈值) |
 | `logging_config.py` | 49 | 统一日志配置 |
 | `strategies/base.py` | 55 | BaseStrategy 基类 (接口约束 + 事件回调 + JSON重试) |
-| 4个策略文件 | 813 | ReAct + Plan-Execute + Reflexion + ToT |
-| **总计** | **~2,738** | 全部自己掌控 |
+| 4个策略文件 | 820 | ReAct + Plan-Execute + Reflexion + ToT |
+| **总计** | **~2,852** | 全部自己掌控 |
+
+## 架构待提升
+
+当前架构评分 **8.5/10**。以下按优先级列出待改进项：
+
+### P3: Agent 类职责偏重
+
+`agent.py` ~260 行承担 5 个职责：组件装配、任务编排、事件分发、核心循环、Prompt 构建。改 prompt 逻辑要动 agent.py，改循环逻辑也要动 agent.py。
+
+**方案**：拆出 `AgentLoop`（O-O-D-A 循环）和 `PromptBuilder`（system_prompt + messages 构建），agent.py 只保留编排。
+
+### P3: LLM 重试不区分错误类型
+
+`LLM.chat()` 对所有异常都重试 3 次，包括 400（参数错误）和 401（key 错误）这类不可重试错误，纯浪费时间。
+
+**方案**：只重试 429/500/502/503/timeout，其余直接 raise。
+
+### P3: Orient JSON 解析未复用 _chat_json
+
+`Orient._parse_orientation()` 自己做 JSON 清理 + 解析，没用 `BaseStrategy._chat_json()`，也没有重试。一次垃圾 JSON 就丢失 Orient 价值。
+
+**方案**：Orient 复用 `_chat_json` 或类似逻辑。
+
+### P3: Web 线程安全
+
+`web/server.py` 的 `sessions` dict 在多请求并发时可能 race——两个请求同时创建同一 session_id。`agent_stream` 里的 `item` 变量在线程异常时可能未定义。
+
+**方案**：`sessions` 加锁，或用 `threading.Lock`。
+
+### P3: default 策略未注册
+
+`default` 是唯一不在 `STRATEGY_REGISTRY` 里的策略，直接调 `_agent_loop`，不走 `BaseStrategy`。导致架构对称性缺失。
+
+**方案**：写一个 `DefaultStrategy(BaseStrategy)` 包装 `_agent_loop`，注册进 registry。
+
+### P4: 工具注册未自动化
+
+新增工具需要手写 OpenAI function schema 并手动 `_register()`。14 个工具已经写好，重复成本已付。但后续如果加很多工具，这个模式会越来越烦。
+
+**方案**：装饰器或基类自动从类型注解生成 schema。
 
 ## 更新日志
+
+### 2026-06-22 深夜续续 (架构文档建议 #3-#6)
+
+- **Memory 三层门面**：`Memory` 从双层改为三层——Working（窗口）+ Persistent（任务历史）+ Reflection（反思教训）。新增 `save_reflection()` / `load_reflections()`，文件轮转逻辑抽取为 `_append_with_rotation()`。新增 `reflection_traces.md` 持久化反思轨迹。
+- **Observation 层**：新建 `Observation` dataclass（`tools/shell.py`），结构化工具返回（含 `tool_name`/`success`/`args`/`metadata`）。`ToolRegistry.execute_observed()` 返回 `Observation`，`execute()` 保持返回 `str` 兼容旧代码。Observation 兼容字符串操作（`__str__`/`__contains__`/`__eq__`）。
+- **Reflexion 轨迹持久化**：`ReflexionStrategy` 初始化时从 `reflection_traces.md` 加载历史教训，每次反思后持久化到文件。进程重启后教训不丢失，跨会话复用。
+- **策略参数配置化**：`Config` 新增 6 个环境变量——`AGENT_REACT_MAX_STEPS`、`AGENT_REFLEXION_MAX_RETRIES`、`AGENT_TOT_CANDIDATES`、`AGENT_TOT_SCORE_THRESHOLD`、`AGENT_ORIENT_MIN_CHARS`、`AGENT_REFLECTION_FILE`。`Agent._strategy_defaults()` 从 Config 注入参数，策略 `__init__` 默认值改为从 config fallback。所有魔法数字可通过 `.env` 调整。
 
 ### 2026-06-22 深夜续 (架构审查 + 修复)
 

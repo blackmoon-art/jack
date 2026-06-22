@@ -43,7 +43,8 @@ class Agent:
         self.llm = LLM(self.config)
         self.tools = ToolRegistry(self.config.work_dir, self.config.bash_timeout,
                                    brave_api_key=self.config.brave_api_key or "")
-        self.memory = Memory(self.config.memory_window, self.config.memory_file)
+        self.memory = Memory(self.config.memory_window, self.config.memory_file,
+                              self.config.reflection_file, self.config.long_term_db)
         self.orient_engine = Orient(self.config, self.llm)
         self._strategy_instance = None
         self._last_orientation: Optional[dict] = None  # 最近一次 Orient 结果
@@ -74,7 +75,10 @@ class Agent:
 
         strategy_cls = STRATEGY_REGISTRY.get(strategy)
         if strategy_cls:
-            final = self._run_strategy(strategy_cls, task, **strategy_kwargs)
+            # 从 Config 注入策略默认参数（可被 strategy_kwargs 覆盖）
+            defaults = self._strategy_defaults(strategy)
+            defaults.update(strategy_kwargs)
+            final = self._run_strategy(strategy_cls, task, **defaults)
         else:  # default
             final, _ = self._agent_loop(base_messages)
 
@@ -100,6 +104,18 @@ class Agent:
         s._emit = self._emit  # 透传事件回调，让策略能发事件
         self._strategy_instance = s
         return s.run(task, self._agent_loop)
+
+    def _strategy_defaults(self, strategy: str) -> dict:
+        """从 Config 获取策略默认参数。"""
+        defaults = {}
+        if strategy == "react":
+            defaults["max_steps"] = self.config.react_max_steps
+        elif strategy == "reflexion":
+            defaults["max_retries"] = self.config.reflexion_max_retries
+        elif strategy == "tree-of-thought":
+            defaults["num_candidates"] = self.config.tot_num_candidates
+            defaults["score_threshold"] = self.config.tot_score_threshold
+        return defaults
 
     # ── 核心循环 (O-O-D-A) ──────────────────────────────
 
@@ -147,7 +163,8 @@ class Agent:
 
                 # ── Act: 执行 ──
                 raw_result = self.tools.execute(name, args)
-                self._emit("tool_result", {"name": name, "result": raw_result})
+                self._emit("tool_result", {"name": name, "result": raw_result,
+                                            "success": not raw_result.startswith("Error:")})
                 logger.debug(f"[Tool Result] {raw_result[:200]}")
 
                 # ── Orient: 显式解读 ──
@@ -181,7 +198,7 @@ class Agent:
         如果观察很短（如简单文本），跳过 LLM 调用以节省 token。
         """
         # 短结果跳过 Orient 以提高效率
-        if len(observation) < 200:
+        if len(observation) < self.config.orient_min_chars:
             return None
 
         try:
@@ -221,6 +238,13 @@ class Agent:
         messages = []
         for msg in self.memory.get_window_messages():
             messages.append(msg)
+        # 注入长期记忆检索结果
+        relevant = self.memory.load_relevant(task, top_k=3)
+        if relevant:
+            messages.append({
+                "role": "system",
+                "content": f"# Relevant Past Experience\n{relevant}"
+            })
         messages.append({"role": "user", "content": task})
         return messages
 

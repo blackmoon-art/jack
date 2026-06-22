@@ -57,6 +57,21 @@ class Config:
     memory_file: Optional[str] = field(
         default_factory=lambda: os.getenv("AGENT_MEMORY_FILE", "agent_memory.md")
     )
+    reflection_file: Optional[str] = field(
+        default_factory=lambda: os.getenv("AGENT_REFLECTION_FILE", "reflection_traces.md")
+    )
+    long_term_db: Optional[str] = field(
+        default_factory=lambda: os.getenv("AGENT_LONG_TERM_DB", "long_term_memory.db")
+    )
+
+    # ── 策略参数 ──
+    react_max_steps: int = int(os.getenv("AGENT_REACT_MAX_STEPS", "10"))
+    reflexion_max_retries: int = int(os.getenv("AGENT_REFLEXION_MAX_RETRIES", "3"))
+    tot_num_candidates: int = int(os.getenv("AGENT_TOT_CANDIDATES", "3"))
+    tot_score_threshold: int = int(os.getenv("AGENT_TOT_SCORE_THRESHOLD", "6"))
+
+    # ── Orient 触发阈值 ──
+    orient_min_chars: int = int(os.getenv("AGENT_ORIENT_MIN_CHARS", "200"))
 
     # ── 自定义规则 / 技能 ──
     rules_dir: Optional[str] = field(

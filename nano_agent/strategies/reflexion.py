@@ -30,10 +30,13 @@ class ReflexionStrategy(BaseStrategy):
     """Reflexion 推理策略 — 自我反思 + 智能重试。"""
 
     def __init__(self, config: Config, llm: LLM, tools: ToolRegistry,
-                 max_retries: int = 3):
+                 max_retries: int = None):
         super().__init__(config, llm, tools)
-        self.max_retries = max_retries
-        self.reflection_memory: list[str] = []  # 跨任务累积的教训
+        self.max_retries = max_retries if max_retries is not None else config.reflexion_max_retries
+        self.reflection_memory: list[str] = []  # 当次会话的教训
+
+        # 从文件加载历史教训
+        self._load_historical_lessons()
 
     def evaluate_result(self, task: str, result: str) -> dict:
         """
@@ -158,16 +161,35 @@ class ReflexionStrategy(BaseStrategy):
             self.reflection_memory.append(reflection)
             logger.info(f"[Reflect] {reflection[:300]}...")
 
-        # 保存反思教训到持久记忆（如果配置了）
+        # 保存反思教训到持久记忆
         if self.reflection_memory:
-            self._save_lessons(task)
+            self._save_lessons_to_file(task, all_reflections, best_score)
 
         return best_result
 
-    def _save_lessons(self, task: str):
-        """保存反思教训到文件（供 Memory 加载）。"""
-        # Memory 通过 config.memory_file 持久化，这里确保最近的教训在上下文中
-        pass
+    def _load_historical_lessons(self):
+        """从反思记忆文件加载历史教训。"""
+        from ..memory import Memory
+        # 临时 Memory 实例读取反思文件
+        mem = Memory(file_path=None, reflection_path=self.config.reflection_file)
+        content = mem.load_reflections()
+        if content:
+            # 提取 LESSON 行
+            for line in content.split("\n"):
+                if line.strip().startswith("**Reflection:**"):
+                    lesson = line.replace("**Reflection:**", "").strip()
+                    if lesson:
+                        self.reflection_memory.append(lesson)
+            if self.reflection_memory:
+                logger.info(f"[Reflexion] Loaded {len(self.reflection_memory)} historical lessons")
+
+    def _save_lessons_to_file(self, task: str, all_reflections: list[str], best_score: int):
+        """保存反思轨迹到文件。"""
+        from ..memory import Memory
+        mem = Memory(file_path=None, reflection_path=self.config.reflection_file)
+        for reflection in all_reflections:
+            eval_result = {"status": "retry", "score": best_score}
+            mem.save_reflection(task, reflection, eval_result)
 
     def get_lessons(self) -> list[str]:
         """返回所有已学习的教训。"""

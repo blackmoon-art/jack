@@ -35,9 +35,9 @@ class ReActStrategy(BaseStrategy):
     """
 
     def __init__(self, config: Config, llm: LLM, tools: ToolRegistry,
-                 max_steps: int = 10):
+                 max_steps: int = None):
         super().__init__(config, llm, tools)
-        self.max_steps = max_steps
+        self.max_steps = max_steps if max_steps is not None else config.react_max_steps
         self.thought_trail: list[dict] = []
 
     # ── ReAct 系统提示词 ─────────────────────────────────
