@@ -87,7 +87,9 @@
   <button id="send">发送</button>
 </footer>
 
+<script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
 <script>
+mermaid.initialize({ startOnLoad: false, theme: 'dark', securityLevel: 'loose' });
 let SESSION_ID = localStorage.getItem('nano_session_id');
 if (!SESSION_ID) {
   SESSION_ID = crypto.randomUUID().slice(0, 12);
@@ -124,6 +126,7 @@ function addMessage(role, text) {
   div.innerHTML = text ? `<div class="content">${linkify(text)}</div>` : '';
   $messages.appendChild(div);
   $messages.scrollTop = $messages.scrollHeight;
+  renderMermaidBlocks(div);
   return div;
 }
 
@@ -165,6 +168,20 @@ function ensureThinkingTag() {
   currentMsg.insertBefore(tag, currentMsg.firstChild);
 }
 
+async function renderMermaidBlocks(container) {
+  const blocks = container.querySelectorAll('pre code.language-mermaid, code.language-mermaid');
+  for (const block of blocks) {
+    try {
+      const id = 'mermaid_' + Math.random().toString(36).slice(2, 8);
+      const { svg } = await mermaid.render(id, block.textContent);
+      const div = document.createElement('div');
+      div.innerHTML = svg;
+      div.style.cssText = 'background:#1e1e2e;border-radius:8px;padding:16px;margin:8px 0;';
+      block.parentElement.replaceWith(div);
+    } catch(e) { /* mermaid syntax error, leave as code block */ }
+  }
+}
+
 function escapeHtml(s) {
   return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 }
@@ -181,6 +198,9 @@ function renderMarkdown(text) {
   html = html.replace(/\*(.+?)\*/g, '<em>$1</em>');
   // Inline code
   html = html.replace(/`([^`]+)`/g, '<code style="background:#333;padding:1px 5px;border-radius:3px;font-size:12px;">$1</code>');
+  // Mermaid code blocks: ```mermaid ... ```
+  html = html.replace(/<code>mermaid\n([\s\S]*?)<\/code>/g,
+    '<code class="language-mermaid">$1</code>');
   return html;
 }
 

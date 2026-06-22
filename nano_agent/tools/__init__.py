@@ -21,6 +21,7 @@ from .weather import Weather
 from .stock import Stock
 from .ppt import PPT
 from .chart import Chart
+from .diagram import Diagram
 
 logger = logging.getLogger("nano_agent.tools")
 
@@ -43,6 +44,7 @@ class ToolRegistry:
         self._stock = Stock(work_dir)
         self._ppt = PPT(work_dir)
         self._chart = Chart(work_dir)
+        self._diagram = Diagram(work_dir)
 
         # 注册内部工具
         self._tools: dict[str, dict[str, Any]] = {}
@@ -118,6 +120,16 @@ class ToolRegistry:
             "filename": {"type": "string", "description": "Output filename (optional, defaults to title)"},
             "subtitle": {"type": "string", "description": "Subtitle for the title slide (optional)"},
         }, required=["title", "slides"])
+        self._register("mermaid_chart", "Generate a diagram/flowchart from Mermaid syntax (PNG via mermaid.ink). Supports graph, flowchart, sequenceDiagram, pie, gantt, etc. Returns an image URL.", self._diagram.mermaid_chart, {
+            "code": {"type": "string", "description": "Mermaid syntax code. E.g. 'graph TD\\n  A[Start] --> B[End]'. Supports graph, flowchart, sequenceDiagram, classDiagram, pie, gantt, erDiagram."},
+            "theme": {"type": "string", "description": "dark or default (default: dark)"},
+        }, required=["code"])
+        self._register("drawio_diagram", "Generate a Draw.io diagram (flowchart/architecture/UML). Returns a diagrams.net link for viewing/editing.", self._diagram.drawio_diagram, {
+            "title": {"type": "string", "description": "Diagram title"},
+            "diagram_type": {"type": "string", "description": "flowchart | architecture | timeline | uml (default: flowchart)"},
+            "nodes": {"type": "string", "description": "Nodes: one per line, format 'id:label:type:x:y:width:height'. Type: rectangle, ellipse, diamond, parallelogram, cylinder. x/y/w/h optional."},
+            "edges": {"type": "string", "description": "Edges: one per line, format 'source:target:label'. Label optional."},
+        }, required=["nodes"])
         self._register("generate_chart", "Generate a chart (line, bar, scatter, pie, histogram, area) and save as PNG image. Returns a URL for viewing. Data format: comma-separated numbers; multiple series separated by semicolons.", self._chart.generate_chart, {
             "chart_type": {"type": "string", "description": "Chart type: line, bar, scatter, pie, histogram, area (default: line)"},
             "title": {"type": "string", "description": "Chart title"},
@@ -211,6 +223,8 @@ class ToolRegistry:
         "stock_indicators": "_stock",
         "stock_market": "_stock",
         "create_ppt": "_ppt",
+        "mermaid_chart": "_diagram",
+        "drawio_diagram": "_diagram",
         "generate_chart": "_chart",
         "_search_brave": ("_search", "_search_brave"),
         "_search_duckduckgo": ("_search", "_search_duckduckgo"),
