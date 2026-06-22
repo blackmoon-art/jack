@@ -17,3 +17,5 @@ agent_memory.md
 *.egg-info/
 usage.json
 *.swp
+cat.svg
+gen_liu_bei.py
