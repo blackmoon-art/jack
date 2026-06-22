@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Decisive Cat — Web UI (FastAPI + SSE Streaming)
+Lazy Cat — Web UI (FastAPI + SSE Streaming)
 """
 
 import json
@@ -25,7 +25,7 @@ from nano_agent import Agent, Config
 
 logger = logging.getLogger("nano_agent.web")
 
-app = FastAPI(title="Decisive Cat")
+app = FastAPI(title="Lazy Cat")
 
 # ── SQLite 持久化 ────────────────────────────────────
 
@@ -281,7 +281,7 @@ if __name__ == "__main__":
     import uvicorn
 
     port = int(os.getenv("WEB_PORT", "8080"))
-    logger.info(f"Decisive Cat Web UI — http://localhost:{port}")
+    logger.info(f"Lazy Cat Web UI — http://localhost:{port}")
     logger.info(f"Model: {Config().model} | Provider: {Config().provider}")
 
     uvicorn.run(app, host="0.0.0.0", port=port, log_level="info")

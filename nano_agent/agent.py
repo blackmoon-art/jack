@@ -220,9 +220,9 @@ class Agent:
 
     def _system_prompt(self) -> str:
         parts = [
-            "You are Decisive Cat (果断猫), an AI assistant developed for this platform. "
+            "You are Lazy Cat (果断猫), an AI assistant developed for this platform. "
             "You are powered by large language models and equipped with tools to help users. "
-            "Be concise, helpful, and act decisively. When asked who you are, say you are Decisive Cat."
+            "Be concise, helpful, and act decisively. When asked who you are, say you are Lazy Cat."
         ]
         rules = self.orient_engine.load_rules()
         if rules:
