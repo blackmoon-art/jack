@@ -72,6 +72,11 @@ class Agent:
         self._on_event = on_event
         self._emit("text", {"text": f"Task: {task}\nStrategy: {strategy}"})
 
+        # auto 模式：LLM 根据用户意图自动选策略
+        if strategy == "auto":
+            strategy = self._auto_select_strategy(task)
+            self._emit("text", {"text": f"🤖 Auto-selected strategy: {strategy}"})
+
         strategy_cls = STRATEGY_REGISTRY.get(strategy)
         if not strategy_cls:
             raise ValueError(f"Unknown strategy: '{strategy}'. Available: {list(STRATEGY_REGISTRY.keys())}")
@@ -103,6 +108,30 @@ class Agent:
         s._emit = self._emit  # 透传事件回调，让策略能发事件
         self._strategy_instance = s
         return s.run(task, self._agent_loop)
+
+    def _auto_select_strategy(self, task: str) -> str:
+        """LLM 根据用户意图自动选择策略。"""
+        prompt = (
+            "Classify this task into exactly one strategy. Reply with ONLY the strategy name.\n\n"
+            "Strategies:\n"
+            "- default: simple Q&A, knowledge, calculation, chat\n"
+            "- react: needs step-by-step visible reasoning, debugging, audit trail\n"
+            "- plan-execute: complex multi-step task, project, report, analysis\n"
+            "- reflexion: quality-critical, needs self-review, error-prone task\n"
+            "- tree-of-thought: multiple valid approaches, creative brainstorming, optimization\n\n"
+            f"Task: {task}\n\nStrategy:"
+        )
+        try:
+            resp = self.llm.chat(
+                messages=[{"role": "user", "content": prompt}],
+                tools=[], system="Reply with only one word.",
+            )
+            name = resp["text"].strip().lower()
+            if name in STRATEGY_REGISTRY:
+                return name
+        except Exception:
+            pass
+        return "default"
 
     def _strategy_defaults(self, strategy: str) -> dict:
         """从 Config 获取策略默认参数。"""

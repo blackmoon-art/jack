@@ -44,6 +44,40 @@ class Shell:
             self._env['PATH'] = venv_bin + os.pathsep + self._env.get('PATH', '')
             self._env['VIRTUAL_ENV'] = os.path.join(work_dir, '.venv')
 
+    # 路径沙箱：禁止访问工作目录外部的路径
+    _BLOCKED_PATH_TOKENS = ('~', '../', '/Users/', '/home/', '/etc/', '/var/',
+                            '/sys/', '/proc/', '/root/', '/tmp/', '/private/')
+
+    def _check_path_sandbox(self, command: str) -> str | None:
+        """检查命令是否试图访问工作目录外的路径。返回错误信息或 None。"""
+        # 1. 阻止 ~ 和工作目录外的敏感路径
+        for token in self._BLOCKED_PATH_TOKENS:
+            if token in command:
+                if token == '../':
+                    pass  # 由下面的 .. 逃逸检查处理
+                # 允许 work_dir 下的路径（如 /Users/xxx/agent_workspace/...）
+                elif self.work_dir in command:
+                    continue
+                else:
+                    return f"Access denied: path '{token}' is outside workspace"
+        # 2. 阻止 ~ 展开
+        if '~' in command:
+            return "Access denied: '~' is not allowed (workspace-only access)"
+        # 3. 阻止 .. 逃逸
+        if '..' in command:
+            # 解析后的路径必须在 work_dir 内
+            try:
+                # 模拟路径解析
+                test_parts = shlex.split(command)
+                for part in test_parts:
+                    if '/' in part or part.startswith('-') is False:
+                        resolved = os.path.normpath(os.path.join(self.work_dir, part))
+                        if not resolved.startswith(os.path.normpath(self.work_dir)):
+                            return f"Access denied: path escapes workspace ('{part}')"
+            except ValueError:
+                pass
+        return None
+
     # 危险模式黑名单 — bash -c 内部不允许的命令
     _DANGEROUS_PATTERNS = (
         'rm -rf /', 'mkfs', 'dd if=', ':(){:|:&}', 'format c:',
@@ -75,6 +109,11 @@ class Shell:
                 f"Allowed prefixes: {', '.join(_SAFE_COMMAND_PREFIXES[:15])}...",
                 args={"command": command},
             )
+
+        # 路径沙箱：禁止访问工作目录外部
+        path_error = self._check_path_sandbox(command)
+        if path_error:
+            return Observation.error("bash", path_error, args={"command": command})
 
         # bash -c 安全检查：对内部命令做递归白名单 + 危险模式黑名单
         if cmd_name == 'bash' and '-c' in parts:
