@@ -1,7 +1,7 @@
 """画图工具：generate_chart — matplotlib 生成 14 种图表。
 
 line | curve | bar | scatter | pie | histogram | area
-heatmap | radar | bubble | function | draw | cat
+heatmap | radar | bubble | function
 
 图片保存到 web/static/charts/ 目录，前端可访问。
 """
@@ -38,7 +38,7 @@ class Chart:
         style: str = "dark",
     ) -> str:
         # 解析数据 (raw types 不过度拆分逗号)
-        raw_types = {"draw", "cat"}
+        raw_types = set()
         if chart_type in raw_types:
             data_sets = [[data.strip()]] if data.strip() else [[]]
             label_sets = [[labels.strip()]] if labels.strip() else [[]]
@@ -49,7 +49,7 @@ class Chart:
             except Exception as e:
                 return f"Error parsing data: {e}"
 
-        no_data_types = {"cat", "draw"}
+        no_data_types = set()
         if (not data_sets or not data_sets[0]) and chart_type not in no_data_types:
             return "Error: data is required (e.g. '10,20,30,40')"
 
@@ -98,12 +98,8 @@ class Chart:
                 self._draw_bubble(ax, data_sets, label_sets, is_dark)
             elif chart_type == "function":
                 self._draw_function(ax, data_sets, label_sets, is_dark)
-            elif chart_type == "cat":
-                self._draw_cat(ax, data_sets, label_sets, is_dark)
-            elif chart_type == "draw":
-                self._draw_freeform(ax, data_sets, label_sets, is_dark)
             else:
-                return f"Error: Unknown chart type '{chart_type}'. Supported: line, curve, bar, scatter, pie, histogram, area, heatmap, radar, bubble, function, cat, draw"
+                return f"Error: Unknown chart type '{chart_type}'. Supported: line, curve, bar, scatter, pie, histogram, area, heatmap, radar, bubble, function"
         except Exception as e:
             plt.close(fig)
             return f"Error generating chart: {e}"
@@ -336,72 +332,6 @@ class Chart:
         ax.set_title(f"y = {expr}", color=fg, fontsize=14, fontweight="bold")
         ax.set_xlabel("x", color=fg)
         ax.set_ylabel("y", color=fg)
-
-    def _draw_cat(self, ax, data_sets, label_sets, is_dark=True):
-        """画一只几何猫。"""
-        from matplotlib.patches import Circle, Ellipse, Wedge, Polygon
-        fg = "#e0e0e0" if is_dark else "#333"
-        ax.set_xlim(-5, 5); ax.set_ylim(-5, 5); ax.set_aspect("equal"); ax.axis("off")
-        # 耳朵
-        for sx, sy, x in [(-1.8, 1.5, -1.8), (1.8, 1.5, 1.8)]:
-            ear = Polygon([(x-0.8, sy), (x+0.8, sy), (x, 3.2)], closed=True,
-                          facecolor="#7c3aed", edgecolor=fg, linewidth=2)
-            ax.add_patch(ear)
-            ie = Polygon([(x-0.4, sy), (x+0.4, sy), (x, 2.8)], closed=True,
-                         facecolor="#c4b5fd", edgecolor="none")
-            ax.add_patch(ie)
-        # 脸
-        ax.add_patch(Circle((0, 0), 2.5, facecolor="#7c3aed", edgecolor=fg, linewidth=2))
-        # 眼睛
-        for x in [-0.9, 0.9]:
-            ax.add_patch(Ellipse((x, 0.5), 0.7, 0.9, facecolor="white", edgecolor=fg))
-            ax.add_patch(Ellipse((x, 0.5), 0.35, 0.5, facecolor="#1a1a2e"))
-        # 鼻子
-        ax.add_patch(Polygon([(0, -0.5), (-0.3, -0.8), (0.3, -0.8)], closed=True,
-                              facecolor="#f59e0b", edgecolor=fg))
-        # 胡须
-        for x, y, dx in [(-0.6, -0.6, -1.5), (-0.6, -0.8, -1.6), (0.6, -0.6, 1.5), (0.6, -0.8, 1.6)]:
-            ax.plot([x, x+dx], [y, y+dx*0.1], color=fg, linewidth=0.8)
-        # 嘴
-        for dx in [-0.3, 0.3]:
-            ax.plot([0, dx], [-0.8, -1.2], color=fg, linewidth=1)
-
-    def _draw_freeform(self, ax, data_sets, label_sets, is_dark=True):
-        """自由绘图 — labels 每行一条指令: circle:x,y,r,color | rect:x,y,w,h,color
-        | ellipse:x,y,rx,ry,color | line:x1,y1,x2,y2,linewidth,color
-        | triangle:x1,y1,x2,y2,x3,y3,color"""
-        from matplotlib.patches import Circle, Rectangle, Ellipse, Polygon
-        fg = "#e0e0e0" if is_dark else "#333"
-        ax.set_xlim(-8, 8); ax.set_ylim(-8, 8); ax.set_aspect("equal"); ax.axis("off")
-        shapes = label_sets[0] if label_sets else data_sets[0]
-        for cmd in shapes:
-            parts = cmd.split(":")
-            kind = parts[0].strip()
-            try:
-                if kind == "circle":
-                    x, y, r = float(parts[1]), float(parts[2]), float(parts[3])
-                    color = parts[4].strip() if len(parts) > 4 else "#7c3aed"
-                    ax.add_patch(Circle((x, y), r, facecolor=color, edgecolor=fg, linewidth=1.5))
-                elif kind == "rect":
-                    x, y, w, h = float(parts[1]), float(parts[2]), float(parts[3]), float(parts[4])
-                    color = parts[5].strip() if len(parts) > 5 else "#7c3aed"
-                    ax.add_patch(Rectangle((x-w/2, y-h/2), w, h, facecolor=color, edgecolor=fg, linewidth=1.5))
-                elif kind == "ellipse":
-                    x, y, rx, ry = float(parts[1]), float(parts[2]), float(parts[3]), float(parts[4])
-                    color = parts[5].strip() if len(parts) > 5 else "#7c3aed"
-                    ax.add_patch(Ellipse((x, y), rx*2, ry*2, facecolor=color, edgecolor=fg, linewidth=1.5))
-                elif kind == "line":
-                    x1, y1, x2, y2 = float(parts[1]), float(parts[2]), float(parts[3]), float(parts[4])
-                    lw = float(parts[5]) if len(parts) > 5 and parts[5] else 1.5
-                    color = parts[6].strip() if len(parts) > 6 else fg
-                    ax.plot([x1, x2], [y1, y2], color=color, linewidth=lw)
-                elif kind == "triangle":
-                    pts = [(float(parts[1]), float(parts[2])), (float(parts[3]), float(parts[4])),
-                           (float(parts[5]), float(parts[6]))]
-                    color = parts[7].strip() if len(parts) > 7 else "#7c3aed"
-                    ax.add_patch(Polygon(pts, closed=True, facecolor=color, edgecolor=fg, linewidth=1.5))
-            except (ValueError, IndexError):
-                pass
 
     # ── 清理 ──
 
