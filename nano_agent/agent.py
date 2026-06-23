@@ -161,10 +161,9 @@ class Agent:
                 logger.info(f"[Tool] {name}({json.dumps(args, ensure_ascii=False)[:200]})")
 
                 # ── Act: 执行 ──
-                raw_result = self.tools.execute(name, args)
-                # Observation 兼容：success 从对象取，字符操作委托到 result
-                is_success = raw_result.success if hasattr(raw_result, "success") else not str(raw_result).startswith("Error:")
-                result_text = str(raw_result)
+                observation = self.tools.execute(name, args)
+                result_text = str(observation)
+                is_success = observation.success if hasattr(observation, "success") else not result_text.startswith("Error:")
                 self._emit("tool_result", {"name": name, "result": result_text,
                                             "success": is_success})
                 logger.debug(f"[Tool Result] {result_text[:200]}")
@@ -260,12 +259,12 @@ class Agent:
         messages = []
         for msg in self.memory.get_window_messages():
             messages.append(msg)
-        # 注入长期记忆检索结果
+        # 注入长期记忆检索结果（用 user role 避免 Anthropic 转换丢失）
         relevant = self.memory.load_relevant(task, top_k=3)
         if relevant:
             messages.append({
-                "role": "system",
-                "content": f"# Relevant Past Experience\n{relevant}"
+                "role": "user",
+                "content": f"[Context from past experience]\n{relevant}"
             })
         messages.append({"role": "user", "content": task})
         return messages

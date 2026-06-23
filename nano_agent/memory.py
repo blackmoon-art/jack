@@ -14,6 +14,7 @@ Memory 门面统一管理四层，对外暴露简洁接口。
 import logging
 import os
 import sqlite3
+import threading
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
@@ -28,18 +29,29 @@ class LongTermMemory:
     存储所有任务的历史记录，支持语义检索。
     零依赖（sqlite3 是 Python stdlib），FTS5 是 SQLite 内置全文搜索引擎。
 
-    未来可替换为向量数据库（Chroma/Milvus），接口不变。
+    连接管理：使用 threading.local() 实现线程局部连接，
+    避免每次操作开关连接，也避免多线程共享连接的线程安全问题。
     """
 
     def __init__(self, db_path: str = "long_term_memory.db"):
         self.db_path = db_path
+        self._local = threading.local()
         self._init_db()
+
+    @property
+    def _conn(self) -> sqlite3.Connection:
+        """获取当前线程的 SQLite 连接（懒创建）。"""
+        conn = getattr(self._local, 'conn', None)
+        if conn is None:
+            conn = sqlite3.connect(self.db_path, check_same_thread=False)
+            conn.row_factory = None
+            self._local.conn = conn
+        return conn
 
     def _init_db(self):
         """初始化 FTS5 全文搜索表。"""
         try:
-            conn = sqlite3.connect(self.db_path)
-            conn.execute("""
+            self._conn.execute("""
                 CREATE VIRTUAL TABLE IF NOT EXISTS memories USING fts5(
                     task,
                     result,
@@ -48,8 +60,7 @@ class LongTermMemory:
                     tokenize='unicode61'
                 )
             """)
-            conn.commit()
-            conn.close()
+            self._conn.commit()
         except Exception as e:
             logger.warning(f"Failed to init long-term memory DB: {e}")
             self.db_path = None  # 禁用
@@ -60,13 +71,11 @@ class LongTermMemory:
             return
         try:
             content = f"Task: {task}\nResult: {result}"
-            conn = sqlite3.connect(self.db_path)
-            conn.execute(
+            self._conn.execute(
                 "INSERT INTO memories (task, result, content, created_at) VALUES (?, ?, ?, ?)",
                 (task, result[:2000], content, datetime.now().isoformat())
             )
-            conn.commit()
-            conn.close()
+            self._conn.commit()
         except Exception as e:
             logger.warning(f"Failed to add long-term memory: {e}")
 
@@ -79,13 +88,12 @@ class LongTermMemory:
         if not self.db_path:
             return []
         try:
-            conn = sqlite3.connect(self.db_path)
             # 转义特殊字符，用 OR 连接查询词（更宽松匹配）
             words = query.replace('"', '').split()
             safe_query = " OR ".join(w for w in words if len(w) > 1)[:200]
             if not safe_query:
                 return []
-            rows = conn.execute(
+            rows = self._conn.execute(
                 """SELECT task, result, created_at, bm25(memories) as score
                    FROM memories
                    WHERE memories MATCH ?
@@ -93,7 +101,6 @@ class LongTermMemory:
                    LIMIT ?""",
                 (safe_query, top_k)
             ).fetchall()
-            conn.close()
             return [
                 {"task": r[0], "result": r[1], "created_at": r[2], "score": r[3]}
                 for r in rows
@@ -107,10 +114,7 @@ class LongTermMemory:
         if not self.db_path:
             return 0
         try:
-            conn = sqlite3.connect(self.db_path)
-            count = conn.execute("SELECT COUNT(*) FROM memories").fetchone()[0]
-            conn.close()
-            return count
+            return self._conn.execute("SELECT COUNT(*) FROM memories").fetchone()[0]
         except Exception:
             return 0
 
@@ -119,10 +123,8 @@ class LongTermMemory:
         if not self.db_path:
             return
         try:
-            conn = sqlite3.connect(self.db_path)
-            conn.execute("DELETE FROM memories")
-            conn.commit()
-            conn.close()
+            self._conn.execute("DELETE FROM memories")
+            self._conn.commit()
         except Exception as e:
             logger.warning(f"Failed to clear long-term memory: {e}")
 

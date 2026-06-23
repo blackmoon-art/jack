@@ -170,8 +170,9 @@ Final Answer: The current directory contains 2 files: agent.py and README.md."""
                     logger.info(f"🔧 Action: {name}({json.dumps(args, ensure_ascii=False)[:200]})")
                     self.emit("tool_call", {"name": name, "args": args})
 
-                    # 执行工具（使用 ToolRegistry，而非正则解析）
-                    result = self.tools.execute(name, args)
+                    # 执行工具（使用 ToolRegistry，返回 Observation）
+                    observation = self.tools.execute(name, args)
+                    result = str(observation)
                     logger.info(f"📤 Observation: {result[:300]}")
                     self.emit("tool_result", {"name": name, "result": result})
 

@@ -174,25 +174,11 @@ class ToolRegistry:
         """返回所有工具的 OpenAI tool schema 列表。"""
         return [t["schema"] for t in self._tools.values()]
 
-    def execute(self, name: str, arguments: dict) -> str:
-        """执行指定工具，返回结果字符串。"""
-        if name not in self._tools:
-            return f"Error: Unknown tool '{name}'"
-        try:
-            return self._tools[name]["func"](**arguments)
-        except TypeError as e:
-            return f"Error: Invalid arguments — {e}"
-        except PermissionError as e:
-            return f"Error: {e}"
-        except Exception as e:
-            return f"Error: {type(e).__name__}: {e}"
+    def execute(self, name: str, arguments: dict) -> Observation:
+        """执行指定工具，返回结构化 Observation。
 
-    def execute_observed(self, name: str, arguments: dict) -> "Observation":
-        """执行工具，返回结构化 Observation（含 tool_name/success/args/metadata）。
-
-        与 execute() 的区别：返回 Observation 对象而非纯字符串。
         Observation 兼容字符串操作（__str__/__contains__/__eq__），
-        旧代码无需修改。
+        旧代码的 str() 调用不受影响。
         """
         from .shell import Observation
         if name not in self._tools:
@@ -200,7 +186,12 @@ class ToolRegistry:
                                success=False, args=arguments)
         try:
             result = self._tools[name]["func"](**arguments)
-            return Observation(tool_name=name, result=result, success=True, args=arguments)
+            # 如果工具已经返回 Observation，直接用；否则包装
+            if isinstance(result, Observation):
+                return result
+            is_success = not str(result).startswith("Error:")
+            return Observation(tool_name=name, result=str(result),
+                               success=is_success, args=arguments)
         except TypeError as e:
             return Observation(tool_name=name, result=f"Error: Invalid arguments — {e}",
                                success=False, args=arguments)

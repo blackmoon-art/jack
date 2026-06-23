@@ -80,6 +80,14 @@ class Shell:
     _DANGEROUS_PATTERNS = (
         'rm -rf /', 'mkfs', 'dd if=', ':(){:|:&}', 'format c:',
         'shutdown', 'reboot', 'init 0', 'init 6',
+        'curl', 'wget',  # 防止下载执行
+        'chmod 777', 'chown',  # 权限提升
+        'sudo', 'su ',  # 提权
+        '>/etc/', '>/var/', '>/sys/',  # 写系统目录
+        'nc -', 'ncat', 'socat',  # 反弹 shell
+        'python -c', 'python3 -c', 'node -e', 'perl -e', 'ruby -e',  # 脚本注入
+        'import os', 'os.system', 'subprocess',  # Python 注入
+        '| bash', '| sh', '| zsh',  # 管道执行
     )
 
     def bash(self, command: str) -> str:
@@ -98,12 +106,26 @@ class Shell:
                 f"Allowed prefixes: {', '.join(_SAFE_COMMAND_PREFIXES[:15])}..."
             )
 
-        # bash -c 安全检查：禁止危险模式
+        # bash -c 安全检查：对内部命令做递归白名单 + 危险模式黑名单
         if cmd_name == 'bash' and '-c' in parts:
             inner_cmd = ' '.join(parts[parts.index('-c') + 1:])
+            inner_lower = inner_cmd.lower()
+            # 黑名单检查
             for pattern in self._DANGEROUS_PATTERNS:
-                if pattern in inner_cmd.lower():
-                    return f"Error: Dangerous pattern blocked in bash -c command"
+                if pattern.lower() in inner_lower:
+                    return f"Error: Dangerous pattern blocked in bash -c command: {pattern}"
+            # 递归白名单：内部命令的第一个词也必须在白名单中
+            try:
+                inner_parts = shlex.split(inner_cmd)
+            except ValueError:
+                return "Error: Invalid inner command in bash -c"
+            if inner_parts:
+                inner_cmd_name = os.path.basename(inner_parts[0])
+                if not inner_cmd_name.startswith(_SAFE_COMMAND_PREFIXES_TUPLE):
+                    return (
+                        f"Error: Inner command '{inner_cmd_name}' in bash -c "
+                        f"is not in the allowed list."
+                    )
 
         try:
             r = subprocess.run(
