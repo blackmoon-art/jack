@@ -658,6 +658,14 @@ nano_agent_plus/
 
 ## 更新日志
 
+### 2026-06-23 (上午重构)
+
+- **TOOLS 声明式注册**：各工具子模块声明 `TOOLS` 类变量，`ToolRegistry.__init__` 自动遍历注册。加工具只改子模块不改 `__init__.py`。
+- **BaseStrategy 统一 build_messages**：窗口记忆 + 长期记忆自动注入，所有策略一致。新增 `memory` 参数透传。
+- **Agent.execute_tool 提取**：工具执行逻辑从 `_agent_loop` 抽成独立方法，可复用。
+- **stock_indicators 独立文件**：从 `stock.py` 拆分。`_draw_shapes` 统一 draw/cat 图表。
+- **Observation 独立**：`observation.py`，`ToolRegistry.execute` 统一返回 `Observation`。
+
 ### 2026-06-23 (午间)
 
 - **搜索链优先级调整**：Bing（cn优先）→ DDG → Brave → SearXNG → Wikipedia。国内环境 Bing 最稳定，超时从 15s 降至 8s 实现快速降级。

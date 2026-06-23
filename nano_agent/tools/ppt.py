@@ -25,11 +25,22 @@ def _ensure_pptx():
 class PPT:
     # 工具注册声明
     TOOLS = [
-        ("create_ppt", "Create a PowerPoint presentation.", "create_ppt",
-         {"title": {"type": "string", "description": "Presentation title"},
-          "slides": {"type": "string", "description": "JSON array of slide objects"},
-          "filename": {"type": "string", "description": "Output filename (default: auto)"}},
-         ["title"]),
+        ("create_ppt",
+         "Generate a PowerPoint presentation (.pptx) with title slide and content slides. "
+         "Supports title, content, bullets, and two-column layouts. Dark theme with purple accents. "
+         "Auto-installs python-pptx on first use.",
+         "create_ppt",
+         {"title": {"type": "string", "description": "Main title of the presentation"},
+          "slides": {"type": "array", "description": "List of slides. Each slide is an object with: type (title|content|bullets|two_column), title, body.",
+                    "items": {"type": "object",
+                              "properties": {"type": {"type": "string", "description": "Slide layout type: title, content, bullets, two_column"},
+                                              "title": {"type": "string", "description": "Slide title"},
+                                              "body": {"type": "string", "description": "Slide body text. For bullets type, use newlines to separate items."},
+                                              "body_left": {"type": "string", "description": "Left column text (two_column type only)"},
+                                              "body_right": {"type": "string", "description": "Right column text (two_column type only)"}}}},
+          "filename": {"type": "string", "description": "Output filename (optional, defaults to title)"},
+          "subtitle": {"type": "string", "description": "Subtitle for the title slide (optional)"}},
+         ["title", "slides"]),
     ]
 
     def __init__(self, work_dir: str):

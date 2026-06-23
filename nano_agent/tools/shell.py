@@ -58,20 +58,22 @@ class Shell:
         '| bash', '| sh', '| zsh',  # 管道执行
     )
 
-    def bash(self, command: str) -> str:
+    def bash(self, command: str) -> Observation:
         """安全执行 bash 命令：shell=False + shlex + 白名单前缀。"""
         try:
             parts = shlex.split(command)
         except ValueError as e:
-            return f"Error: Invalid shell syntax — {e}"
+            return Observation.error("bash", f"Invalid shell syntax — {e}", args={"command": command})
         if not parts:
-            return "Error: Empty command"
+            return Observation.error("bash", "Empty command", args={"command": command})
 
         cmd_name = os.path.basename(parts[0])
         if not cmd_name.startswith(_SAFE_COMMAND_PREFIXES_TUPLE):
-            return (
-                f"Error: Command '{parts[0]}' is not in the allowed list. "
-                f"Allowed prefixes: {', '.join(_SAFE_COMMAND_PREFIXES[:15])}..."
+            return Observation.error(
+                "bash",
+                f"Command '{parts[0]}' is not in the allowed list. "
+                f"Allowed prefixes: {', '.join(_SAFE_COMMAND_PREFIXES[:15])}...",
+                args={"command": command},
             )
 
         # bash -c 安全检查：对内部命令做递归白名单 + 危险模式黑名单
@@ -81,18 +83,19 @@ class Shell:
             # 黑名单检查
             for pattern in self._DANGEROUS_PATTERNS:
                 if pattern.lower() in inner_lower:
-                    return f"Error: Dangerous pattern blocked in bash -c command: {pattern}"
+                    return Observation.error("bash", f"Dangerous pattern blocked in bash -c command: {pattern}", args={"command": command})
             # 递归白名单：内部命令的第一个词也必须在白名单中
             try:
                 inner_parts = shlex.split(inner_cmd)
             except ValueError:
-                return "Error: Invalid inner command in bash -c"
+                return Observation.error("bash", "Invalid inner command in bash -c", args={"command": command})
             if inner_parts:
                 inner_cmd_name = os.path.basename(inner_parts[0])
                 if not inner_cmd_name.startswith(_SAFE_COMMAND_PREFIXES_TUPLE):
-                    return (
-                        f"Error: Inner command '{inner_cmd_name}' in bash -c "
-                        f"is not in the allowed list."
+                    return Observation.error(
+                        "bash",
+                        f"Inner command '{inner_cmd_name}' in bash -c is not in the allowed list.",
+                        args={"command": command},
                     )
 
         try:
@@ -134,7 +137,7 @@ class Shell:
                 success=False, args={"command": command}, metadata={},
             )
 
-    def calculate(self, expression: str) -> str:
+    def calculate(self, expression: str) -> Observation:
         """安全计算数学表达式（使用 ast 解析，无 eval）。"""
 
         _ALLOWED_OPS = {

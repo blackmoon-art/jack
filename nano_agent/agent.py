@@ -72,8 +72,6 @@ class Agent:
         self._on_event = on_event
         self._emit("text", {"text": f"Task: {task}\nStrategy: {strategy}"})
 
-        base_messages = self._build_messages(task)
-
         strategy_cls = STRATEGY_REGISTRY.get(strategy)
         if not strategy_cls:
             raise ValueError(f"Unknown strategy: '{strategy}'. Available: {list(STRATEGY_REGISTRY.keys())}")
@@ -251,21 +249,10 @@ class Agent:
         return "\n".join(parts)
 
     def _build_messages(self, task: str) -> list[dict]:
-        """构建消息列表。委托给 BaseStrategy.build_messages。"""
+        """构建消息列表。委托给 BaseStrategy.build_messages，确保与策略层一致。"""
         from .strategies.base import BaseStrategy
-        # BaseStrategy.build_messages 是静态风格的，直接用 memory
-        messages = []
-        for msg in self.memory.get_window_messages():
-            messages.append(msg)
-        relevant = self.memory.load_relevant(task, top_k=3)
-        if relevant:
-            messages.append({
-                "role": "user",
-                "content": f"[Context from past experience]\n{relevant}"
-            })
-            messages.append({"role": "assistant", "content": "Understood, I will consider this context."})
-        messages.append({"role": "user", "content": task})
-        return messages
+        dummy = BaseStrategy(self.config, self.llm, self.tools, memory=self.memory)
+        return dummy.build_messages(task, include_memory=True)
 
     # ── 便利方法 ────────────────────────────────────────
 

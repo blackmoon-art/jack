@@ -45,6 +45,7 @@ class ToolRegistry:
         "_chart": Chart,
         "_diagram": Diagram,
         "_ai_image": AIImage,
+        "_ppt": PPT,
     }
 
     def __init__(self, work_dir: str, bash_timeout: int = 120,
@@ -84,30 +85,7 @@ class ToolRegistry:
                 self._register(name, desc, func, properties, required=required)
 
     def _register_manual_overrides(self):
-        """手动注册复杂 schema 或跨模块工具。"""
-        # PPT — 复杂嵌套 schema
-        self._register("create_ppt",
-            "Generate a PowerPoint presentation (.pptx) with title slide and content slides. "
-            "Supports title, content, bullets, and two-column layouts. Dark theme with purple accents. "
-            "Auto-installs python-pptx on first use.",
-            self._ppt.create_ppt,
-            {
-                "title": {"type": "string", "description": "Main title of the presentation"},
-                "slides": {"type": "array", "description": "List of slides. Each slide is an object with: type (title|content|bullets|two_column), title, body.", "items": {
-                    "type": "object",
-                    "properties": {
-                        "type": {"type": "string", "description": "Slide layout type: title, content, bullets, two_column"},
-                        "title": {"type": "string", "description": "Slide title"},
-                        "body": {"type": "string", "description": "Slide body text. For bullets type, use newlines to separate items."},
-                        "body_left": {"type": "string", "description": "Left column text (two_column type only)"},
-                        "body_right": {"type": "string", "description": "Right column text (two_column type only)"}
-                    }
-                }},
-                "filename": {"type": "string", "description": "Output filename (optional, defaults to title)"},
-                "subtitle": {"type": "string", "description": "Subtitle for the title slide (optional)"},
-            },
-            required=["title", "slides"])
-
+        """手动注册复合/跨模块工具（无法通过 TOOLS 属性表达的）。"""
         # search_and_fetch — 复合工具
         self._register("search_and_fetch",
             "Search the web and auto-fetch top result content. Best for questions needing detailed answers.",
@@ -164,7 +142,8 @@ class ToolRegistry:
             return Observation(tool_name=name, result=f"Error: {type(e).__name__}: {e}",
                                success=False, args=arguments)
 
-    # ── 向后兼容委托（旧测试直接调 registry.write_file() 等）──
+    # ── 测试兼容委托（旧测试直接调 registry.write_file() 等）──
+    # TODO: 迁移测试到用 execute() 后可删除
 
     _DELEGATES = {
         "bash": "_shell",
