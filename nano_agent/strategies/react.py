@@ -35,8 +35,8 @@ class ReActStrategy(BaseStrategy):
     """
 
     def __init__(self, config: Config, llm: LLM, tools: ToolRegistry,
-                 max_steps: int = None):
-        super().__init__(config, llm, tools)
+                 max_steps: int = None, **kwargs):
+        super().__init__(config, llm, tools, **kwargs)
         self.max_steps = max_steps if max_steps is not None else config.react_max_steps
         self.thought_trail: list[dict] = []
 
