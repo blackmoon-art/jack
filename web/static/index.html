@@ -116,7 +116,7 @@
 
 <script>
 // 访问码（管理员不用次数限制）
-const ACCESS_CODE = localStorage.getItem('nano_access_code') || '';
+const ACCESS_CODE = '';
 let SESSION_ID = localStorage.getItem('nano_session_id');
 if (!SESSION_ID) {
   SESSION_ID = crypto.randomUUID().slice(0, 12);
@@ -304,7 +304,6 @@ async function send() {
         strategy: $strategy.value,
         session_id: SESSION_ID,
         model: $model.value,
-        code: document.getElementById('access-code').value,
       }),
     });
 
