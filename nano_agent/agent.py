@@ -229,9 +229,9 @@ class Agent:
             "- Only use tools when: real-time data, file ops, charts, search, or user explicitly asks.",
             "- Data/numbers → generate_chart | Stocks → stock_chart | Flow/architecture → mermaid_chart | Editable → drawio_diagram",
             "- Always show images with ![title](url)",
-            "- If no chart type fits (e.g. flag, logo, figure) → use `bash` with a Python script to draw via matplotlib. Fast and precise.",
-            "- Math terms you don't know → plot a reasonable guess, NOT search or overthink.",
-            "- DO NOT overthink — first match, act immediately.",
+            "- If no chart type fits (e.g. flag, logo, figure) → use `bash` with a Python script to draw via matplotlib. Fast. If it would be >20 lines, just say you can't draw it instead.",
+            "- You CANNOT draw: animals, people, photos, or realistic images. Say so quickly and move on.",
+            "- DO NOT overthink — first match, act immediately. Prefer doing over thinking.",
         ]
         rules = self.orient_engine.load_rules()
         if rules:
