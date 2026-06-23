@@ -112,6 +112,46 @@ sessions: dict[str, dict] = {}
 _MAX_SESSIONS = 100          # 最大会话数
 _SESSION_TTL_SECONDS = 7200  # 2 小时未访问则可淘汰
 
+# ── 使用次数限制 ──────────────────────────────────────
+
+USAGE_FILE = Path(__file__).parent / "usage.json"
+DAILY_LIMIT = int(os.getenv("DAILY_LIMIT_PER_USER", "20"))
+
+
+def _today() -> str:
+    from datetime import date
+    return date.today().isoformat()
+
+
+def load_usage() -> dict:
+    if USAGE_FILE.exists():
+        try:
+            return json.loads(USAGE_FILE.read_text())
+        except (json.JSONDecodeError, OSError):
+            pass
+    return {}
+
+
+def save_usage(data: dict):
+    USAGE_FILE.write_text(json.dumps(data, ensure_ascii=False))
+
+
+def check_daily_limit(session_id: str) -> str:
+    """检查每日使用次数。返回空字符串表示通过，否则返回错误信息。"""
+    if DAILY_LIMIT <= 0:
+        return ""
+    today = _today()
+    usage = load_usage()
+    if today not in usage:
+        usage[today] = {}
+    count = usage[today].get(session_id, 0)
+    if count >= DAILY_LIMIT:
+        return f"今日已达上限 ({DAILY_LIMIT} 次)，请明天再试"
+    usage[today][session_id] = count + 1
+    save_usage(usage)
+    return ""
+
+
 STATIC_DIR = Path(__file__).parent / "static"
 
 
@@ -247,6 +287,15 @@ async def chat(request: Request):
         return {"error": "Empty message"}
 
     session_id = get_or_create_session(session_id)
+
+    # 每日次数限制
+    limit_msg = check_daily_limit(session_id)
+    if limit_msg:
+        return StreamingResponse(
+            iter([f"event: error\ndata: {json.dumps({'text': limit_msg})}\n\n"]),
+            media_type="text/event-stream",
+        )
+
     agent = sessions[session_id]["agent"]
 
     # 模型切换
@@ -288,9 +337,12 @@ async def clear_session(session_id: str):
 
 @app.get("/api/health")
 async def health():
+    today = _today()
+    usage = load_usage().get(today, {})
     return {
         "status": "ok",
         "sessions": len(sessions),
+        "today_usage": {k: f"{v}/{DAILY_LIMIT}" for k, v in usage.items()},
         "model": Config().model,
         "provider": Config().provider,
     }
