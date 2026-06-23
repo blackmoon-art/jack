@@ -214,10 +214,8 @@ class Agent:
                 ]
             messages.append(assistant_msg)
 
-            # 无工具调用 → 结束
+            # 无工具调用 → 结束（最终答案由 Agent.run() 通过 done 事件发送）
             if not response["tool_calls"]:
-                if response["text"]:
-                    self._emit("text", {"text": response["text"]})
                 return response["text"], messages
 
             # ── Act: 并行执行工具 ──
