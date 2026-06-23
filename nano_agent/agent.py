@@ -124,7 +124,7 @@ class Agent:
         logger.info(f"[Tool] {name}({json.dumps(args, ensure_ascii=False)[:200]})")
         observation = self.tools.execute(name, args)
         result_text = str(observation)
-        is_success = observation.success if hasattr(observation, "success") else not result_text.startswith("Error:")
+        is_success = observation.success
         self._emit("tool_result", {"name": name, "result": result_text, "success": is_success})
         logger.debug(f"[Tool Result] {result_text[:200]}")
         orientation = (orient_fn(result_text, args.get("task", "")) if orient_fn else None)
