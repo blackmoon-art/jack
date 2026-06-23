@@ -39,8 +39,8 @@
   .thinking-summary:hover { background:#2a2a3e; }
   .thinking-summary::before { content:'▶ '; font-size:9px; }
   .thinking-summary.open::before { content:'▼ '; font-size:9px; }
-  .thinking-block { display:block; }
-  .thinking-block.hidden { display:none; }
+  .thinking-block { display:none; }
+  .thinking-block.visible { display:block; }
   footer { padding:16px 20px; border-top:1px solid #333; display:flex; gap:10px; background:#1a1a2e; }
   footer input { flex:1; background:#222; color:#e0e0e0;
                  border:1px solid #444; padding:10px 16px;
@@ -163,8 +163,8 @@ function ensureThinkingTag() {
   tag.addEventListener('click', () => {
     const block = tag.parentElement.querySelector('.thinking-block');
     if (!block) return;
-    const hidden = block.classList.toggle('hidden');
-    tag.classList.toggle('open', !hidden);
+    const open = block.classList.toggle('visible');
+    tag.classList.toggle('open', open);
   });
   // 插入到消息最前面（content 之前）
   currentMsg.insertBefore(tag, currentMsg.firstChild);
