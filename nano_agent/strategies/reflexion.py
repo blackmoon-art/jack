@@ -174,12 +174,17 @@ class ReflexionStrategy(BaseStrategy):
         mem = Memory(file_path=None, reflection_path=self.config.reflection_file)
         content = mem.load_reflections()
         if content:
-            # 提取 LESSON 行
+            # 提取 LESSON 或 Reflection 行
             for line in content.split("\n"):
-                if line.strip().startswith("**Reflection:**"):
-                    lesson = line.replace("**Reflection:**", "").strip()
-                    if lesson:
-                        self.reflection_memory.append(lesson)
+                stripped = line.strip()
+                if stripped.startswith("**LESSON:**"):
+                    lesson = stripped.replace("**LESSON:**", "").strip()
+                elif stripped.startswith("**Reflection:**"):
+                    lesson = stripped.replace("**Reflection:**", "").strip()
+                else:
+                    continue
+                if lesson:
+                    self.reflection_memory.append(lesson)
             if self.reflection_memory:
                 logger.info(f"[Reflexion] Loaded {len(self.reflection_memory)} historical lessons")
 

@@ -86,4 +86,4 @@ class Config:
 
     @property
     def is_anthropic(self) -> bool:
-        return self.provider == "anthropic"
+        return self.provider in ("anthropic", "claude")

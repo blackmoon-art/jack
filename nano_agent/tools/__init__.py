@@ -7,7 +7,7 @@
   - 搜索:  使用 urllib + 合法 User-Agent, 保留 SSL 验证
   - 计算:  使用 ast 安全解析，禁用 eval
 
-每工具返回 (result: str)。错误以 "Error: ..." 返回，让 LLM 自我纠正。
+每工具返回 Observation 对象或字符串。错误以 "Error: ..." 返回，让 LLM 自我纠正。
 """
 
 import logging
@@ -15,7 +15,7 @@ from typing import Any, Optional
 
 from .sandbox import PathSandbox
 from .file_ops import FileOps
-from .shell import Shell
+from .shell import Observation, Shell
 from .search import Search
 from .weather import Weather
 from .stock import Stock
@@ -74,7 +74,7 @@ class ToolRegistry:
             "pattern": {"type": "string", "description": "Regex pattern to search for"},
             "path": {"type": "string", "description": "Directory or file to search (default: '.')"},
         }, required=["pattern"])
-        self._register("web_search", "Search the web using DuckDuckGo.", self._search.web_search, {
+        self._register("web_search", "Search the web (Bing → DuckDuckGo → Brave → SearXNG → Wikipedia).", self._search.web_search, {
             "query": {"type": "string", "description": "Search query"},
             "max_results": {"type": "integer", "description": "Max results (default: 5)"},
         }, required=["query"])
