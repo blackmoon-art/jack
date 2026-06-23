@@ -1,0 +1,64 @@
+"""URL 抓取工具：fetch_url。
+
+从 URL 抓取网页并提取纯文本内容，内置 SSRF 防护。
+"""
+
+import re
+import urllib.parse
+import urllib.request
+
+
+class Fetch:
+    # 工具注册声明
+    TOOLS = [
+        ("fetch_url", "Fetch and extract text content from a URL.", "fetch_url",
+         {"url": {"type": "string", "description": "URL to fetch"}},
+         ["url"]),
+    ]
+
+    def __init__(self, work_dir: str = ""):
+        pass
+
+    # ── 公开接口 ──────────────────────────────────────
+
+    def fetch_url(self, url: str) -> str:
+        """抓取网页并提取文本内容。阻止内网/本地地址防止 SSRF。"""
+        if not url.startswith(("http://", "https://")):
+            return "Error: URL must start with http:// or https://"
+        # SSRF 防护：检查目标 IP 是否为内网地址
+        host = urllib.parse.urlparse(url).hostname
+        if host in ("localhost", "127.0.0.1", "::1", "0.0.0.0"):
+            return "Error: Access to localhost is blocked"
+        if host.startswith(("192.168.", "10.", "172.16.", "172.17.", "172.18.",
+                           "172.19.", "172.20.", "172.21.", "172.22.", "172.23.",
+                           "172.24.", "172.25.", "172.26.", "172.27.", "172.28.",
+                           "172.29.", "172.30.", "172.31.")):
+            return "Error: Access to internal network is blocked"
+        try:
+            req = urllib.request.Request(url, headers={
+                "User-Agent": (
+                    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+                ),
+                "Accept": "text/html,application/xhtml+xml",
+                "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+            })
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                content_type = resp.headers.get("Content-Type", "")
+                if "html" not in content_type and "text" not in content_type:
+                    return f"Error: Unsupported content type — {content_type}"
+                raw = resp.read().decode("utf-8", errors="ignore")
+        except urllib.error.HTTPError as e:
+            return f"Error: HTTP {e.code} — {e.reason}"
+        except urllib.error.URLError as e:
+            return f"Error: Cannot reach URL — {e.reason}"
+        except Exception as e:
+            return f"Error: {e}"
+
+        text = re.sub(r"<script[^>]*>.*?</script>", "", raw, flags=re.DOTALL)
+        text = re.sub(r"<style[^>]*>.*?</style>", "", text, flags=re.DOTALL)
+        text = re.sub(r"<[^>]+>", " ", text)
+        text = re.sub(r"&nbsp;", " ", text)
+        text = re.sub(r"&[a-z]+;", " ", text)
+        text = re.sub(r"\s+", " ", text).strip()
+        return text[:8000] if text else "(页面无文本内容)"

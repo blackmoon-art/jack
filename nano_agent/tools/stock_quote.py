@@ -1,32 +1,23 @@
-"""股票工具：stock_info, stock_history, stock_chart, stock_indicators, stock_market。
+"""股票行情工具：stock_info, stock_history, stock_indicators。
 
 数据源（国内可达，无需 Key）：
   - 实时行情: 腾讯行情 API (qt.gtimg.cn)
   - K线数据: 腾讯 K线 API (web.ifzq.gtimg.cn)
-  - 大盘/板块: 腾讯行情 + 新浪行业板块
   - 美股/港股: Yahoo Finance → 腾讯行情 fallback
 
-技术指标（纯计算，无额外数据源）：
-  - MA (5/10/20/60)
-  - RSI (14)
-  - MACD (12/26/9)
-  - BOLL (20,2)
+技术指标委托 stock_indicators.StockIndicators。
 """
 
 import json as _json
-import math
-import os
-import re
 import urllib.parse
 import urllib.request
 from datetime import datetime, timedelta
 from .stock_indicators import StockIndicators
-from pathlib import Path
 
 _PERIOD_DAYS = {'1mo': 30, '3mo': 90, '6mo': 180, '1y': 365, '3y': 1095, '5y': 1825}
 
 
-class Stock:
+class StockQuote:
     # 工具注册声明
     TOOLS = [
         ("stock_info", "Get real-time stock quote. A-shares via Tencent API (600519, 000001), US/HK via Yahoo Finance with Tencent fallback (AAPL, 0700.HK).", "stock_info",
@@ -36,19 +27,10 @@ class Stock:
          {"symbol": {"type": "string", "description": "Stock symbol"},
           "period": {"type": "string", "description": "Time period: 1mo, 3mo, 6mo, 1y, 3y, 5y (default: 1mo)"}},
          ["symbol"]),
-        ("stock_chart", "Generate stock price chart (PNG) with volume subplot. A-shares via Tencent API, US/HK via yfinance. Supports line and candle charts.", "stock_chart",
-         {"symbol": {"type": "string", "description": "Stock symbol"},
-          "period": {"type": "string", "description": "Time period: 1mo, 3mo, 6mo, 1y, 3y, 5y (default: 3mo)"},
-          "chart_type": {"type": "string", "description": "Chart type: line or candle (default: line)"}},
-         ["symbol"]),
         ("stock_indicators", "Calculate technical indicators: MA (5/10/20/60), RSI (14), MACD (12/26/9), Bollinger Bands (20,2).", "stock_indicators",
          {"symbol": {"type": "string", "description": "Stock symbol"},
           "period": {"type": "string", "description": "Time period: 1mo, 3mo, 6mo, 1y, 3y, 5y (default: 6mo)"}},
          ["symbol"]),
-        ("stock_market", "Get A-share market overview: major indices + sector rankings (top/bottom 5).", "stock_market",
-         {}, []),
-        ("stock_market_us", "Get US stock market overview: S&P 500, Dow Jones, Nasdaq indices + major movers.", "stock_market_us",
-         {}, []),
     ]
 
     def __init__(self, work_dir: str, charts_dir: str = ""):
@@ -301,289 +283,6 @@ class Stock:
             return f"Error: {e}"
 
         return StockIndicators.format_report(clean, period, closes)
-
-    def stock_market(self) -> str:
-        """获取 A 股大盘指数 + 行业板块涨跌排行。"""
-        lines = []
-
-        # ── 大盘指数 ──
-        indices = {
-            'sh000001': '上证指数',
-            'sz399001': '深证成指',
-            'sz399006': '创业板指',
-        }
-        codes = ','.join(indices.keys())
-        try:
-            url = f"http://qt.gtimg.cn/q={codes}"
-            req = urllib.request.Request(url, headers={
-                "User-Agent": "Mozilla/5.0",
-                "Referer": "https://gu.qq.com/",
-            })
-            with urllib.request.urlopen(req, timeout=10) as resp:
-                raw = resp.read().decode('gbk', errors='replace')
-
-            lines.append("🏛️ 大盘指数")
-            lines.append(f"{'指数':<10} {'现价':>12} {'涨跌':>10} {'涨幅':>10}")
-            lines.append("─" * 45)
-
-            for line in raw.strip().split(';'):
-                line = line.strip()
-                if not line or '="' not in line:
-                    continue
-                _, val = line.split('="', 1)
-                val = val.rstrip('";')
-                fields = val.split('~')
-                if len(fields) > 32 and fields[1]:
-                    name = fields[1]
-                    price = fields[3]
-                    try:
-                        change = float(fields[31])
-                        pct = float(fields[32])
-                    except (ValueError, IndexError):
-                        change = 0
-                        pct = 0
-                    arrow = "📈" if pct >= 0 else "📉"
-                    lines.append(f"{arrow} {name:<8} {price:>12} {change:>+10.2f} {pct:>+9.2f}%")
-        except Exception as e:
-            lines.append(f"大盘数据获取失败: {e}")
-
-        # ── 行业板块 ──
-        lines.append("\n🏭 行业板块涨跌")
-        lines.append(f"{'板块':<10} {'涨幅':>8}")
-        lines.append("─" * 22)
-        try:
-            sectors = self._sina_sectors()
-            # 涨幅前5
-            lines.append("📈 涨幅前5:")
-            for name, pct in sectors[:5]:
-                lines.append(f"  {name:<10} {pct:>+7.2f}%")
-            # 跌幅前5
-            lines.append("📉 跌幅前5:")
-            for name, pct in sectors[-5:]:
-                lines.append(f"  {name:<10} {pct:>+7.2f}%")
-        except Exception as e:
-            lines.append(f"板块数据获取失败: {e}")
-
-        return '\n'.join(lines)
-
-    def stock_market_us(self) -> str:
-        """获取美股大盘指数 + 涨幅最大的个股。"""
-        lines = []
-
-        # ── 三大指数（用腾讯行情 API）──
-        indices = {
-            'usDJI': '道琼斯',
-            'usIXIC': '纳斯达克',
-            'usINX': 'S&P 500',
-        }
-        codes = ','.join(indices.keys())
-        lines.append("🇺🇸 美股大盘指数")
-        lines.append(f"{'指数':<12} {'现价':>12} {'涨跌':>10} {'涨幅':>10}")
-        lines.append("─" * 48)
-
-        try:
-            url = f"http://qt.gtimg.cn/q={codes}"
-            req = urllib.request.Request(url, headers={
-                "User-Agent": "Mozilla/5.0",
-                "Referer": "https://gu.qq.com/",
-            })
-            with urllib.request.urlopen(req, timeout=10) as resp:
-                raw = resp.read().decode('gbk', errors='replace')
-
-            for line in raw.strip().split(';'):
-                line = line.strip()
-                if not line or '="' not in line:
-                    continue
-                _, val = line.split('="', 1)
-                val = val.rstrip('";')
-                fields = val.split('~')
-                if len(fields) > 32 and fields[1]:
-                    name = fields[1]
-                    price = fields[3]
-                    try:
-                        pct = float(fields[32])
-                        price_val = float(price.replace(',', ''))
-                        change = price_val * pct / (100 + pct) if (100 + pct) != 0 else 0
-                    except (ValueError, IndexError):
-                        pct = 0
-                        change = 0
-                    arrow = "📈" if pct >= 0 else "📉"
-                    lines.append(f"{arrow} {name:<10} {price:>12} {change:>+10.2f} {pct:>+9.2f}%")
-        except Exception as e:
-            lines.append(f"大盘指数获取失败: {e}")
-
-        # ── 热门个股（用腾讯行情 API 查美股）──
-        hot_stocks = {
-            'usAAPL': 'Apple',
-            'usMSFT': 'Microsoft',
-            'usNVDA': 'NVIDIA',
-            'usTSLA': 'Tesla',
-            'usAMZN': 'Amazon',
-            'usGOOG': 'Alphabet',
-            'usMETA': 'Meta',
-        }
-        lines.append("\n🔥 热门美股")
-        lines.append(f"{'股票':<14} {'现价':>10} {'涨幅':>10}")
-        lines.append("─" * 38)
-
-        codes = ','.join(hot_stocks.keys())
-        try:
-            url = f"http://qt.gtimg.cn/q={codes}"
-            req = urllib.request.Request(url, headers={
-                "User-Agent": "Mozilla/5.0",
-                "Referer": "https://gu.qq.com/",
-            })
-            with urllib.request.urlopen(req, timeout=10) as resp:
-                raw = resp.read().decode('gbk', errors='replace')
-
-            for line in raw.strip().split(';'):
-                line = line.strip()
-                if not line or '="' not in line:
-                    continue
-                _, val = line.split('="', 1)
-                val = val.rstrip('";')
-                fields = val.split('~')
-                if len(fields) > 32 and fields[1]:
-                    name = fields[1]
-                    price = fields[3]
-                    try:
-                        pct = float(fields[32])
-                    except (ValueError, IndexError):
-                        pct = 0
-                    arrow = "📈" if pct >= 0 else "📉"
-                    lines.append(f"{arrow} {name:<12} {price:>10} {pct:>+9.2f}%")
-        except Exception as e:
-            lines.append(f"热门美股数据获取失败: {e}")
-
-        return '\n'.join(lines)
-
-    def _sina_sectors(self) -> list[tuple[str, float]]:
-        """从新浪获取行业板块涨跌排行。返回 [(name, change_pct)] 按涨幅降序。"""
-        url = 'https://vip.stock.finance.sina.com.cn/q/view/newSinaHy.php'
-        req = urllib.request.Request(url, headers={
-            'User-Agent': 'Mozilla/5.0',
-            'Referer': 'https://finance.sina.com.cn',
-        })
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            raw = resp.read().decode('gbk', errors='replace')
-
-        m = re.search(r'=\s*(\{.*\})', raw, re.DOTALL)
-        if not m:
-            return []
-        data = _json.loads(m.group(1))
-
-        sectors = []
-        for k, v in data.items():
-            parts = v.split(',')
-            if len(parts) > 5:
-                name = parts[1]
-                try:
-                    chg_pct = float(parts[5])
-                    sectors.append((name, chg_pct))
-                except (ValueError, IndexError):
-                    continue
-
-        sectors.sort(key=lambda x: x[1], reverse=True)
-        return sectors
-
-    # ════════════════════════════════════════════════════
-    #  K线图
-    # ════════════════════════════════════════════════════
-
-    def stock_chart(self, symbol: str, period: str = "3mo", chart_type: str = "line") -> str:
-        """生成股票走势图（含成交量子图）。同股票同日自动缓存。"""
-        import matplotlib
-        matplotlib.use('Agg')
-        import matplotlib.pyplot as plt
-
-        clean, is_a = self._parse_stock_symbol(symbol)
-        days = _PERIOD_DAYS.get(period, 90)
-
-        # 保存到 charts_dir
-        if self._charts_dir:
-            charts_dir = self._charts_dir
-        else:
-            web_static = Path(__file__).parent.parent.parent / "web" / "static"
-            charts_dir = str(web_static / "charts")
-        os.makedirs(charts_dir, exist_ok=True)
-        today = datetime.now().strftime('%Y%m%d')
-        filename = f"{clean}_{period}_{chart_type}_{today}.png"
-        filepath = os.path.join(charts_dir, filename)
-        # 清理旧缓存（同股票同周期不同日期）
-        for f in os.listdir(charts_dir):
-            if f.startswith(f"{clean}_{period}_{chart_type}_") and f != filename:
-                try:
-                    os.remove(os.path.join(charts_dir, f))
-                except OSError:
-                    pass
-        if os.path.exists(filepath):
-            url = f"/charts/{filename}"
-            return f"Chart (cached): {url}\n![{clean}]({url})"
-
-        try:
-            if is_a:
-                klines = self._tencent_klines(clean, days=days)
-                if not klines:
-                    return f"Error: No data for A-share '{clean}'"
-                closes = [k['close'] for k in klines]
-                opens = [k['open'] for k in klines]
-                highs = [k['high'] for k in klines]
-                lows = [k['low'] for k in klines]
-                volumes = [k['volume'] for k in klines]
-                date_labels = [k['date'] for k in klines]
-            else:
-                import yfinance as yf
-                hist = yf.Ticker(clean).history(period=period)
-                if hist.empty:
-                    return f"Error: No data for '{clean}'"
-                closes = hist['Close'].tolist()
-                opens = hist['Open'].tolist()
-                highs = hist['High'].tolist()
-                lows = hist['Low'].tolist()
-                volumes = hist['Volume'].tolist()
-                date_labels = [d.strftime('%Y-%m-%d') for d in hist.index]
-        except Exception as e:
-            return f"Error: {e}"
-
-        dates = list(range(len(closes)))
-
-        # 双子图：价格 + 成交量
-        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 8),
-                                         gridspec_kw={'height_ratios': [3, 1]},
-                                         sharex=True)
-
-        if chart_type == "candle":
-            from matplotlib.patches import Rectangle
-            for i in range(len(dates)):
-                color = 'red' if closes[i] >= opens[i] else 'green'
-                ax1.plot([i, i], [lows[i], highs[i]], color=color, linewidth=0.8)
-                bottom = min(opens[i], closes[i])
-                height = max(abs(closes[i] - opens[i]), 0.001)
-                ax1.add_patch(Rectangle((i - 0.3, bottom), 0.6, height,
-                                        facecolor=color, edgecolor=color))
-        else:
-            ax1.plot(dates, closes, color='#2196F3', linewidth=1.5)
-            ax1.fill_between(dates, closes, alpha=0.1, color='#2196F3')
-
-        # 成交量柱状图
-        colors = ['red' if closes[i] >= opens[i] else 'green' for i in range(len(dates))]
-        ax2.bar(dates, volumes, color=colors, alpha=0.7, width=0.8)
-
-        step = max(1, len(dates) // 10)
-        ax2.set_xticks(dates[::step])
-        ax2.set_xticklabels(date_labels[::step], rotation=45, ha='right')
-
-        ax1.set_title(f"{clean} ({period})", fontsize=14, fontweight='bold')
-        ax1.set_ylabel('Price', fontsize=12)
-        ax1.grid(True, alpha=0.3)
-        ax2.set_ylabel('Volume', fontsize=10)
-        ax2.grid(True, alpha=0.3)
-        fig.tight_layout()
-
-        fig.savefig(filepath, dpi=150, bbox_inches='tight')
-        plt.close(fig)
-        url = f"/charts/{filename}"
-        return f"Chart saved: {url}\n![{clean}]({url})"
 
     # ════════════════════════════════════════════════════
     #  数据源：腾讯行情 API

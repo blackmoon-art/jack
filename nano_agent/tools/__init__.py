@@ -18,8 +18,11 @@ from .sandbox import PathSandbox
 from .file_ops import FileOps
 from .shell import Shell
 from .search import Search
+from .fetch import Fetch
 from .weather import Weather
-from .stock import Stock
+from .stock_quote import StockQuote
+from .stock_chart import StockChart
+from .stock_market import StockMarket
 from .ppt import PPT
 from .chart import Chart
 from .diagram import Diagram
@@ -40,8 +43,11 @@ class ToolRegistry:
         "_shell": Shell,
         "_file_ops": FileOps,
         "_search": Search,
+        "_fetch": Fetch,
         "_weather": Weather,
-        "_stock": Stock,
+        "_stock_quote": StockQuote,
+        "_stock_chart": StockChart,
+        "_stock_market": StockMarket,
         "_chart": Chart,
         "_diagram": Diagram,
         "_ai_image": AIImage,
@@ -58,9 +64,12 @@ class ToolRegistry:
         # 实例化子模块
         self._file_ops = FileOps(self.sandbox, work_dir)
         self._shell = Shell(work_dir, bash_timeout)
-        self._search = Search(brave_api_key)
+        self._search = Search(brave_api_key=brave_api_key)
+        self._fetch = Fetch()
         self._weather = Weather()
-        self._stock = Stock(work_dir, charts_dir=charts_dir)
+        self._stock_quote = StockQuote(work_dir, charts_dir=charts_dir)
+        self._stock_chart = StockChart(work_dir, charts_dir=charts_dir)
+        self._stock_market = StockMarket(work_dir, charts_dir=charts_dir)
         self._ppt = PPT(work_dir)
         self._chart = Chart(work_dir, charts_dir=charts_dir)
         self._diagram = Diagram(work_dir, charts_dir=charts_dir)
@@ -89,7 +98,7 @@ class ToolRegistry:
         # search_and_fetch — 复合工具
         self._register("search_and_fetch",
             "Search the web and auto-fetch top result content. Best for questions needing detailed answers.",
-            self._search.search_and_fetch,
+            lambda query: self._search.search_and_fetch(self._fetch.fetch_url, query),
             {"query": {"type": "string", "description": "Search query"}},
             required=["query"])
 
@@ -153,15 +162,16 @@ class ToolRegistry:
         "glob_files": ("_file_ops", "glob"),
         "grep_files": ("_file_ops", "grep"),
         "web_search": "_search",
-        "fetch_url": "_search",
+        "fetch_url": "_fetch",
         "search_and_fetch": "_search",
         "calculate": "_shell",
         "get_weather": "_weather",
-        "stock_info": "_stock",
-        "stock_history": "_stock",
-        "stock_chart": "_stock",
-        "stock_indicators": "_stock",
-        "stock_market": "_stock",
+        "stock_info": "_stock_quote",
+        "stock_history": "_stock_quote",
+        "stock_chart": "_stock_chart",
+        "stock_indicators": "_stock_quote",
+        "stock_market": "_stock_market",
+        "stock_market_us": "_stock_market",
         "create_ppt": "_ppt",
         "mermaid_chart": "_diagram",
         "drawio_diagram": "_diagram",
@@ -173,8 +183,8 @@ class ToolRegistry:
         "_search_searxng": ("_search", "_search_searxng"),
         "_search_wikipedia": ("_search", "_search_wikipedia"),
         "_clean_html": ("_search", "_clean_html"),
-        "_parse_stock_symbol": ("_stock", "_parse_stock_symbol"),
-        "_format_history": ("_stock", "_format_history"),
+        "_parse_stock_symbol": ("_stock_quote", "_parse_stock_symbol"),
+        "_format_history": ("_stock_quote", "_format_history"),
     }
 
     def __getattr__(self, name: str):

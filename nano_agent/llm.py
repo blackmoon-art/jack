@@ -298,36 +298,74 @@ class LLM:
             "stop_reason": "tool_calls" if tool_calls else "stop",
         }
 
-    def chat_stream(self, messages: list, system: str = ""):
-        """流式调用 LLM，yield 文本片段。用于纯文本回答场景（无工具调用）。
+    def chat_stream(self, messages: list, system: str = "", tools: list = None):
+        """流式调用 LLM，yield 文本片段或 tool_calls 信号。
+
+        如果 LLM 要调工具，会 yield {"type": "tool_calls", "tool_calls": [...]},
+        调用方应中断流式处理。
 
         Yields:
-            str: 每个文本 chunk
+            str: 文本 chunk，或 dict: {"type": "tool_calls", "tool_calls": [...]}
         """
         if self._provider == "anthropic":
-            yield from self._chat_stream_anthropic(messages, system)
+            yield from self._chat_stream_anthropic(messages, system, tools)
         else:
-            yield from self._chat_stream_openai(messages, system)
+            yield from self._chat_stream_openai(messages, system, tools)
 
-    def _chat_stream_openai(self, messages: list, system: str = ""):
-        """OpenAI 兼容 API 流式调用。"""
+    def _chat_stream_openai(self, messages: list, system: str = "", tools: list = None):
+        """OpenAI 兼容 API 流式调用。支持 tools 参数，检测 tool_calls。"""
         api_messages = []
         if system:
             api_messages.append({"role": "system", "content": system})
         api_messages.extend(messages)
 
-        stream = self._get_client().chat.completions.create(
-            model=self._model,
-            messages=api_messages,
-            stream=True,
-        )
+        kwargs = {"model": self._model, "messages": api_messages, "stream": True}
+        if tools:
+            kwargs["tools"] = tools
+            kwargs["tool_choice"] = "auto"
+
+        stream = self._get_client().chat.completions.create(**kwargs)
+
+        # 检测 tool_calls：流式中如果 LLM 要调工具，收集完整后 yield 信号
+        tool_calls_map = {}  # id -> {id, name, arguments_str}
         for chunk in stream:
             delta = chunk.choices[0].delta if chunk.choices else None
-            if delta and delta.content:
+            if not delta:
+                continue
+
+            # 文本内容
+            if delta.content:
                 yield delta.content
 
-    def _chat_stream_anthropic(self, messages: list, system: str = ""):
-        """Anthropic API 流式调用。"""
+            # tool_calls 片段
+            if hasattr(delta, 'tool_calls') and delta.tool_calls:
+                for tc_delta in delta.tool_calls:
+                    idx = tc_delta.index if hasattr(tc_delta, 'index') else 0
+                    if idx not in tool_calls_map:
+                        tool_calls_map[idx] = {"id": "", "name": "", "arguments": ""}
+                    if hasattr(tc_delta, 'id') and tc_delta.id:
+                        tool_calls_map[idx]["id"] = tc_delta.id
+                    if hasattr(tc_delta, 'function') and tc_delta.function:
+                        if tc_delta.function.name:
+                            tool_calls_map[idx]["name"] = tc_delta.function.name
+                        if tc_delta.function.arguments:
+                            tool_calls_map[idx]["arguments"] += tc_delta.function.arguments
+
+        # 如果有 tool_calls，yield 信号
+        if tool_calls_map:
+            import json as _json
+            parsed_calls = []
+            for idx in sorted(tool_calls_map.keys()):
+                tc = tool_calls_map[idx]
+                try:
+                    args = _json.loads(tc["arguments"]) if tc["arguments"] else {}
+                except _json.JSONDecodeError:
+                    args = {}
+                parsed_calls.append({"id": tc["id"], "name": tc["name"], "arguments": args})
+            yield {"type": "tool_calls", "tool_calls": parsed_calls}
+
+    def _chat_stream_anthropic(self, messages: list, system: str = "", tools: list = None):
+        """Anthropic API 流式调用。支持 tools 参数。"""
         converted = self._convert_messages_for_anthropic(messages)
         kwargs = {
             "model": self._model,
@@ -336,7 +374,27 @@ class LLM:
         }
         if system:
             kwargs["system"] = system
+        if tools:
+            kwargs["tools"] = tools
 
+        tool_use_blocks = []
         with self._get_client().messages.stream(**kwargs) as stream:
-            for text in stream.text_stream:
-                yield text
+            for event in stream:
+                if event.type == "content_block_delta" and event.delta.type == "text_delta":
+                    yield event.delta.text
+                elif event.type == "content_block_start" and event.content_block.type == "tool_use":
+                    tool_use_blocks.append({"id": event.content_block.id, "name": event.content_block.name, "arguments": ""})
+                elif event.type == "content_block_delta" and event.delta.type == "input_json_delta":
+                    if tool_use_blocks:
+                        tool_use_blocks[-1]["arguments"] += event.delta.partial_json
+
+        if tool_use_blocks:
+            import json as _json
+            parsed = []
+            for tb in tool_use_blocks:
+                try:
+                    args = _json.loads(tb["arguments"]) if tb["arguments"] else {}
+                except _json.JSONDecodeError:
+                    args = {}
+                parsed.append({"id": tb["id"], "name": tb["name"], "arguments": args})
+            yield {"type": "tool_calls", "tool_calls": parsed}

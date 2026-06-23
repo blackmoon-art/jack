@@ -122,29 +122,11 @@ class Agent:
     # ── 策略实现 ────────────────────────────────────────
 
     def _run_stream_default(self, task: str) -> str:
-        """Default 策略流式快速路径：对纯知识问答直接流式回答，无需工具的任务即时输出。
+        """Default 策略流式快速路径：带 tools 流式调用，纯知识问答即时输出，
+        如果 LLM 要调工具则自动切换到 agent_loop。
 
-        如果任务可能需要工具（天气/股票/搜索等），回退到标准 agent_loop。
+        不再依赖 _TOOL_KEYWORDS 黑名单，而是让 LLM 自己决定是否需要工具。
         """
-        # 工具相关关键词 → 必须走 agent_loop（需要调工具）
-        _TOOL_KEYWORDS = (
-            '天气', '气温', '温度', '汇率', '股价', '行情', '大盘', '指数',
-            '新闻', '热搜', '搜索', '搜', '查询', '查', '计算', '换算',
-            '翻译', '图片', '图表', 'PPT', '文件',
-            '画', '生成图', '画图', '绘图', '作图', '生成', '制作', '创建',
-            '天气', 'stock', 'search', 'chart', 'image', 'draw', 'create', 'generate', 'make',
-        )
-        task_lower = task.lower()
-        if any(kw in task_lower for kw in _TOOL_KEYWORDS):
-            # 需要工具 → 走标准 agent_loop
-            from .strategies.default import DefaultStrategy
-            s = DefaultStrategy(self.config, self.llm, self.tools, memory=self.memory)
-            s._emit = self._emit
-            s._orient_fn = self._current_orient_fn
-            self._strategy_instance = s
-            return self._agent_loop(s.build_messages(task))[0]
-
-        # 纯知识问答 → 流式输出
         from .strategies.default import DefaultStrategy
         s = DefaultStrategy(self.config, self.llm, self.tools, memory=self.memory)
         s._emit = self._emit
@@ -152,11 +134,33 @@ class Agent:
         self._strategy_instance = s
         messages = s.build_messages(task)
         system_prompt = self._system_prompt()
+        schemas = self.tools.get_schemas()
 
+        # 流式调用（带 tools），边生成边推送文本
         full_text = ""
-        for chunk in self.llm.chat_stream(messages=messages, system=system_prompt):
-            full_text += chunk
-            self._emit("text", {"text": full_text})
+        tool_calls = None
+        for chunk in self.llm.chat_stream(messages=messages, system=system_prompt, tools=schemas):
+            if isinstance(chunk, dict) and chunk.get("type") == "tool_calls":
+                tool_calls = chunk["tool_calls"]
+                break  # LLM 要调工具，中断流式
+            if isinstance(chunk, str):
+                full_text += chunk
+                self._emit("text", {"text": full_text})
+
+        if tool_calls:
+            # LLM 要调工具 → 切到 agent_loop，但复用已有的流式文本
+            # 构造 assistant message 带 tool_calls，走标准 agent_loop 继续
+            assistant_msg = {"role": "assistant", "content": full_text, "tool_calls": [
+                self.llm.format_tool_call_for_message(tc) for tc in tool_calls
+            ]}
+            messages.append(assistant_msg)
+            # 执行工具调用
+            if len(tool_calls) == 1:
+                self.execute_tool(tool_calls[0], messages, orient_fn=self._current_orient_fn)
+            else:
+                self._execute_tools_parallel(tool_calls, messages)
+            # 继续循环：让 LLM 决定下一步
+            return self._agent_loop(messages)[0]
 
         if not full_text.strip():
             return self._agent_loop(messages)[0]

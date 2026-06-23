@@ -1,4 +1,4 @@
-"""搜索工具：web_search, fetch_url, search_and_fetch。
+"""搜索工具：web_search, search_and_fetch。
 
 五级降级：Brave → DuckDuckGo → Bing → SearXNG → Wikipedia
 """
@@ -19,12 +19,9 @@ class Search:
          {"query": {"type": "string", "description": "Search query"},
           "max_results": {"type": "integer", "description": "Max results (1-10, default: 5)"}},
          ["query"]),
-        ("fetch_url", "Fetch and extract text content from a URL.", "fetch_url",
-         {"url": {"type": "string", "description": "URL to fetch"}},
-         ["url"]),
     ]
 
-    def __init__(self, brave_api_key: str = ""):
+    def __init__(self, work_dir: str = "", brave_api_key: str = ""):
         self.brave_api_key = brave_api_key
 
     # ── 公开接口 ──────────────────────────────────────
@@ -57,50 +54,8 @@ class Search:
 
         return f"No search results found for '{query}'."
 
-    def fetch_url(self, url: str) -> str:
-        """抓取网页并提取文本内容。阻止内网/本地地址防止 SSRF。"""
-        if not url.startswith(("http://", "https://")):
-            return "Error: URL must start with http:// or https://"
-        # SSRF 防护：检查目标 IP 是否为内网地址
-        host = urllib.parse.urlparse(url).hostname
-        if host in ("localhost", "127.0.0.1", "::1", "0.0.0.0"):
-            return "Error: Access to localhost is blocked"
-        if host.startswith(("192.168.", "10.", "172.16.", "172.17.", "172.18.",
-                           "172.19.", "172.20.", "172.21.", "172.22.", "172.23.",
-                           "172.24.", "172.25.", "172.26.", "172.27.", "172.28.",
-                           "172.29.", "172.30.", "172.31.")):
-            return "Error: Access to internal network is blocked"
-        try:
-            req = urllib.request.Request(url, headers={
-                "User-Agent": (
-                    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-                    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-                ),
-                "Accept": "text/html,application/xhtml+xml",
-                "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
-            })
-            with urllib.request.urlopen(req, timeout=15) as resp:
-                content_type = resp.headers.get("Content-Type", "")
-                if "html" not in content_type and "text" not in content_type:
-                    return f"Error: Unsupported content type — {content_type}"
-                raw = resp.read().decode("utf-8", errors="ignore")
-        except urllib.error.HTTPError as e:
-            return f"Error: HTTP {e.code} — {e.reason}"
-        except urllib.error.URLError as e:
-            return f"Error: Cannot reach URL — {e.reason}"
-        except Exception as e:
-            return f"Error: {e}"
-
-        text = re.sub(r"<script[^>]*>.*?</script>", "", raw, flags=re.DOTALL)
-        text = re.sub(r"<style[^>]*>.*?</style>", "", text, flags=re.DOTALL)
-        text = re.sub(r"<[^>]+>", " ", text)
-        text = re.sub(r"&nbsp;", " ", text)
-        text = re.sub(r"&[a-z]+;", " ", text)
-        text = re.sub(r"\s+", " ", text).strip()
-        return text[:8000] if text else "(页面无文本内容)"
-
-    def search_and_fetch(self, query: str) -> str:
-        """搜索 + 自动抓取第一个结果的内容。"""
+    def search_and_fetch(self, fetch_func, query: str) -> str:
+        """搜索 + 自动抓取第一个结果的内容。fetch_func 为 Fetch.fetch_url 方法。"""
         search_result = self.web_search(query, max_results=3)
         if "No search results" in search_result or "Error" in search_result:
             return search_result
@@ -110,7 +65,7 @@ class Search:
             return search_result + "\n\n(Could not extract URL for auto-fetch)"
 
         first_url = urls[0]
-        content = self.fetch_url(first_url)
+        content = fetch_func(first_url)
         return (
             f"{search_result}\n\n"
             f"─── Auto-fetched: {first_url} ───\n"
