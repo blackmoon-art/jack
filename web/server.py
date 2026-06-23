@@ -355,7 +355,7 @@ async def index():
     html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
     import time
     html = html.replace("{{TS}}", str(int(time.time())))
-    return HTMLResponse(html, headers={"Cache-Control": "no-cache, no-store"})
+    return HTMLResponse(html, headers={"Cache-Control": "no-cache, no-store", "ngrok-skip-browser-warning": "1"})
 
 
 # ── 图表文件服务 ──────────────────────────────────────────
