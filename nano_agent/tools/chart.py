@@ -58,12 +58,17 @@ class Chart:
             filename: 文件名 (可选)
             style: dark 或 light (默认 dark)
         """
-        # 解析数据
-        try:
-            data_sets = self._parse_multi(data)
-            label_sets = self._parse_multi(labels) if labels else []
-        except Exception as e:
-            return f"Error parsing data: {e}"
+        # 解析数据 (raw types 不过度拆分逗号)
+        raw_types = {"draw", "cat", "pythagorean"}
+        if chart_type in raw_types:
+            data_sets = [[data.strip()]] if data.strip() else [[]]
+            label_sets = [[labels.strip()]] if labels.strip() else [[]]
+        else:
+            try:
+                data_sets = self._parse_multi(data)
+                label_sets = self._parse_multi(labels) if labels else []
+            except Exception as e:
+                return f"Error parsing data: {e}"
 
         no_data_types = {"cat", "pythagorean", "draw"}
         if (not data_sets or not data_sets[0]) and chart_type not in no_data_types:
