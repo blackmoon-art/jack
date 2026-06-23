@@ -297,3 +297,46 @@ class LLM:
             "tool_calls": tool_calls,
             "stop_reason": "tool_calls" if tool_calls else "stop",
         }
+
+    def chat_stream(self, messages: list, system: str = ""):
+        """流式调用 LLM，yield 文本片段。用于纯文本回答场景（无工具调用）。
+
+        Yields:
+            str: 每个文本 chunk
+        """
+        if self._provider == "anthropic":
+            yield from self._chat_stream_anthropic(messages, system)
+        else:
+            yield from self._chat_stream_openai(messages, system)
+
+    def _chat_stream_openai(self, messages: list, system: str = ""):
+        """OpenAI 兼容 API 流式调用。"""
+        api_messages = []
+        if system:
+            api_messages.append({"role": "system", "content": system})
+        api_messages.extend(messages)
+
+        stream = self._get_client().chat.completions.create(
+            model=self._model,
+            messages=api_messages,
+            stream=True,
+        )
+        for chunk in stream:
+            delta = chunk.choices[0].delta if chunk.choices else None
+            if delta and delta.content:
+                yield delta.content
+
+    def _chat_stream_anthropic(self, messages: list, system: str = ""):
+        """Anthropic API 流式调用。"""
+        converted = self._convert_messages_for_anthropic(messages)
+        kwargs = {
+            "model": self._model,
+            "messages": converted,
+            "max_tokens": 4096,
+        }
+        if system:
+            kwargs["system"] = system
+
+        with self._get_client().messages.stream(**kwargs) as stream:
+            for text in stream.text_stream:
+                yield text

@@ -47,6 +47,8 @@ class Stock:
          ["symbol"]),
         ("stock_market", "Get A-share market overview: major indices + sector rankings (top/bottom 5).", "stock_market",
          {}, []),
+        ("stock_market_us", "Get US stock market overview: S&P 500, Dow Jones, Nasdaq indices + major movers.", "stock_market_us",
+         {}, []),
     ]
 
     def __init__(self, work_dir: str, charts_dir: str = ""):
@@ -361,6 +363,97 @@ class Stock:
                 lines.append(f"  {name:<10} {pct:>+7.2f}%")
         except Exception as e:
             lines.append(f"板块数据获取失败: {e}")
+
+        return '\n'.join(lines)
+
+    def stock_market_us(self) -> str:
+        """获取美股大盘指数 + 涨幅最大的个股。"""
+        lines = []
+
+        # ── 三大指数（用腾讯行情 API）──
+        indices = {
+            'usDJI': '道琼斯',
+            'usIXIC': '纳斯达克',
+            'usINX': 'S&P 500',
+        }
+        codes = ','.join(indices.keys())
+        lines.append("🇺🇸 美股大盘指数")
+        lines.append(f"{'指数':<12} {'现价':>12} {'涨跌':>10} {'涨幅':>10}")
+        lines.append("─" * 48)
+
+        try:
+            url = f"http://qt.gtimg.cn/q={codes}"
+            req = urllib.request.Request(url, headers={
+                "User-Agent": "Mozilla/5.0",
+                "Referer": "https://gu.qq.com/",
+            })
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                raw = resp.read().decode('gbk', errors='replace')
+
+            for line in raw.strip().split(';'):
+                line = line.strip()
+                if not line or '="' not in line:
+                    continue
+                _, val = line.split('="', 1)
+                val = val.rstrip('";')
+                fields = val.split('~')
+                if len(fields) > 32 and fields[1]:
+                    name = fields[1]
+                    price = fields[3]
+                    try:
+                        pct = float(fields[32])
+                        price_val = float(price.replace(',', ''))
+                        change = price_val * pct / (100 + pct) if (100 + pct) != 0 else 0
+                    except (ValueError, IndexError):
+                        pct = 0
+                        change = 0
+                    arrow = "📈" if pct >= 0 else "📉"
+                    lines.append(f"{arrow} {name:<10} {price:>12} {change:>+10.2f} {pct:>+9.2f}%")
+        except Exception as e:
+            lines.append(f"大盘指数获取失败: {e}")
+
+        # ── 热门个股（用腾讯行情 API 查美股）──
+        hot_stocks = {
+            'usAAPL': 'Apple',
+            'usMSFT': 'Microsoft',
+            'usNVDA': 'NVIDIA',
+            'usTSLA': 'Tesla',
+            'usAMZN': 'Amazon',
+            'usGOOG': 'Alphabet',
+            'usMETA': 'Meta',
+        }
+        lines.append("\n🔥 热门美股")
+        lines.append(f"{'股票':<14} {'现价':>10} {'涨幅':>10}")
+        lines.append("─" * 38)
+
+        codes = ','.join(hot_stocks.keys())
+        try:
+            url = f"http://qt.gtimg.cn/q={codes}"
+            req = urllib.request.Request(url, headers={
+                "User-Agent": "Mozilla/5.0",
+                "Referer": "https://gu.qq.com/",
+            })
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                raw = resp.read().decode('gbk', errors='replace')
+
+            for line in raw.strip().split(';'):
+                line = line.strip()
+                if not line or '="' not in line:
+                    continue
+                _, val = line.split('="', 1)
+                val = val.rstrip('";')
+                fields = val.split('~')
+                if len(fields) > 32 and fields[1]:
+                    name = fields[1]
+                    price = fields[3]
+                    try:
+                        pct = float(fields[32])
+                    except (ValueError, IndexError):
+                        pct = 0
+                    arrow = "📈" if pct >= 0 else "📉"
+                    lines.append(f"{arrow} {name:<12} {price:>10} {pct:>+9.2f}%")
+        except Exception as e:
+            lines.append(f"热门美股数据获取失败: {e}")
 
         return '\n'.join(lines)
 

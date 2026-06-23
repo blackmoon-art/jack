@@ -74,17 +74,31 @@ class Agent:
         self._on_event = on_event
         self._emit("text", {"text": f"Task: {task}\nStrategy: {strategy}"})
 
-        # 创建绑定原始任务的 Orient 函数
-        self._current_orient_fn = lambda obs: self._orient(obs, task=task)
-
         # auto 模式：LLM 根据用户意图自动选策略
         if strategy == "auto":
             strategy = self._auto_select_strategy(task)
             self._emit("text", {"text": f"🤖 Auto-selected strategy: {strategy}"})
 
+        # 创建绑定原始任务的 Orient 函数
+        # 默认不启用 Orient（省 ~5s LLM 调用），只在 Reflexion 等需要深度反思的策略中启用
+        need_orient = strategy in ("reflexion",)
+        self._current_orient_fn = (
+            (lambda obs: self._orient(obs, task=task)) if need_orient else None
+        )
+
         strategy_cls = STRATEGY_REGISTRY.get(strategy)
         if not strategy_cls:
             raise ValueError(f"Unknown strategy: '{strategy}'. Available: {list(STRATEGY_REGISTRY.keys())}")
+
+        # ── 流式快速路径：default 策略纯文本回答，边生成边推送 ──
+        if strategy == "default":
+            final = self._run_stream_default(task)
+            self._emit("done", {"text": final})
+            self.memory.save_context(task, final)
+            self.memory.save_persistent(task, final)
+            self._on_event = None
+            self._current_orient_fn = None
+            return final
 
         defaults = self._strategy_defaults(strategy)
         defaults.update(strategy_kwargs)
@@ -107,6 +121,48 @@ class Agent:
 
     # ── 策略实现 ────────────────────────────────────────
 
+    def _run_stream_default(self, task: str) -> str:
+        """Default 策略流式快速路径：对纯知识问答直接流式回答，无需工具的任务即时输出。
+
+        如果任务可能需要工具（天气/股票/搜索等），回退到标准 agent_loop。
+        """
+        # 工具相关关键词 → 必须走 agent_loop（需要调工具）
+        _TOOL_KEYWORDS = (
+            '天气', '气温', '温度', '汇率', '股价', '行情', '大盘', '指数',
+            '新闻', '热搜', '搜索', '搜', '查询', '查', '计算', '换算',
+            '翻译', '图片', '图表', 'PPT', '文件',
+            '画', '生成图', '画图', '绘图', '作图', '生成', '制作', '创建',
+            '天气', 'stock', 'search', 'chart', 'image', 'draw', 'create', 'generate', 'make',
+        )
+        task_lower = task.lower()
+        if any(kw in task_lower for kw in _TOOL_KEYWORDS):
+            # 需要工具 → 走标准 agent_loop
+            from .strategies.default import DefaultStrategy
+            s = DefaultStrategy(self.config, self.llm, self.tools, memory=self.memory)
+            s._emit = self._emit
+            s._orient_fn = self._current_orient_fn
+            self._strategy_instance = s
+            return self._agent_loop(s.build_messages(task))[0]
+
+        # 纯知识问答 → 流式输出
+        from .strategies.default import DefaultStrategy
+        s = DefaultStrategy(self.config, self.llm, self.tools, memory=self.memory)
+        s._emit = self._emit
+        s._orient_fn = self._current_orient_fn
+        self._strategy_instance = s
+        messages = s.build_messages(task)
+        system_prompt = self._system_prompt()
+
+        full_text = ""
+        for chunk in self.llm.chat_stream(messages=messages, system=system_prompt):
+            full_text += chunk
+            self._emit("text", {"text": full_text})
+
+        if not full_text.strip():
+            return self._agent_loop(messages)[0]
+
+        return full_text
+
     def _run_strategy(self, strategy_cls, task: str, **kwargs) -> str:
         """通用策略执行：实例化 → 注入事件回调 + memory + orient → 缓存 → 运行。"""
         kwargs.setdefault("memory", self.memory)
@@ -117,7 +173,36 @@ class Agent:
         return s.run(task, self._agent_loop)
 
     def _auto_select_strategy(self, task: str) -> str:
-        """LLM 根据用户意图自动选择策略。"""
+        """根据用户意图自动选择策略。简单任务直接匹配关键词，复杂任务走 LLM。"""
+        task_lower = task.lower().strip()
+
+        # 快速路径：关键词直接匹配，省掉一次 LLM 调用（~5s）
+        _SIMPLE_KEYWORDS = (
+            '天气', '气温', '温度', '汇率', '股价', '行情', '大盘', '指数',
+            '新闻', '热搜', '今天', '查询', '查一下', '搜索', '搜一下',
+            '多少', '几度', '几点', '什么时候', '是什么', '什么是', 'who', 'what', 'when',
+            '计算', '换算', '翻译', '帮我', '告诉我',
+            '如何', '怎么', '为什么', '怎样', '为什么', 'why', 'how',
+            '攻略', '技巧', '教程', '入门', '推荐', '建议',
+            '画', '生成图', '画图', '绘图', '作图', '生成', '画一只', '画个',
+        )
+        _COMPLEX_KEYWORDS = (
+            '计划', '规划', '方案', '对比', '比较', '分析报告', '调研',
+            '多步骤', '分步', '项目', '策划',
+        )
+        _CREATIVE_KEYWORDS = (
+            '头脑风暴', 'brainstorm', '创意', '多种方案', '最优',
+        )
+
+        # 优先级：复杂 > 创意 > 简单（长任务中的简单词不应误判）
+        if any(kw in task_lower for kw in _COMPLEX_KEYWORDS):
+            return "plan-execute"
+        if any(kw in task_lower for kw in _CREATIVE_KEYWORDS):
+            return "tree-of-thought"
+        if any(kw in task_lower for kw in _SIMPLE_KEYWORDS) and len(task_lower) < 80:
+            return "default"
+
+        # 无关键词匹配 → LLM 分类
         prompt = (
             "Classify this task into exactly one strategy. Reply with ONLY the strategy name.\n\n"
             "Strategies:\n"
@@ -185,11 +270,15 @@ class Agent:
 
     # ── 核心循环 (O-O-D-A) ──────────────────────────────
 
-    def _agent_loop(self, messages: list, exclude_tools: Optional[list] = None) -> tuple[str, list]:
+    def _agent_loop(self, messages: list, exclude_tools: Optional[list] = None,
+                    stream_final: bool = False) -> tuple[str, list]:
         """
         Agent 核心循环：O-O-D-A
 
         Observe (工具返回) → Orient (解读) → Decide (LLM) → Act (执行工具)
+
+        stream_final: 为 True 时，最终文本回答用流式生成边 emit text 事件，
+                      让前端逐步显示而非等全部生成完。
         """
         schemas = self.tools.get_schemas()
         if exclude_tools:
@@ -214,7 +303,7 @@ class Agent:
                 ]
             messages.append(assistant_msg)
 
-            # 无工具调用 → 结束（最终答案由 Agent.run() 通过 done 事件发送）
+            # 无工具调用 → 结束
             if not response["tool_calls"]:
                 return response["text"], messages
 
@@ -262,13 +351,15 @@ class Agent:
             "You are Sleeping fox (睡狐), an AI assistant developed for this platform. "
             "You are powered by large language models and equipped with tools to help users. "
             "Be concise, helpful, and act decisively. When asked who you are, say you are Sleeping fox.",
+            "Keep answers reasonably short — use bullet points and tables over long paragraphs. Don't over-explain, skip filler."
             "",
             "# Quick Rules",
             "- Knowledge/definition questions → answer directly, NO tools needed. Be fast.",
             "- Only use tools when: real-time data, file ops, charts, search, or user explicitly asks.",
+            "- Knowledge/advice/guide questions (how to, tips, why) → answer directly from your knowledge, NO tools or charts needed.",
             "- Pick the right tool based on its description. Trust the tool descriptions.",
             "- Always show images with ![title](url)",
-            "- DO NOT overthink — first match, act immediately.",
+            "- A股大盘用 stock_market，美股大盘用 stock_market_us，不要用 stock_info 逐个查询指数。",
             "",
             "# Chart / Drawing Rules",
             "- Use `generate_chart` for any data chart, math plot, or regression. Read the tool description for available chart_types.",
@@ -283,14 +374,6 @@ class Agent:
         persistent = self.memory.load_persistent()
         if persistent:
             parts.append(f"\n# Previous Context\n{persistent}")
-        # 如果有上一个 Orient 结论，注入
-        if self._last_orientation:
-            o = self._last_orientation
-            parts.append(
-                f"\n# Latest Orientation\n"
-                f"Interpretation: {o.get('interpretation', '')[:300]}\n"
-                f"Focus: {o.get('focus', '')[:200]}"
-            )
         return "\n".join(parts)
 
     def _build_messages(self, task: str) -> list[dict]:
