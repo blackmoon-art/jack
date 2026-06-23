@@ -1,59 +1,5 @@
 **Reflection:** LESSON: be better
 
-## 2026-06-23 16:07:06
-**Task:** task
-**Status:** retry
-**Score:** 8
-**Reflection:** LESSON: lesson 1
-
-## 2026-06-23 16:07:06
-**Task:** task
-**Status:** retry
-**Score:** 8
-**Reflection:** LESSON: lesson 2
-
-## 2026-06-23 16:07:06
-**Task:** task
-**Status:** retry
-**Score:** 8
-**Reflection:** LESSON: be better
-
-## 2026-06-23 16:07:23
-**Task:** task
-**Status:** retry
-**Score:** 8
-**Reflection:** LESSON: lesson 1
-
-## 2026-06-23 16:07:23
-**Task:** task
-**Status:** retry
-**Score:** 8
-**Reflection:** LESSON: lesson 2
-
-## 2026-06-23 16:07:23
-**Task:** task
-**Status:** retry
-**Score:** 8
-**Reflection:** LESSON: be better
-
-## 2026-06-23 16:08:35
-**Task:** task
-**Status:** retry
-**Score:** 8
-**Reflection:** LESSON: lesson 1
-
-## 2026-06-23 16:08:35
-**Task:** task
-**Status:** retry
-**Score:** 8
-**Reflection:** LESSON: lesson 2
-
-## 2026-06-23 16:08:35
-**Task:** task
-**Status:** retry
-**Score:** 8
-**Reflection:** LESSON: be better
-
 ## 2026-06-23 16:09:03
 **Task:** task
 **Status:** retry
@@ -193,6 +139,60 @@
 **Reflection:** LESSON: lesson 2
 
 ## 2026-06-23 16:32:28
+**Task:** task
+**Status:** retry
+**Score:** 0
+**Reflection:** LESSON: be better
+
+## 2026-06-23 16:34:05
+**Task:** task
+**Status:** retry
+**Score:** 0
+**Reflection:** LESSON: lesson 1
+
+## 2026-06-23 16:34:05
+**Task:** task
+**Status:** retry
+**Score:** 0
+**Reflection:** LESSON: lesson 2
+
+## 2026-06-23 16:34:05
+**Task:** task
+**Status:** retry
+**Score:** 0
+**Reflection:** LESSON: be better
+
+## 2026-06-23 16:36:21
+**Task:** task
+**Status:** retry
+**Score:** 0
+**Reflection:** LESSON: lesson 1
+
+## 2026-06-23 16:36:21
+**Task:** task
+**Status:** retry
+**Score:** 0
+**Reflection:** LESSON: lesson 2
+
+## 2026-06-23 16:36:21
+**Task:** task
+**Status:** retry
+**Score:** 0
+**Reflection:** LESSON: be better
+
+## 2026-06-23 16:38:50
+**Task:** task
+**Status:** retry
+**Score:** 0
+**Reflection:** LESSON: lesson 1
+
+## 2026-06-23 16:38:50
+**Task:** task
+**Status:** retry
+**Score:** 0
+**Reflection:** LESSON: lesson 2
+
+## 2026-06-23 16:38:50
 **Task:** task
 **Status:** retry
 **Score:** 0
