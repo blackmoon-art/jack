@@ -229,9 +229,8 @@ class Agent:
             "- Only use tools when: real-time data, file ops, charts, search, or user explicitly asks.",
             "- Data/numbers → generate_chart | Stocks → stock_chart | Flow/architecture → mermaid_chart | Editable → drawio_diagram",
             "- Always show images with ![title](url)",
-            "- If no chart type fits (e.g. flag, logo, figure) → use `bash` with a Python script to draw via matplotlib. Fast. If it would be >20 lines, just say you can't draw it instead.",
-            "- You CANNOT draw: animals, people, photos, or realistic images. Say so quickly and move on.",
-            "- DO NOT overthink — first match, act immediately. Prefer doing over thinking.",
+            "- Drawing animals/objects → use `generate_chart` with chart_type='draw'. Labels are shape commands: circle:x,y,r,color | ellipse:x,y,rx,ry,color | rect:x,y,w,h,color | triangle:x1,y1,x2,y2,x3,y3,color. Compose from basic shapes.",
+            "- DO NOT overthink — first match, act immediately.",
         ]
         rules = self.orient_engine.load_rules()
         if rules:

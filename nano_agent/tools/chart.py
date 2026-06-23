@@ -65,7 +65,8 @@ class Chart:
         except Exception as e:
             return f"Error parsing data: {e}"
 
-        if not data_sets or not data_sets[0]:
+        no_data_types = {"cat", "pythagorean", "draw"}
+        if (not data_sets or not data_sets[0]) and chart_type not in no_data_types:
             return "Error: data is required (e.g. '10,20,30,40')"
 
         # 设置中文字体
@@ -115,6 +116,8 @@ class Chart:
                 self._draw_function(ax, data_sets, label_sets, is_dark)
             elif chart_type == "cat":
                 self._draw_cat(ax, data_sets, label_sets, is_dark)
+            elif chart_type == "draw":
+                self._draw_freeform(ax, data_sets, label_sets, is_dark)
             else:
                 return f"Error: Unknown chart type '{chart_type}'. Supported: line, curve, bar, scatter, pie, histogram, area, heatmap, radar, bubble"
         except Exception as e:
@@ -370,6 +373,43 @@ class Chart:
         # 嘴
         for dx in [-0.3, 0.3]:
             ax.plot([0, dx], [-0.8, -1.2], color=fg, linewidth=1)
+
+    def _draw_freeform(self, ax, data_sets, label_sets, is_dark=True):
+        """自由绘图 — labels 每行一条指令: circle:x,y,r,color | rect:x,y,w,h,color
+        | ellipse:x,y,rx,ry,color | line:x1,y1,x2,y2,linewidth,color
+        | triangle:x1,y1,x2,y2,x3,y3,color"""
+        from matplotlib.patches import Circle, Rectangle, Ellipse, Polygon
+        fg = "#e0e0e0" if is_dark else "#333"
+        ax.set_xlim(-8, 8); ax.set_ylim(-8, 8); ax.set_aspect("equal"); ax.axis("off")
+        shapes = label_sets[0] if label_sets else data_sets[0]
+        for cmd in shapes:
+            parts = cmd.split(":")
+            kind = parts[0].strip()
+            try:
+                if kind == "circle":
+                    x, y, r = float(parts[1]), float(parts[2]), float(parts[3])
+                    color = parts[4].strip() if len(parts) > 4 else "#7c3aed"
+                    ax.add_patch(Circle((x, y), r, facecolor=color, edgecolor=fg, linewidth=1.5))
+                elif kind == "rect":
+                    x, y, w, h = float(parts[1]), float(parts[2]), float(parts[3]), float(parts[4])
+                    color = parts[5].strip() if len(parts) > 5 else "#7c3aed"
+                    ax.add_patch(Rectangle((x-w/2, y-h/2), w, h, facecolor=color, edgecolor=fg, linewidth=1.5))
+                elif kind == "ellipse":
+                    x, y, rx, ry = float(parts[1]), float(parts[2]), float(parts[3]), float(parts[4])
+                    color = parts[5].strip() if len(parts) > 5 else "#7c3aed"
+                    ax.add_patch(Ellipse((x, y), rx*2, ry*2, facecolor=color, edgecolor=fg, linewidth=1.5))
+                elif kind == "line":
+                    x1, y1, x2, y2 = float(parts[1]), float(parts[2]), float(parts[3]), float(parts[4])
+                    lw = float(parts[5]) if len(parts) > 5 and parts[5] else 1.5
+                    color = parts[6].strip() if len(parts) > 6 else fg
+                    ax.plot([x1, x2], [y1, y2], color=color, linewidth=lw)
+                elif kind == "triangle":
+                    pts = [(float(parts[1]), float(parts[2])), (float(parts[3]), float(parts[4])),
+                           (float(parts[5]), float(parts[6]))]
+                    color = parts[7].strip() if len(parts) > 7 else "#7c3aed"
+                    ax.add_patch(Polygon(pts, closed=True, facecolor=color, edgecolor=fg, linewidth=1.5))
+            except (ValueError, IndexError):
+                pass
 
     # ── 清理 ──
 
