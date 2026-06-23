@@ -42,6 +42,7 @@ class ReflexionStrategy(BaseStrategy):
         super().__init__(config, llm, tools, **kwargs)
         self.max_retries = max_retries if max_retries is not None else config.reflexion_max_retries
         self.lesson_memory: list[str] = []  # 精准教训（只有 LESSON 行）
+        self._trace_id: int = 0  # 当前轨迹 ID
 
         # 从持久记忆加载历史教训（按相关性过滤）
         self._load_relevant_lessons()
@@ -162,6 +163,9 @@ class ReflexionStrategy(BaseStrategy):
         logger.info(f"[Reflexion] Task: {task}")
         logger.info(f"{'='*60}")
 
+        # 启动轨迹记录
+        self._start_trace(task)
+
         best_result = ""
         best_score = -1
         all_reflections: list[str] = []
@@ -215,6 +219,9 @@ class ReflexionStrategy(BaseStrategy):
             logger.info(f"[Evaluate] status={eval_result['status']}, score={score}/10")
             logger.info(f"[Evaluate] reason={eval_result.get('reason', 'N/A')}")
 
+            # 保存尝试到轨迹
+            self._save_attempt(attempt, result, eval_result)
+
             # 保留最佳结果
             if score > best_score:
                 best_score = score
@@ -243,6 +250,7 @@ class ReflexionStrategy(BaseStrategy):
             # #5 优化：只提取 LESSON 行作为教训
             lesson = self._extract_lesson(reflection)
             self.lesson_memory.append(lesson)
+            self._save_lesson(lesson, trace_id=self._trace_id)
             logger.info(f"[Reflect] Lesson: {lesson[:200]}")
 
         # 保存反思教训到持久记忆
@@ -258,11 +266,20 @@ class ReflexionStrategy(BaseStrategy):
     # ── 历史教训 ──────────────────────────────────────────
 
     def _load_relevant_lessons(self):
-        """#4 优化：从持久记忆加载与当前任务相关的教训（按相关性过滤）。"""
+        """从持久记忆加载与当前任务相关的教训。优先从 SQLite 轨迹加载。"""
         if not self.memory:
             return
         try:
-            # 用 Memory 的全文检索获取相关教训
+            # 优先从 ReflexionTrace 加载
+            trace = getattr(self.memory, '_reflexion_trace', None)
+            if trace:
+                lessons = trace.load_lessons(limit=20)
+                if lessons:
+                    self.lesson_memory.extend(lessons)
+                    logger.info(f"[Reflexion] Loaded {len(lessons)} lessons from trace DB")
+                    return
+
+            # Fallback: 从文本文件加载
             content = self.memory.load_reflections()
             if content:
                 for line in content.split("\n"):
@@ -270,7 +287,6 @@ class ReflexionStrategy(BaseStrategy):
                     if stripped.startswith("**LESSON:**"):
                         lesson = stripped.replace("**LESSON:**", "").strip()
                     elif stripped.startswith("**Reflection:**"):
-                        # 兼容旧格式——提取整行作为参考
                         continue
                     else:
                         continue
@@ -280,6 +296,28 @@ class ReflexionStrategy(BaseStrategy):
                     logger.info(f"[Reflexion] Loaded {len(self.lesson_memory)} historical lessons")
         except Exception as e:
             logger.warning(f"[Reflexion] Failed to load lessons: {e}")
+
+    def _start_trace(self, task: str):
+        """启动轨迹记录。"""
+        trace = getattr(self.memory, '_reflexion_trace', None) if self.memory else None
+        if trace:
+            self._trace_id = trace.start_trace(task)
+            if self._trace_id:
+                logger.info(f"[Reflexion] Started trace #{self._trace_id}")
+
+    def _save_attempt(self, attempt_num: int, result: str, eval_result: dict,
+                      reflection: str = "", lesson: str = ""):
+        """保存一次尝试到轨迹。"""
+        trace = getattr(self.memory, '_reflexion_trace', None) if self.memory else None
+        if trace and self._trace_id:
+            trace.save_attempt(self._trace_id, attempt_num + 1, result,
+                               eval_result, reflection, lesson)
+
+    def _save_lesson(self, lesson: str, trace_id: int = 0):
+        """保存教训到轨迹。"""
+        trace = getattr(self.memory, '_reflexion_trace', None) if self.memory else None
+        if trace:
+            trace.save_lesson(lesson, trace_id)
 
     def _save_lessons_to_file(self, task: str, all_reflections: list[str]):
         """保存反思轨迹到文件。#5 优化：只存 LESSON 行。"""

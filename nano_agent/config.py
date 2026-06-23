@@ -66,6 +66,9 @@ class Config:
     long_term_db: Optional[str] = field(
         default_factory=lambda: os.getenv("AGENT_LONG_TERM_DB", "long_term_memory.db")
     )
+    reflexion_db: Optional[str] = field(
+        default_factory=lambda: os.getenv("AGENT_REFLEXION_DB", "reflexion_trace.db")
+    )
 
     # ── 策略参数 ──
     react_max_steps: int = int(os.getenv("AGENT_REACT_MAX_STEPS", "10"))

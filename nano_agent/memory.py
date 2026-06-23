@@ -129,6 +129,219 @@ class LongTermMemory:
             logger.warning(f"Failed to clear long-term memory: {e}")
 
 
+class ReflexionTrace:
+    """Reflexion 轨迹持久化 — SQLite 存储。
+
+    存储每次 Reflexion 任务的完整轨迹：
+      - task: 原始任务
+      - attempts: 每次尝试的 steps / result / evaluation / reflection
+      - lessons: 提取的精准教训
+
+    用途:
+      - 跨任务复用教训（替代纯文本 reflection 文件）
+      - 调试：回溯某次任务的完整推理过程
+      - 统计：分析策略成功率、常见失败模式
+    """
+
+    def __init__(self, db_path: str = "reflexion_trace.db"):
+        self.db_path = db_path
+        self._local = threading.local()
+        self._init_db()
+
+    @property
+    def _conn(self) -> sqlite3.Connection:
+        conn = getattr(self._local, 'conn', None)
+        if conn is None:
+            conn = sqlite3.connect(self.db_path, check_same_thread=False)
+            conn.row_factory = sqlite3.Row
+            self._local.conn = conn
+        return conn
+
+    def _init_db(self):
+        try:
+            self._conn.executescript("""
+                CREATE TABLE IF NOT EXISTS trace (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    task TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    final_status TEXT DEFAULT '',
+                    final_score INTEGER DEFAULT 0,
+                    best_result TEXT DEFAULT ''
+                );
+                CREATE TABLE IF NOT EXISTS attempt (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    trace_id INTEGER NOT NULL,
+                    attempt_num INTEGER NOT NULL,
+                    result TEXT DEFAULT '',
+                    eval_status TEXT DEFAULT '',
+                    eval_score INTEGER DEFAULT 0,
+                    eval_reason TEXT DEFAULT '',
+                    reflection TEXT DEFAULT '',
+                    lesson TEXT DEFAULT '',
+                    FOREIGN KEY (trace_id) REFERENCES trace(id)
+                );
+                CREATE TABLE IF NOT EXISTS lesson (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    source_trace_id INTEGER,
+                    lesson TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    use_count INTEGER DEFAULT 0
+                );
+                CREATE INDEX IF NOT EXISTS idx_attempt_trace ON attempt(trace_id);
+                CREATE INDEX IF NOT EXISTS idx_lesson_created ON lesson(created_at);
+            """)
+            self._conn.commit()
+        except Exception as e:
+            logger.warning(f"Failed to init reflexion trace DB: {e}")
+            self.db_path = None
+
+    def start_trace(self, task: str) -> int:
+        """开始一条新的轨迹，返回 trace_id。"""
+        if not self.db_path:
+            return 0
+        try:
+            cur = self._conn.execute(
+                "INSERT INTO trace (task, created_at) VALUES (?, ?)",
+                (task, datetime.now().isoformat())
+            )
+            self._conn.commit()
+            return cur.lastrowid
+        except Exception as e:
+            logger.warning(f"Failed to start trace: {e}")
+            return 0
+
+    def save_attempt(self, trace_id: int, attempt_num: int,
+                     result: str, eval_result: dict,
+                     reflection: str = "", lesson: str = ""):
+        """保存一次尝试的结果。"""
+        if not self.db_path or not trace_id:
+            return
+        try:
+            self._conn.execute(
+                """INSERT INTO attempt
+                   (trace_id, attempt_num, result, eval_status, eval_score,
+                    eval_reason, reflection, lesson)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                (trace_id, attempt_num, result[:3000],
+                 eval_result.get("status", ""), eval_result.get("score", 0),
+                 eval_result.get("reason", ""), reflection[:1000], lesson[:500])
+            )
+            # 更新 trace 的最终状态
+            self._conn.execute(
+                """UPDATE trace SET final_status=?, final_score=?, best_result=?
+                   WHERE id=? AND (final_score IS NULL OR final_score < ?)""",
+                (eval_result.get("status", ""), eval_result.get("score", 0),
+                 result[:3000], trace_id, eval_result.get("score", 0))
+            )
+            self._conn.commit()
+        except Exception as e:
+            logger.warning(f"Failed to save attempt: {e}")
+
+    def save_lesson(self, lesson: str, trace_id: int = 0):
+        """保存一条教训。"""
+        if not self.db_path:
+            return
+        try:
+            self._conn.execute(
+                "INSERT INTO lesson (source_trace_id, lesson, created_at) VALUES (?, ?, ?)",
+                (trace_id, lesson[:500], datetime.now().isoformat())
+            )
+            self._conn.commit()
+        except Exception as e:
+            logger.warning(f"Failed to save lesson: {e}")
+
+    def load_lessons(self, limit: int = 20) -> list[str]:
+        """加载最近的教训。"""
+        if not self.db_path:
+            return []
+        try:
+            rows = self._conn.execute(
+                "SELECT lesson FROM lesson ORDER BY created_at DESC LIMIT ?",
+                (limit,)
+            ).fetchall()
+            return [r["lesson"] for r in rows]
+        except Exception as e:
+            logger.warning(f"Failed to load lessons: {e}")
+            return []
+
+    def search_lessons(self, query: str, top_k: int = 5) -> list[str]:
+        """搜索与 query 相关的教训（简单 LIKE 匹配）。"""
+        if not self.db_path:
+            return []
+        try:
+            rows = self._conn.execute(
+                """SELECT lesson FROM lesson
+                   WHERE lesson LIKE ?
+                   ORDER BY created_at DESC LIMIT ?""",
+                (f"%{query[:100]}%", top_k)
+            ).fetchall()
+            return [r["lesson"] for r in rows]
+        except Exception as e:
+            logger.warning(f"Failed to search lessons: {e}")
+            return []
+
+    def get_trace(self, trace_id: int) -> dict | None:
+        """获取一条轨迹的完整信息（含所有 attempts）。"""
+        if not self.db_path:
+            return None
+        try:
+            row = self._conn.execute(
+                "SELECT * FROM trace WHERE id=?", (trace_id,)
+            ).fetchone()
+            if not row:
+                return None
+            attempts = self._conn.execute(
+                "SELECT * FROM attempt WHERE trace_id=? ORDER BY attempt_num",
+                (trace_id,)
+            ).fetchall()
+            return {
+                "id": row["id"],
+                "task": row["task"],
+                "created_at": row["created_at"],
+                "final_status": row["final_status"],
+                "final_score": row["final_score"],
+                "best_result": row["best_result"],
+                "attempts": [dict(a) for a in attempts],
+            }
+        except Exception as e:
+            logger.warning(f"Failed to get trace: {e}")
+            return None
+
+    def recent_traces(self, limit: int = 10) -> list[dict]:
+        """获取最近的轨迹列表。"""
+        if not self.db_path:
+            return []
+        try:
+            rows = self._conn.execute(
+                """SELECT id, task, created_at, final_status, final_score
+                   FROM trace ORDER BY created_at DESC LIMIT ?""",
+                (limit,)
+            ).fetchall()
+            return [dict(r) for r in rows]
+        except Exception as e:
+            logger.warning(f"Failed to get recent traces: {e}")
+            return []
+
+    def stats(self) -> dict:
+        """返回轨迹统计。"""
+        if not self.db_path:
+            return {}
+        try:
+            total = self._conn.execute("SELECT COUNT(*) FROM trace").fetchone()[0]
+            success = self._conn.execute(
+                "SELECT COUNT(*) FROM trace WHERE final_score >= 7"
+            ).fetchone()[0]
+            lessons = self._conn.execute("SELECT COUNT(*) FROM lesson").fetchone()[0]
+            return {
+                "total_traces": total,
+                "success_count": success,
+                "success_rate": round(success / total, 2) if total else 0,
+                "total_lessons": lessons,
+            }
+        except Exception:
+            return {}
+
+
 class Memory:
     """
     四层记忆门面:
@@ -140,19 +353,22 @@ class Memory:
 
     def __init__(self, window_size: int = 10, file_path: Optional[str] = None,
                  reflection_path: Optional[str] = None,
-                 long_term_db: Optional[str] = None):
+                 long_term_db: Optional[str] = None,
+                 reflexion_db: Optional[str] = None):
         """
         Args:
             window_size:    会话窗口保留的对话轮数
             file_path:      持久化记忆文件路径 (None 则禁用)
             reflection_path: 反思记忆文件路径 (None 则禁用)
             long_term_db:   长期记忆 SQLite 路径 (None 则禁用)
+            reflexion_db:   Reflexion 轨迹 SQLite 路径 (None 则禁用)
         """
         self.window_size = window_size
         self.file_path = file_path
         self.reflection_path = reflection_path
         self._messages: list[dict] = []  # [{"role": str, "content": str}]
         self._long_term = LongTermMemory(long_term_db) if long_term_db else None
+        self._reflexion_trace = ReflexionTrace(reflexion_db) if reflexion_db else None
 
     # ── 1. Working Memory (窗口) ────────────────────────
 

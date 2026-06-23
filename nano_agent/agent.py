@@ -46,7 +46,8 @@ class Agent:
                                    brave_api_key=self.config.brave_api_key or "",
                                    charts_dir=self.config.charts_dir)
         self.memory = Memory(self.config.memory_window, self.config.memory_file,
-                              self.config.reflection_file, self.config.long_term_db)
+                              self.config.reflection_file, self.config.long_term_db,
+                              self.config.reflexion_db)
         self.orient_engine = Orient(self.config, self.llm)
         self._strategy_instance = None
         self._last_orientation: Optional[dict] = None  # 最近一次 Orient 结果

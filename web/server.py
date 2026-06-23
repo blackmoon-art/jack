@@ -115,7 +115,7 @@ _SESSION_TTL_SECONDS = 7200  # 2 小时未访问则可淘汰
 # ── 使用次数限制 ──────────────────────────────────────
 
 USAGE_FILE = Path(__file__).parent / "usage.json"
-DAILY_LIMIT = int(os.getenv("DAILY_LIMIT_PER_USER", "20"))  # 默认每人每天 20 次
+DAILY_LIMIT = int(os.getenv("DAILY_LIMIT_PER_USER", "0"))  # 0 = 不限
 
 
 def _today() -> str:
@@ -288,14 +288,6 @@ async def chat(request: Request):
         return {"error": "Empty message"}
 
     session_id = get_or_create_session(session_id)
-
-    # 每日次数限制（管理员跳过）
-    limit_msg = "" if is_owner else check_daily_limit(session_id)
-    if limit_msg:
-        return StreamingResponse(
-            iter([f"event: error\ndata: {json.dumps({'text': limit_msg})}\n\n"]),
-            media_type="text/event-stream",
-        )
 
     agent = sessions[session_id]["agent"]
 
