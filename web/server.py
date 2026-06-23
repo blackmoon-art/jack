@@ -18,7 +18,7 @@ from typing import Optional
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, StreamingResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from nano_agent import Agent, Config
@@ -348,7 +348,14 @@ async def index():
     return HTMLResponse(html, headers={"Cache-Control": "no-cache, no-store", "ngrok-skip-browser-warning": "1"})
 
 
-# ── 图表文件服务 ──────────────────────────────────────────
+# ── 静态资源 ──────────────────────────────────────────
+
+@app.get("/fox.png")
+async def fox_icon():
+    p = STATIC_DIR / "fox.png"
+    if not p.exists():
+        return Response(status_code=404)
+    return FileResponse(p, media_type="image/png")
 
 CHARTS_DIR = STATIC_DIR / "charts"
 CHARTS_DIR.mkdir(exist_ok=True)
