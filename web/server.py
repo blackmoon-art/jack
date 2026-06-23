@@ -330,12 +330,9 @@ async def clear_session(session_id: str):
 
 @app.get("/api/health")
 async def health():
-    today = _today()
-    usage = load_usage().get(today, {})
     return {
         "status": "ok",
         "sessions": len(sessions),
-        "today_usage": {k: f"{v}/{DAILY_LIMIT}" for k, v in usage.items()},
         "model": Config().model,
         "provider": Config().provider,
     }
