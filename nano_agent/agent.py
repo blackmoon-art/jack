@@ -227,9 +227,8 @@ class Agent:
             "# Quick Rules",
             "- Knowledge/definition questions → answer directly, NO tools needed. Be fast.",
             "- Only use tools when: real-time data, file ops, charts, search, or user explicitly asks.",
-            "- Data/numbers → generate_chart | Stocks → stock_chart | Flow/architecture → mermaid_chart | Editable → drawio_diagram",
+            "- Pick the right tool based on its description. Trust the tool descriptions.",
             "- Always show images with ![title](url)",
-            "- Drawing animals/objects → use `generate_chart` with chart_type='draw'. Labels are shape commands: circle:x,y,r,color | ellipse:x,y,rx,ry,color | rect:x,y,w,h,color | triangle:x1,y1,x2,y2,x3,y3,color. Compose from basic shapes.",
             "- DO NOT overthink — first match, act immediately.",
         ]
         rules = self.orient_engine.load_rules()
