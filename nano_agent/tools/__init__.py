@@ -22,6 +22,7 @@ from .stock import Stock
 from .ppt import PPT
 from .chart import Chart
 from .diagram import Diagram
+from .ai_image import AIImage
 
 logger = logging.getLogger("nano_agent.tools")
 
@@ -45,6 +46,7 @@ class ToolRegistry:
         self._ppt = PPT(work_dir)
         self._chart = Chart(work_dir)
         self._diagram = Diagram(work_dir)
+        self._ai_image = AIImage(work_dir)
 
         # 注册内部工具
         self._tools: dict[str, dict[str, Any]] = {}
@@ -130,6 +132,12 @@ class ToolRegistry:
             "nodes": {"type": "string", "description": "Nodes: one per line, format 'id:label:type:x:y:width:height'. Type: rectangle, ellipse, diamond, parallelogram, cylinder. x/y/w/h optional."},
             "edges": {"type": "string", "description": "Edges: one per line, format 'source:target:label'. Label optional."},
         }, required=["nodes"])
+        self._register("ai_image", "Generate AI images from text prompts using Stable Diffusion. Use for: animals, people, scenes, art, any realistic or creative image. Prompt in English. Examples: 'a cute orange cat', 'sunset over mountains'.", self._ai_image.generate_image, {
+            "prompt": {"type": "string", "description": "English prompt describing the image. Be specific. E.g. 'a cute sleeping fox on a purple pillow'"},
+            "negative_prompt": {"type": "string", "description": "What to avoid (optional). E.g. 'blurry, ugly, distorted'"},
+            "steps": {"type": "integer", "description": "Quality steps: 15-30 (default: 20). More = better but slower."},
+            "width": {"type": "integer", "description": "Image width (default: 512)"},
+        }, required=["prompt"])
         self._register("generate_chart", "Generate charts, math plots, and drawings. For data: use line/bar/pie. For math: chart_type='function', data='sin(x);-3;3'. For drawing animals/objects: chart_type='draw', data='' (empty), labels='shape commands separated by ;'. Shapes: circle:x,y,radius,color | ellipse:x,y,rx,ry,color | rect:x,y,w,h,color | triangle:x1,y1,x2,y2,x3,y3,color | line:x1,y1,x2,y2,width,color. Fox: circle:0,0,3,#7c3aed;circle:-0.8,0.5,0.5,white;circle:0.8,0.5,0.5,white;circle:-0.8,0.5,0.2,black;circle:0.8,0.5,0.2,black;circle:0,-0.5,0.4,#f59e0b;triangle:-2,2,-1,3.5,0,2.5,#7c3aed;triangle:2,2,1,3.5,0,2.5,#7c3aed", self._chart.generate_chart, {
             "chart_type": {"type": "string", "description": "Chart type: line, curve, bar, scatter, pie, histogram, area, heatmap, radar, bubble, function, draw, cat (default: line)"},
             "title": {"type": "string", "description": "Chart title"},
@@ -225,6 +233,7 @@ class ToolRegistry:
         "create_ppt": "_ppt",
         "mermaid_chart": "_diagram",
         "drawio_diagram": "_diagram",
+        "ai_image": "_ai_image",
         "generate_chart": "_chart",
         "_search_brave": ("_search", "_search_brave"),
         "_search_duckduckgo": ("_search", "_search_duckduckgo"),
