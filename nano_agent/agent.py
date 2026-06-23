@@ -237,7 +237,7 @@ class Agent:
             "- NEVER write JavaScript or CSS for charts. The frontend cannot render them.",
             "- For data charts: use generate_chart with chart_type=line/bar/pie/scatter/etc.",
             "- For math plots: use generate_chart with chart_type=function, data='expression;x_min;x_max'",
-            "- For drawings/animals: use generate_chart with chart_type=cat or chart_type=draw",
+            "- For drawings/animals: use ai_image tool (Stable Diffusion). For data charts: use generate_chart.",
             "- The generate_chart tool returns a markdown image link ![title](/charts/xxx.png) — include it in your final answer.",
         ]
         rules = self.orient_engine.load_rules()
