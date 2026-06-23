@@ -19,11 +19,28 @@ logger = logging.getLogger("nano_agent.tools.chart")
 
 
 class Chart:
-    def __init__(self, work_dir: str):
+    # 工具注册声明
+    TOOLS = [
+        ("generate_chart", "Generate charts, math plots, and shape drawings. Data charts: chart_type=line/bar/pie (data='10,20,30'). Math: chart_type=function (data='sin(x);-3;3'). Drawings: chart_type=draw or cat (labels='circle:0,0,3,red;rect:1,1,2,1,blue').", "generate_chart",
+         {"chart_type": {"type": "string", "description": "Chart type: line, curve, bar, scatter, pie, histogram, area, heatmap, radar, bubble, function, draw, cat (default: line)"},
+          "data": {"type": "string", "description": "Data series (comma-separated). Multiple series separated by semicolons"},
+          "title": {"type": "string", "description": "Chart title"},
+          "labels": {"type": "string", "description": "Series labels or shape definitions (semicolon-separated)"},
+          "x_label": {"type": "string", "description": "X-axis label"},
+          "y_label": {"type": "string", "description": "Y-axis label"},
+          "width": {"type": "integer", "description": "Image width (default: 512)"},
+          "height": {"type": "integer", "description": "Image height (default: 384)"}},
+         []),
+    ]
+
+    def __init__(self, work_dir: str, charts_dir: str = ""):
         self.work_dir = work_dir
-        # 图片保存到 web/static/charts/ 以便前端直接访问
-        web_static = Path(__file__).parent.parent.parent / "web" / "static"
-        self.charts_dir = web_static / "charts"
+        # 图片保存到 charts_dir，默认回退到旧路径
+        if charts_dir:
+            self.charts_dir = Path(charts_dir)
+        else:
+            web_static = Path(__file__).parent.parent.parent / "web" / "static"
+            self.charts_dir = web_static / "charts"
         self.charts_dir.mkdir(parents=True, exist_ok=True)
 
     def generate_chart(

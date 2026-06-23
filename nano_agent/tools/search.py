@@ -13,6 +13,17 @@ logger = logging.getLogger("nano_agent.tools.search")
 
 
 class Search:
+    # 工具注册声明
+    TOOLS = [
+        ("web_search", "Search the web (Bing → DuckDuckGo → Brave → SearXNG → Wikipedia).", "web_search",
+         {"query": {"type": "string", "description": "Search query"},
+          "max_results": {"type": "integer", "description": "Max results (1-10, default: 5)"}},
+         ["query"]),
+        ("fetch_url", "Fetch and extract text content from a URL.", "fetch_url",
+         {"url": {"type": "string", "description": "URL to fetch"}},
+         ["url"]),
+    ]
+
     def __init__(self, brave_api_key: str = ""):
         self.brave_api_key = brave_api_key
 

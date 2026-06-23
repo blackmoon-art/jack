@@ -13,9 +13,10 @@
 import logging
 from typing import Any, Optional
 
+from .observation import Observation
 from .sandbox import PathSandbox
 from .file_ops import FileOps
-from .shell import Observation, Shell
+from .shell import Shell
 from .search import Search
 from .weather import Weather
 from .stock import Stock
@@ -31,7 +32,7 @@ class ToolRegistry:
     """管理所有工具的：执行函数 + OpenAI tool schema + 描述。"""
 
     def __init__(self, work_dir: str, bash_timeout: int = 120,
-                 brave_api_key: str = ""):
+                 brave_api_key: str = "", charts_dir: str = ""):
         self.sandbox = PathSandbox(work_dir)
         self.bash_timeout = bash_timeout
         self.work_dir = work_dir
@@ -42,11 +43,11 @@ class ToolRegistry:
         self._shell = Shell(work_dir, bash_timeout)
         self._search = Search(brave_api_key)
         self._weather = Weather()
-        self._stock = Stock(work_dir)
+        self._stock = Stock(work_dir, charts_dir=charts_dir)
         self._ppt = PPT(work_dir)
-        self._chart = Chart(work_dir)
-        self._diagram = Diagram(work_dir)
-        self._ai_image = AIImage(work_dir)
+        self._chart = Chart(work_dir, charts_dir=charts_dir)
+        self._diagram = Diagram(work_dir, charts_dir=charts_dir)
+        self._ai_image = AIImage(work_dir, charts_dir=charts_dir)
 
         # 注册内部工具
         self._tools: dict[str, dict[str, Any]] = {}
@@ -180,7 +181,7 @@ class ToolRegistry:
         Observation 兼容字符串操作（__str__/__contains__/__eq__），
         旧代码的 str() 调用不受影响。
         """
-        from .shell import Observation
+        from .observation import Observation
         if name not in self._tools:
             return Observation(tool_name=name, result=f"Error: Unknown tool '{name}'",
                                success=False, args=arguments)

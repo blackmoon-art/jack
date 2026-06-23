@@ -24,9 +24,22 @@ def _get_device():
 
 
 class AIImage:
-    def __init__(self, work_dir: str):
-        web_static = Path(__file__).parent.parent.parent / "web" / "static"
-        self.charts_dir = web_static / "charts"
+    # 工具注册声明
+    TOOLS = [
+        ("ai_image", "Generate AI images from text prompts using Stable Diffusion. Use for: animals, people, scenes, art. Prompt in English.", "generate_image",
+         {"prompt": {"type": "string", "description": "Image description in English"},
+          "negative_prompt": {"type": "string", "description": "What to exclude"},
+          "width": {"type": "integer", "description": "Image width (default: 512)"},
+          "height": {"type": "integer", "description": "Image height (default: 512)"}},
+         ["prompt"]),
+    ]
+
+    def __init__(self, work_dir: str, charts_dir: str = ""):
+        if charts_dir:
+            self.charts_dir = Path(charts_dir)
+        else:
+            web_static = Path(__file__).parent.parent.parent / "web" / "static"
+            self.charts_dir = web_static / "charts"
         self.charts_dir.mkdir(parents=True, exist_ok=True)
 
     def generate_image(self, prompt: str, negative_prompt: str = "",

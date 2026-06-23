@@ -26,8 +26,31 @@ _PERIOD_DAYS = {'1mo': 30, '3mo': 90, '6mo': 180, '1y': 365, '3y': 1095, '5y': 1
 
 
 class Stock:
-    def __init__(self, work_dir: str):
+    # 工具注册声明
+    TOOLS = [
+        ("stock_info", "Get real-time stock quote. A-shares via Tencent API (600519, 000001), US/HK via Yahoo Finance with Tencent fallback (AAPL, 0700.HK).", "stock_info",
+         {"symbol": {"type": "string", "description": "Stock symbol (e.g. 600519, AAPL, 0700.HK)"}},
+         ["symbol"]),
+        ("stock_history", "Get historical stock prices. A-shares via Tencent K-line API, US/HK via yfinance. Period: 1mo/3mo/6mo/1y/3y/5y.", "stock_history",
+         {"symbol": {"type": "string", "description": "Stock symbol"},
+          "period": {"type": "string", "description": "Time period: 1mo, 3mo, 6mo, 1y, 3y, 5y (default: 1mo)"}},
+         ["symbol"]),
+        ("stock_chart", "Generate stock price chart (PNG) with volume subplot. A-shares via Tencent API, US/HK via yfinance. Supports line and candle charts.", "stock_chart",
+         {"symbol": {"type": "string", "description": "Stock symbol"},
+          "period": {"type": "string", "description": "Time period: 1mo, 3mo, 6mo, 1y, 3y, 5y (default: 3mo)"},
+          "chart_type": {"type": "string", "description": "Chart type: line or candle (default: line)"}},
+         ["symbol"]),
+        ("stock_indicators", "Calculate technical indicators: MA (5/10/20/60), RSI (14), MACD (12/26/9), Bollinger Bands (20,2).", "stock_indicators",
+         {"symbol": {"type": "string", "description": "Stock symbol"},
+          "period": {"type": "string", "description": "Time period: 1mo, 3mo, 6mo, 1y, 3y, 5y (default: 6mo)"}},
+         ["symbol"]),
+        ("stock_market", "Get A-share market overview: major indices + sector rankings (top/bottom 5).", "stock_market",
+         {}, []),
+    ]
+
+    def __init__(self, work_dir: str, charts_dir: str = ""):
         self.work_dir = work_dir
+        self._charts_dir = charts_dir
 
     # ════════════════════════════════════════════════════
     #  实时行情
@@ -573,9 +596,12 @@ class Stock:
         clean, is_a = self._parse_stock_symbol(symbol)
         days = _PERIOD_DAYS.get(period, 90)
 
-        # 保存到 web/static/charts/ 以便前端访问
-        web_static = Path(__file__).parent.parent.parent / "web" / "static"
-        charts_dir = str(web_static / "charts")
+        # 保存到 charts_dir
+        if self._charts_dir:
+            charts_dir = self._charts_dir
+        else:
+            web_static = Path(__file__).parent.parent.parent / "web" / "static"
+            charts_dir = str(web_static / "charts")
         os.makedirs(charts_dir, exist_ok=True)
         today = datetime.now().strftime('%Y%m%d')
         filename = f"{clean}_{period}_{chart_type}_{today}.png"

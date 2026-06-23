@@ -17,6 +17,12 @@ _WMO_CODES: dict = {
 
 
 class Weather:
+    # 工具注册声明
+    TOOLS = [
+        ("get_weather", "Get current weather for a city. Data from Open-Meteo (free, no API key).", "get_weather",
+         {"city": {"type": "string", "description": "City name (Chinese or English)"}},
+         ["city"]),
+    ]
     def get_weather(self, city: str) -> str:
         """获取城市实时天气。"""
         # Step 1: 地理编码 (city → lat/lon)

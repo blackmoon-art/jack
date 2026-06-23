@@ -19,9 +19,24 @@ MERMAID_INK = "https://mermaid.ink"
 
 
 class Diagram:
-    def __init__(self, work_dir: str):
-        web_static = Path(__file__).parent.parent.parent / "web" / "static"
-        self.charts_dir = web_static / "charts"
+    # 工具注册声明
+    TOOLS = [
+        ("mermaid_chart", "Generate a diagram/flowchart from Mermaid syntax (PNG via mermaid.ink). Supports graph, flowchart, sequenceDiagram, pie, gantt, etc.", "mermaid_chart",
+         {"code": {"type": "string", "description": "Mermaid syntax code"},
+          "theme": {"type": "string", "description": "Theme: dark or default (default: dark)"}},
+         ["code"]),
+        ("drawio_diagram", "Generate a Draw.io diagram (flowchart/architecture/UML). Returns a diagrams.net link for viewing/editing.", "drawio_diagram",
+         {"diagram_type": {"type": "string", "description": "Diagram type: flowchart, architecture, uml, er (default: flowchart)"},
+          "description": {"type": "string", "description": "Natural language description of the diagram"}},
+         ["description"]),
+    ]
+
+    def __init__(self, work_dir: str, charts_dir: str = ""):
+        if charts_dir:
+            self.charts_dir = Path(charts_dir)
+        else:
+            web_static = Path(__file__).parent.parent.parent / "web" / "static"
+            self.charts_dir = web_static / "charts"
         self.charts_dir.mkdir(parents=True, exist_ok=True)
 
     # ── Mermaid ──────────────────────────────────────────

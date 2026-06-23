@@ -51,6 +51,9 @@ class Config:
     max_tokens: int = int(os.getenv("AGENT_MAX_TOKENS", "8000"))
     bash_timeout: int = int(os.getenv("AGENT_BASH_TIMEOUT", "120"))
     work_dir: str = field(default_factory=lambda: os.getenv("AGENT_WORK_DIR", str(Path.cwd())))
+    charts_dir: str = field(default_factory=lambda: os.getenv(
+        "AGENT_CHARTS_DIR", str(Path(__file__).parent.parent / "web" / "static" / "charts")
+    ))
 
     # ── 记忆 ──
     memory_window: int = int(os.getenv("AGENT_MEMORY_WINDOW", "10"))

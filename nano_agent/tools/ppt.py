@@ -23,6 +23,15 @@ def _ensure_pptx():
 
 
 class PPT:
+    # 工具注册声明
+    TOOLS = [
+        ("create_ppt", "Create a PowerPoint presentation.", "create_ppt",
+         {"title": {"type": "string", "description": "Presentation title"},
+          "slides": {"type": "string", "description": "JSON array of slide objects"},
+          "filename": {"type": "string", "description": "Output filename (default: auto)"}},
+         ["title"]),
+    ]
+
     def __init__(self, work_dir: str):
         self.work_dir = work_dir
 

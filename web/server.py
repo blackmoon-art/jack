@@ -148,7 +148,7 @@ def get_or_create_session(session_id: Optional[str] = None) -> str:
         if new_id not in sessions:
             history = db_load_history(new_id)
             sessions[new_id] = {
-                "agent": Agent(Config()),
+                "agent": Agent(Config()),  # Config() provides charts_dir
                 "history": history,
                 "last_access": _time.time(),
             }

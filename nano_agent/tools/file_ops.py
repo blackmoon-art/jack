@@ -1,4 +1,7 @@
-"""文件操作工具：read, write, edit, glob, grep。"""
+"""文件操作工具：read, write, edit, glob, grep。
+
+所有方法返回 Observation。
+"""
 
 import glob as _glob
 import re
@@ -6,71 +9,98 @@ import subprocess
 from pathlib import Path
 
 from ..tools.sandbox import PathSandbox
+from .observation import Observation
 
 
 class FileOps:
+    # 工具注册声明
+    TOOLS = [
+        ("read", "Read a file with line numbers.", "read",
+         {"path": {"type": "string", "description": "File path (relative to workspace)"},
+          "offset": {"type": "integer", "description": "Start line (0-indexed)"},
+          "limit": {"type": "integer", "description": "Max lines to read"}},
+         ["path"]),
+        ("write", "Write content to a file.", "write",
+         {"path": {"type": "string", "description": "File path (relative to workspace)"},
+          "content": {"type": "string", "description": "Content to write"}},
+         ["path", "content"]),
+        ("edit", "Replace a string in a file.", "edit",
+         {"path": {"type": "string", "description": "File path (relative to workspace)"},
+          "old_string": {"type": "string", "description": "Exact text to replace"},
+          "new_string": {"type": "string", "description": "Replacement text"}},
+         ["path", "old_string", "new_string"]),
+        ("glob", "Find files by glob pattern.", "glob",
+         {"pattern": {"type": "string", "description": "Glob pattern (e.g. '**/*.py')"}},
+         ["pattern"]),
+        ("grep", "Search for a pattern in files.", "grep",
+         {"pattern": {"type": "string", "description": "Regex pattern to search"},
+          "path": {"type": "string", "description": "Directory to search in (default: .)"}},
+         ["pattern"]),
+    ]
+
     def __init__(self, sandbox: PathSandbox, work_dir: str):
         self.sandbox = sandbox
         self.work_dir = work_dir
 
-    def read(self, path: str, offset: int = 0, limit: int = 500) -> str:
+    def read(self, path: str, offset: int = 0, limit: int = 500) -> Observation:
         """读取工作目录内的文件，带行号。"""
         safe = self.sandbox.safe_path(path)
         if not safe.is_file():
-            return f"Error: Not a file: {path}"
+            return Observation.error("read_file", f"Not a file: {path}")
         try:
             lines = safe.read_text(encoding="utf-8").splitlines()
         except UnicodeDecodeError:
-            return f"Error: File is not UTF-8 text: {path}"
+            return Observation.error("read_file", f"File is not UTF-8 text: {path}")
         except OSError as e:
-            return f"Error: {e}"
+            return Observation.error("read_file", str(e))
 
         start = max(offset, 0)
         end = start + limit if limit else len(lines)
         numbered = [f"{i+1:4d} {line}" for i, line in enumerate(lines[start:end], start)]
-        return "\n".join(numbered)
+        return Observation.ok("read_file", "\n".join(numbered))
 
-    def write(self, path: str, content: str) -> str:
+    def write(self, path: str, content: str) -> Observation:
         """写入文件到工作目录内。"""
         safe = self.sandbox.safe_path(path)
         safe.parent.mkdir(parents=True, exist_ok=True)
         try:
             safe.write_text(content, encoding="utf-8")
-            return f"Wrote {len(content)} bytes to {path}"
+            return Observation.ok("write_file", f"Wrote {len(content)} bytes to {path}")
         except OSError as e:
-            return f"Error: {e}"
+            return Observation.error("write_file", str(e))
 
-    def edit(self, path: str, old_string: str, new_string: str) -> str:
+    def edit(self, path: str, old_string: str, new_string: str) -> Observation:
         """精确替换文件中的字符串（仅替换一次，要求唯一匹配）。"""
         safe = self.sandbox.safe_path(path)
         try:
             content = safe.read_text(encoding="utf-8")
         except FileNotFoundError:
-            return f"Error: File not found: {path}"
+            return Observation.error("edit_file", f"File not found: {path}")
         except OSError as e:
-            return f"Error: {e}"
+            return Observation.error("edit_file", str(e))
 
         count = content.count(old_string)
         if count == 0:
-            return "Error: old_string not found in file"
+            return Observation.error("edit_file", "old_string not found in file")
         if count > 1:
-            return f"Error: old_string appears {count} times (must be unique)"
+            return Observation.error("edit_file", f"old_string appears {count} times (must be unique)")
 
         new_content = content.replace(old_string, new_string, 1)
         safe.write_text(new_content, encoding="utf-8")
-        return f"Edited {path}: replaced 1 occurrence"
+        return Observation.ok("edit_file", f"Edited {path}: replaced 1 occurrence")
 
-    def glob(self, pattern: str) -> str:
+    def glob(self, pattern: str) -> Observation:
         """在工作目录内查找匹配的文件。"""
         full_pattern = str(Path(self.work_dir) / pattern)
         try:
             files = _glob.glob(full_pattern, recursive=True)
             rel_files = [str(Path(f).relative_to(self.work_dir)) for f in sorted(files)]
-            return "\n".join(rel_files) if rel_files else "No files found"
+            result = "\n".join(rel_files) if rel_files else "No files found"
+            return Observation.ok("glob", result)
         except Exception as e:
-            return f"Error: {e}"
+            return Observation.error("glob", str(e))
 
-    def grep(self, pattern: str, path: str = ".") -> str:
+    def grep(self, pattern: str, path: str = ".") -> Observation:
         """在工作目录内搜索正则表达式。"""
         safe = self.sandbox.safe_path(path)
         try:
@@ -84,8 +114,8 @@ class FileOps:
                 capture_output=True, text=True, timeout=30,
             )
             out = result.stdout.strip()
-            return out[:30000] if out else "No matches found"
+            return Observation.ok("grep", out[:30000] if out else "No matches found")
         except subprocess.TimeoutExpired:
-            return "Error: grep timed out"
+            return Observation.error("grep", "grep timed out")
         except Exception as e:
-            return f"Error: {e}"
+            return Observation.error("grep", str(e))

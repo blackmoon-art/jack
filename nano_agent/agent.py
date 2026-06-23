@@ -42,7 +42,8 @@ class Agent:
         self.config = config or Config()
         self.llm = LLM(self.config)
         self.tools = ToolRegistry(self.config.work_dir, self.config.bash_timeout,
-                                   brave_api_key=self.config.brave_api_key or "")
+                                   brave_api_key=self.config.brave_api_key or "",
+                                   charts_dir=self.config.charts_dir)
         self.memory = Memory(self.config.memory_window, self.config.memory_file,
                               self.config.reflection_file, self.config.long_term_db)
         self.orient_engine = Orient(self.config, self.llm)

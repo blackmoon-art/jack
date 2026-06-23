@@ -5,51 +5,9 @@ import operator as _op
 import os
 import shlex
 import subprocess
-from dataclasses import dataclass, field
 from typing import Any, Optional
 
-
-@dataclass
-class Observation:
-    """结构化工具返回 — 统一 Observation 层。
-
-    所有工具执行后返回 Observation，包含:
-      - tool_name:    调用的工具名
-      - success:      是否成功
-      - result:       结果文本 (或错误信息)
-      - args:         调用参数
-      - metadata:     额外信息 (如执行时间、截断标志等)
-
-    __str__ 返回 result，兼容旧代码的字符串处理。
-    """
-    tool_name: str
-    result: str
-    success: bool = True
-    args: dict = field(default_factory=dict)
-    metadata: dict = field(default_factory=dict)
-
-    def __str__(self) -> str:
-        return self.result
-
-    def __contains__(self, substr: str) -> bool:
-        return substr in self.result
-
-    def __len__(self) -> int:
-        return len(self.result)
-
-    def __getitem__(self, key):
-        return self.result[key]
-
-    def __eq__(self, other):
-        if isinstance(other, str):
-            return self.result == other
-        return super().__eq__(other)
-
-    def startswith(self, prefix: str) -> bool:
-        return self.result.startswith(prefix)
-
-    def strip(self) -> str:
-        return self.result.strip()
+from .observation import Observation
 
 # ── 危险命令白名单（只允许这些前缀的命令通过）────────────
 _SAFE_COMMAND_PREFIXES = [
@@ -66,6 +24,16 @@ _SAFE_COMMAND_PREFIXES_TUPLE = tuple(_SAFE_COMMAND_PREFIXES)
 
 
 class Shell:
+    # 工具注册声明
+    TOOLS = [
+        ("bash", "Run a shell command.", "bash",
+         {"command": {"type": "string", "description": "The command to execute"}},
+         ["command"]),
+        ("calculate", "Evaluate a mathematical expression safely.", "calculate",
+         {"expression": {"type": "string", "description": "Math expression (e.g. '2+3*4')"}},
+         ["expression"]),
+    ]
+
     def __init__(self, work_dir: str, bash_timeout: int = 120):
         self.work_dir = work_dir
         self.bash_timeout = bash_timeout
