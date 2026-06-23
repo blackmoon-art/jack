@@ -7,7 +7,6 @@ Draw.io: 生成 XML 并提供 diagrams.net 编辑/查看链接。
 import base64
 import json as _json
 import logging
-import os
 import urllib.parse
 import urllib.request
 import zlib

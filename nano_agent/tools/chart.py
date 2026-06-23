@@ -1,20 +1,12 @@
-"""画图工具：generate_chart — 用 matplotlib 生成各类图表。
+"""画图工具：generate_chart — matplotlib 生成 14 种图表。
 
-支持:
-  - 折线图 (line)
-  - 平滑曲线 (curve)
-  - 柱状图 (bar)
-  - 散点图 (scatter)
-  - 饼图 (pie)
-  - 直方图 (histogram)
-  - 面积图 (area)
+line | curve | bar | scatter | pie | histogram | area
+heatmap | radar | bubble | function | draw | cat | pythagorean
 
-图片保存到 web/static/charts/ 目录，前端可直接访问。
+图片保存到 web/static/charts/ 目录，前端可访问。
 """
 
-import json
 import logging
-import os
 from datetime import datetime
 from pathlib import Path
 
