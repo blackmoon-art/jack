@@ -113,6 +113,8 @@ class Chart:
                 self._draw_bubble(ax, data_sets, label_sets, is_dark)
             elif chart_type == "function":
                 self._draw_function(ax, data_sets, label_sets, is_dark)
+            elif chart_type == "cat":
+                self._draw_cat(ax, data_sets, label_sets, is_dark)
             else:
                 return f"Error: Unknown chart type '{chart_type}'. Supported: line, curve, bar, scatter, pie, histogram, area, heatmap, radar, bubble"
         except Exception as e:
@@ -339,6 +341,35 @@ class Chart:
         ax.set_title(f"y = {expr}", color=fg, fontsize=14, fontweight="bold")
         ax.set_xlabel("x", color=fg)
         ax.set_ylabel("y", color=fg)
+
+    def _draw_cat(self, ax, data_sets, label_sets, is_dark=True):
+        """画一只几何猫。"""
+        from matplotlib.patches import Circle, Ellipse, Wedge, Polygon
+        fg = "#e0e0e0" if is_dark else "#333"
+        ax.set_xlim(-5, 5); ax.set_ylim(-5, 5); ax.set_aspect("equal"); ax.axis("off")
+        # 耳朵
+        for sx, sy, x in [(-1.8, 1.5, -1.8), (1.8, 1.5, 1.8)]:
+            ear = Polygon([(x-0.8, sy), (x+0.8, sy), (x, 3.2)], closed=True,
+                          facecolor="#7c3aed", edgecolor=fg, linewidth=2)
+            ax.add_patch(ear)
+            ie = Polygon([(x-0.4, sy), (x+0.4, sy), (x, 2.8)], closed=True,
+                         facecolor="#c4b5fd", edgecolor="none")
+            ax.add_patch(ie)
+        # 脸
+        ax.add_patch(Circle((0, 0), 2.5, facecolor="#7c3aed", edgecolor=fg, linewidth=2))
+        # 眼睛
+        for x in [-0.9, 0.9]:
+            ax.add_patch(Ellipse((x, 0.5), 0.7, 0.9, facecolor="white", edgecolor=fg))
+            ax.add_patch(Ellipse((x, 0.5), 0.35, 0.5, facecolor="#1a1a2e"))
+        # 鼻子
+        ax.add_patch(Polygon([(0, -0.5), (-0.3, -0.8), (0.3, -0.8)], closed=True,
+                              facecolor="#f59e0b", edgecolor=fg))
+        # 胡须
+        for x, y, dx in [(-0.6, -0.6, -1.5), (-0.6, -0.8, -1.6), (0.6, -0.6, 1.5), (0.6, -0.8, 1.6)]:
+            ax.plot([x, x+dx], [y, y+dx*0.1], color=fg, linewidth=0.8)
+        # 嘴
+        for dx in [-0.3, 0.3]:
+            ax.plot([0, dx], [-0.8, -1.2], color=fg, linewidth=1)
 
     # ── 清理 ──
 
