@@ -115,7 +115,7 @@ _SESSION_TTL_SECONDS = 7200  # 2 小时未访问则可淘汰
 # ── 使用次数限制 ──────────────────────────────────────
 
 USAGE_FILE = Path(__file__).parent / "usage.json"
-DAILY_LIMIT = int(os.getenv("DAILY_LIMIT_PER_USER", "0"))  # 0 = 不限
+DAILY_LIMIT = int(os.getenv("DAILY_LIMIT_PER_USER", "20"))  # 默认每人每天 20 次
 
 
 def _today() -> str:
@@ -277,19 +277,22 @@ async def chat(request: Request):
 
     # 访问控制：如果设置了 WEB_ACCESS_CODE，需要验证
     access_code = os.getenv("WEB_ACCESS_CODE", "")
-    if access_code and body.get("code") != access_code:
-        return StreamingResponse(
-            iter([f"event: error\ndata: {json.dumps({'text': '访问码错误'})}\n\n"]),
-            media_type="text/event-stream",
-        )
+    is_owner = False
+    if access_code:
+        if body.get("code") != access_code:
+            return StreamingResponse(
+                iter([f"event: error\ndata: {json.dumps({'text': '访问码错误'})}\n\n"]),
+                media_type="text/event-stream",
+            )
+        is_owner = True  # 知道访问码 = 管理员，不限次
 
     if not task:
         return {"error": "Empty message"}
 
     session_id = get_or_create_session(session_id)
 
-    # 每日次数限制
-    limit_msg = check_daily_limit(session_id)
+    # 每日次数限制（管理员跳过）
+    limit_msg = "" if is_owner else check_daily_limit(session_id)
     if limit_msg:
         return StreamingResponse(
             iter([f"event: error\ndata: {json.dumps({'text': limit_msg})}\n\n"]),
