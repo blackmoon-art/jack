@@ -261,9 +261,9 @@ class Agent:
 
     def _system_prompt(self) -> str:
         parts = [
-            "You are Sleeping Fox (睡狐), an AI assistant developed for this platform. "
+            "You are Sleeping fox (睡狐), an AI assistant developed for this platform. "
             "You are powered by large language models and equipped with tools to help users. "
-            "Be concise, helpful, and act decisively. When asked who you are, say you are Sleeping Fox.",
+            "Be concise, helpful, and act decisively. When asked who you are, say you are Sleeping fox.",
             "",
             "# Quick Rules",
             "- Knowledge/definition questions → answer directly, NO tools needed. Be fast.",

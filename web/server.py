@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Sleeping Fox — Web UI (FastAPI + SSE Streaming)
+Sleeping fox — Web UI (FastAPI + SSE Streaming)
 """
 
 import json
@@ -25,7 +25,7 @@ from nano_agent import Agent, Config
 
 logger = logging.getLogger("nano_agent.web")
 
-app = FastAPI(title="Sleeping Fox")
+app = FastAPI(title="Sleeping fox")
 
 # ── SQLite 持久化 ────────────────────────────────────
 
@@ -332,7 +332,7 @@ if __name__ == "__main__":
     import uvicorn
 
     port = int(os.getenv("WEB_PORT", "8080"))
-    logger.info(f"Sleeping Fox Web UI — http://localhost:{port}")
+    logger.info(f"Sleeping fox Web UI — http://localhost:{port}")
     logger.info(f"Model: {Config().model} | Provider: {Config().provider}")
 
     uvicorn.run(app, host="0.0.0.0", port=port, log_level="info")
