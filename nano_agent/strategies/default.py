@@ -28,6 +28,6 @@ class DefaultStrategy(BaseStrategy):
             agent_loop_fn: 核心循环 f(messages, exclude_tools) -> (text, messages)
         """
         logger.info(f"[Default] Task: {task}")
-        messages = [{"role": "user", "content": task}]
+        messages = self.build_messages(task, include_memory=True)
         result, _ = agent_loop_fn(messages)
         return result

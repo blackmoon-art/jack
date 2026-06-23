@@ -55,8 +55,7 @@ class BaseStrategy:
         所有策略应使用此方法构建初始 messages，确保记忆一致。
         """
         messages = []
-        if include_memory:
-            # 窗口记忆
+        if include_memory and self.memory:
             for msg in self.memory.get_window_messages():
                 messages.append(msg)
             # 长期记忆检索

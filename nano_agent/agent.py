@@ -118,6 +118,27 @@ class Agent:
             defaults["score_threshold"] = self.config.tot_score_threshold
         return defaults
 
+    def execute_tool(self, tc: dict, messages: list, orient_fn=None):
+        """执行单个工具调用并追加结果到 messages。"""
+        name = tc["name"]
+        args = tc["arguments"] if isinstance(tc["arguments"], dict) else {}
+        self._emit("tool_call", {"name": name, "args": args})
+        logger.info(f"[Tool] {name}({json.dumps(args, ensure_ascii=False)[:200]})")
+        observation = self.tools.execute(name, args)
+        result_text = str(observation)
+        is_success = observation.success if hasattr(observation, "success") else not result_text.startswith("Error:")
+        self._emit("tool_result", {"name": name, "result": result_text, "success": is_success})
+        logger.debug(f"[Tool Result] {result_text[:200]}")
+        orientation = (orient_fn(result_text, args.get("task", "")) if orient_fn else None)
+        if orientation:
+            self._emit("orient", orientation)
+            enriched = (f"{result_text}\n\n"
+                        f"[Orient] interpretation={orientation.get('interpretation', '')[:200]}\n"
+                        f"[Orient] implication={orientation.get('implication', '')[:200]}")
+            messages.append({"role": "tool", "tool_call_id": tc["id"], "content": enriched})
+        else:
+            messages.append({"role": "tool", "tool_call_id": tc["id"], "content": result_text})
+
     # ── 核心循环 (O-O-D-A) ──────────────────────────────
 
     def _agent_loop(self, messages: list, exclude_tools: Optional[list] = None) -> tuple[str, list]:

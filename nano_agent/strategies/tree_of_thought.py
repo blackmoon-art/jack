@@ -36,8 +36,8 @@ class TreeOfThoughtStrategy(BaseStrategy):
     """Tree-of-Thought 推理策略 — 多路径探索 + 评估选择 + 回溯。"""
 
     def __init__(self, config: Config, llm: LLM, tools: ToolRegistry,
-                 num_candidates: int = None, score_threshold: int = None):
-        super().__init__(config, llm, tools)
+                 num_candidates: int = None, score_threshold: int = None, **kwargs):
+        super().__init__(config, llm, tools, **kwargs)
         self.num_candidates = num_candidates if num_candidates is not None else config.tot_num_candidates
         self.score_threshold = score_threshold if score_threshold is not None else config.tot_score_threshold
         self._explored_paths: list[dict] = []    # 记录探索路径

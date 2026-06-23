@@ -28,8 +28,8 @@ logger = logging.getLogger("nano_agent.strategies.plan_execute")
 class PlanExecuteStrategy(BaseStrategy):
     """Plan-Execute 推理策略。"""
 
-    def __init__(self, config: Config, llm: LLM, tools: ToolRegistry):
-        super().__init__(config, llm, tools)
+    def __init__(self, config: Config, llm: LLM, tools: ToolRegistry, **kwargs):
+        super().__init__(config, llm, tools, **kwargs)
 
     def create_plan(self, task: str) -> list[str]:
         """调用 LLM 将任务分解为有序步骤。简单任务返回 1 步。"""

@@ -30,8 +30,8 @@ class ReflexionStrategy(BaseStrategy):
     """Reflexion 推理策略 — 自我反思 + 智能重试。"""
 
     def __init__(self, config: Config, llm: LLM, tools: ToolRegistry,
-                 max_retries: int = None):
-        super().__init__(config, llm, tools)
+                 max_retries: int = None, **kwargs):
+        super().__init__(config, llm, tools, **kwargs)
         self.max_retries = max_retries if max_retries is not None else config.reflexion_max_retries
         self.reflection_memory: list[str] = []  # 当次会话的教训
 
