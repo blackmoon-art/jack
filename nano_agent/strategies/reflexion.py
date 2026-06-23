@@ -129,7 +129,7 @@ class ReflexionStrategy(BaseStrategy):
                     f"{task}"
                 )
 
-            messages = [{"role": "user", "content": user_content}]
+            messages = self.build_messages(user_content, include_memory=True)
             result, step_messages = agent_loop_fn(messages)
 
             # 评估

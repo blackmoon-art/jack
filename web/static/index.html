@@ -39,8 +39,8 @@
   .thinking-summary:hover { background:#2a2a3e; }
   .thinking-summary::before { content:'▶ '; font-size:9px; }
   .thinking-summary.open::before { content:'▼ '; font-size:9px; }
-  .thinking-block { display:none; }
-  .thinking-block.visible { display:block; }
+  .thinking-block { display:block; }
+  .thinking-block.hidden { display:none; }
   footer { padding:16px 20px; border-top:1px solid #333; display:flex; gap:10px; background:#1a1a2e; }
   footer input { flex:1; background:#222; color:#e0e0e0;
                  border:1px solid #444; padding:10px 16px;
@@ -84,7 +84,7 @@
     <option value="deepseek-chat">deepseek-chat</option>
     <option value="deepseek-reasoner">deepseek-reasoner</option>
   </select>
-  <button id="send">发送</button>
+  <button id="send">Send</button>
 </footer>
 
 <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
@@ -163,8 +163,8 @@ function ensureThinkingTag() {
   tag.addEventListener('click', () => {
     const block = tag.parentElement.querySelector('.thinking-block');
     if (!block) return;
-    const open = block.classList.toggle('visible');
-    tag.classList.toggle('open', open);
+    const hidden = block.classList.toggle('hidden');
+    tag.classList.toggle('open', !hidden);
   });
   // 插入到消息最前面（content 之前）
   currentMsg.insertBefore(tag, currentMsg.firstChild);
@@ -324,8 +324,6 @@ async function send() {
                 const imgs = chartImages.map(u =>
                   `<img src="${u}" style="max-width:100%;border-radius:8px;margin:8px 0;" />`
                 ).join('');
-                document.querySelectorAll('.thinking-block.visible').forEach(b => b.classList.remove('visible'));
-                document.querySelectorAll('.thinking-summary.open').forEach(t => t.classList.remove('open'));
                 currentMsg = null;
                 addMessage('agent', data.text, imgs);
               }

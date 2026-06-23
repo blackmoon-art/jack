@@ -34,10 +34,11 @@ class BaseStrategy:
     通过 self.emit() 发送事件给上层（Web UI 等）。
     """
 
-    def __init__(self, config: Config, llm: LLM, tools: ToolRegistry):
+    def __init__(self, config: Config, llm: LLM, tools: ToolRegistry, **kwargs):
         self.config = config
         self.llm = llm
         self.tools = tools
+        self.memory = kwargs.get("memory")  # 可选 Memory 实例
         self._emit: Optional[Callable[[str, dict], None]] = None
 
     def emit(self, event_type: str, data: dict):
@@ -47,6 +48,80 @@ class BaseStrategy:
                 self._emit(event_type, data)
             except Exception as e:
                 logger.warning(f"Strategy emit error ({event_type}): {e}")
+
+    def build_messages(self, task: str, include_memory: bool = True) -> list[dict]:
+        """构建消息列表，注入窗口记忆和长期记忆。
+
+        所有策略应使用此方法构建初始 messages，确保记忆一致。
+        """
+        messages = []
+        if include_memory:
+            # 窗口记忆
+            for msg in self.memory.get_window_messages():
+                messages.append(msg)
+            # 长期记忆检索
+            relevant = self.memory.load_relevant(task, top_k=3)
+            if relevant:
+                messages.append({
+                    "role": "user",
+                    "content": f"[Context from past experience]\n{relevant}"
+                })
+                messages.append({"role": "assistant", "content": "Understood, I will consider this context."})
+        messages.append({"role": "user", "content": task})
+        return messages
+
+    def execute_tool(self, tool_call: dict, messages: list[dict],
+                      orient_fn: Optional[Callable] = None) -> dict:
+        """执行单个工具调用，发送事件，追加消息。
+
+        Args:
+            tool_call:    {'name': str, 'arguments': dict, 'id': str}
+            messages:     消息列表（会被修改）
+            orient_fn:    可选的 Orient 函数 f(result_text, task) -> dict|None
+
+        Returns:
+            {'name': str, 'result': str, 'success': bool}
+        """
+        from ..tools.observation import Observation
+
+        name = tool_call["name"]
+        args = tool_call.get("arguments", {})
+        if isinstance(args, str):
+            import json as _json
+            try:
+                args = _json.loads(args)
+            except _json.JSONDecodeError:
+                args = {}
+
+        self.emit("tool_call", {"name": name, "args": args})
+        logger.info(f"[Tool] {name}({json.dumps(args, ensure_ascii=False)[:200]})")
+
+        observation = self.tools.execute(name, args)
+        result_text = str(observation)
+        is_success = observation.success if hasattr(observation, "success") else not result_text.startswith("Error:")
+
+        self.emit("tool_result", {"name": name, "result": result_text, "success": is_success})
+        logger.debug(f"[Tool Result] {result_text[:200]}")
+
+        # Orient: 显式解读（可选）
+        content = result_text
+        if orient_fn:
+            orientation = orient_fn(result_text, args.get("task", ""))
+            if orientation:
+                self.emit("orient", orientation)
+                content = (
+                    f"{result_text}\n\n"
+                    f"[Orient] interpretation={orientation.get('interpretation', '')[:200]}\n"
+                    f"[Orient] implication={orientation.get('implication', '')[:200]}"
+                )
+
+        messages.append({
+            "role": "tool",
+            "tool_call_id": tool_call.get("id", ""),
+            "content": content,
+        })
+
+        return {"name": name, "result": result_text, "success": is_success}
 
     def run(self, task: str, agent_loop_fn) -> str:
         """执行推理策略。子类必须实现。

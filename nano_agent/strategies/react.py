@@ -111,9 +111,7 @@ Final Answer: The current directory contains 2 files: agent.py and README.md."""
         logger.info(f"[ReAct] Task: {task}")
         logger.info(f"{'='*60}")
 
-        messages = [
-            {"role": "user", "content": task},
-        ]
+        messages = self.build_messages(task, include_memory=True)
         self.thought_trail = []
         final_answer = ""
         tool_schemas = self.tools.get_schemas()
@@ -165,25 +163,9 @@ Final Answer: The current directory contains 2 files: agent.py and README.md."""
                 messages.append(assistant_msg)
 
                 for tc in tool_calls:
-                    name = tc["name"]
-                    args = tc["arguments"] if isinstance(tc["arguments"], dict) else {}
-                    logger.info(f"🔧 Action: {name}({json.dumps(args, ensure_ascii=False)[:200]})")
-                    self.emit("tool_call", {"name": name, "args": args})
-
-                    # 执行工具（使用 ToolRegistry，返回 Observation）
-                    observation = self.tools.execute(name, args)
-                    result = str(observation)
-                    logger.info(f"📤 Observation: {result[:300]}")
-                    self.emit("tool_result", {"name": name, "result": result})
-
-                    trail_entry["action"] = {"name": name, "args": args}
-                    trail_entry["observation"] = result[:500]
-
-                    messages.append({
-                        "role": "tool",
-                        "tool_call_id": tc["id"],
-                        "content": f"Observation: {result}",
-                    })
+                    info = self.execute_tool(tc, messages)
+                    trail_entry["action"] = {"name": info["name"], "args": tc.get("arguments", {})}
+                    trail_entry["observation"] = info["result"][:500]
 
             else:
                 # 无工具调用也无 Final Answer — 作为纯文本回复

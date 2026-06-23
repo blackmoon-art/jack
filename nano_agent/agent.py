@@ -99,7 +99,8 @@ class Agent:
     # ── 策略实现 ────────────────────────────────────────
 
     def _run_strategy(self, strategy_cls, task: str, **kwargs) -> str:
-        """通用策略执行：实例化 → 注入事件回调 → 缓存 → 运行。"""
+        """通用策略执行：实例化 → 注入事件回调 + memory → 缓存 → 运行。"""
+        kwargs.setdefault("memory", self.memory)
         s = strategy_cls(self.config, self.llm, self.tools, **kwargs)
         s._emit = self._emit  # 透传事件回调，让策略能发事件
         self._strategy_instance = s
@@ -156,35 +157,7 @@ class Agent:
 
             # ── Act: 执行工具 ──
             for tc in response["tool_calls"]:
-                name = tc["name"]
-                args = tc["arguments"] if isinstance(tc["arguments"], dict) else {}
-                self._emit("tool_call", {"name": name, "args": args})
-                logger.info(f"[Tool] {name}({json.dumps(args, ensure_ascii=False)[:200]})")
-
-                # ── Act: 执行 ──
-                observation = self.tools.execute(name, args)
-                result_text = str(observation)
-                is_success = observation.success if hasattr(observation, "success") else not result_text.startswith("Error:")
-                self._emit("tool_result", {"name": name, "result": result_text,
-                                            "success": is_success})
-                logger.debug(f"[Tool Result] {result_text[:200]}")
-
-                # ── Orient: 显式解读 ──
-                orientation = self._orient(result_text, args.get("task", ""))
-                if orientation:
-                    self._emit("orient", orientation)
-                    enriched = (
-                        f"{result_text}\n\n"
-                        f"[Orient] interpretation={orientation.get('interpretation', '')[:200]}\n"
-                        f"[Orient] implication={orientation.get('implication', '')[:200]}"
-                    )
-                    messages.append({
-                        "role": "tool", "tool_call_id": tc["id"], "content": enriched,
-                    })
-                else:
-                    messages.append({
-                        "role": "tool", "tool_call_id": tc["id"], "content": result_text,
-                    })
+                self.execute_tool(tc, messages, orient_fn=self._orient)
 
         logger.warning(f"Max iterations ({self.config.max_iterations}) reached, "
                         f"forcing stop. Last tool: "
@@ -257,16 +230,19 @@ class Agent:
         return "\n".join(parts)
 
     def _build_messages(self, task: str) -> list[dict]:
+        """构建消息列表。委托给 BaseStrategy.build_messages。"""
+        from .strategies.base import BaseStrategy
+        # BaseStrategy.build_messages 是静态风格的，直接用 memory
         messages = []
         for msg in self.memory.get_window_messages():
             messages.append(msg)
-        # 注入长期记忆检索结果（用 user role 避免 Anthropic 转换丢失）
         relevant = self.memory.load_relevant(task, top_k=3)
         if relevant:
             messages.append({
                 "role": "user",
                 "content": f"[Context from past experience]\n{relevant}"
             })
+            messages.append({"role": "assistant", "content": "Understood, I will consider this context."})
         messages.append({"role": "user", "content": task})
         return messages
 
