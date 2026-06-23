@@ -10,7 +10,7 @@ import sqlite3
 import sys
 import uuid
 from pathlib import Path
-from queue import Queue
+from queue import Empty, Queue
 from threading import Thread
 from typing import Optional
 
@@ -250,7 +250,7 @@ def agent_stream(task: str, strategy: str, session_id: str):
             yield f"event: {event_type}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
             if event_type in ("done", "error"):
                 break
-        except Exception:  # queue.Empty → 超时了，LLM 还在想
+        except Empty:  # queue.Empty → 超时了，LLM 还在想
             if _time.time() - last_heartbeat > 2.5:
                 yield ": heartbeat\n\n"  # SSE 注释，浏览器忽略但保持连接
                 last_heartbeat = _time.time()
