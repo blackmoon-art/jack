@@ -138,8 +138,8 @@ class ToolRegistry:
             "steps": {"type": "integer", "description": "Quality steps: 15-30 (default: 20). More = better but slower."},
             "width": {"type": "integer", "description": "Image width (default: 512)"},
         }, required=["prompt"])
-        self._register("generate_chart", "Generate data charts and math function plots. Data charts: chart_type=line/bar/pie (data='10,20,30'). Math: chart_type=function (data='sin(x);-3;3'). For animals/art: use the `ai_image` tool.", self._chart.generate_chart, {
-            "chart_type": {"type": "string", "description": "Chart type: line, curve, bar, scatter, pie, histogram, area, heatmap, radar, bubble, function (default: line)"},
+        self._register("generate_chart", "Generate charts, math plots, and shape drawings. Data charts: chart_type=line/bar/pie (data='10,20,30'). Math: chart_type=function (data='sin(x);-3;3'). Drawings: chart_type=draw or cat (labels='circle:0,0,3,red;rect:1,1,2,1,blue').", self._chart.generate_chart, {
+            "chart_type": {"type": "string", "description": "Chart type: line, curve, bar, scatter, pie, histogram, area, heatmap, radar, bubble, function, draw, cat (default: line)"},
             "title": {"type": "string", "description": "Chart title"},
             "data": {"type": "string", "description": "Data: comma-separated numbers, semicolons for multi-series. Function: 'expr;xmin;xmax'."},
             "labels": {"type": "string", "description": "Labels: comma-separated text for axes/legend."},

@@ -49,7 +49,7 @@ class Chart:
             except Exception as e:
                 return f"Error parsing data: {e}"
 
-        no_data_types = set()
+        no_data_types = {"draw", "cat"}
         if (not data_sets or not data_sets[0]) and chart_type not in no_data_types:
             return "Error: data is required (e.g. '10,20,30,40')"
 
@@ -98,8 +98,10 @@ class Chart:
                 self._draw_bubble(ax, data_sets, label_sets, is_dark)
             elif chart_type == "function":
                 self._draw_function(ax, data_sets, label_sets, is_dark)
+            elif chart_type in ("draw", "cat"):
+                self._draw_shapes(ax, labels, is_dark, is_cat=(chart_type == "cat"))
             else:
-                return f"Error: Unknown chart type '{chart_type}'. Supported: line, curve, bar, scatter, pie, histogram, area, heatmap, radar, bubble, function"
+                return f"Error: Unknown chart type '{chart_type}'. Supported: line, curve, bar, scatter, pie, histogram, area, heatmap, radar, bubble, function, draw, cat"
         except Exception as e:
             plt.close(fig)
             return f"Error generating chart: {e}"
@@ -332,6 +334,94 @@ class Chart:
         ax.set_title(f"y = {expr}", color=fg, fontsize=14, fontweight="bold")
         ax.set_xlabel("x", color=fg)
         ax.set_ylabel("y", color=fg)
+
+    def _draw_shapes(self, ax, labels, is_dark=True, is_cat=False):
+        """绘制形状。labels 格式: 'circle:0,0,3,red;rect:1,1,2,1,blue'。"""
+        import numpy as np
+        fg = "#e0e0e0" if is_dark else "#222"
+
+        if not labels:
+            if is_cat:
+                self._draw_cat(ax, is_dark)
+                return
+            return "Error: labels required for draw. Format: 'circle:0,0,3,red;rect:1,1,2,1,blue'"
+
+        shapes = labels.split(";")
+        for shape_str in shapes:
+            parts = shape_str.strip().split(":")
+            if len(parts) < 2:
+                continue
+            kind = parts[0].strip().lower()
+            params = [p.strip() for p in parts[1].split(",")]
+            try:
+                if kind == "circle" and len(params) >= 4:
+                    cx, cy, r = float(params[0]), float(params[1]), float(params[2])
+                    color = params[3]
+                    circle = plt.Circle((cx, cy), r, fill=False, edgecolor=color, linewidth=2)
+                    ax.add_patch(circle)
+                elif kind == "rect" and len(params) >= 5:
+                    x, y, w, h = float(params[0]), float(params[1]), float(params[2]), float(params[3])
+                    color = params[4]
+                    rect = plt.Rectangle((x, y), w, h, fill=False, edgecolor=color, linewidth=2)
+                    ax.add_patch(rect)
+                elif kind == "line" and len(params) >= 5:
+                    x1, y1, x2, y2 = float(params[0]), float(params[1]), float(params[2]), float(params[3])
+                    color = params[4]
+                    ax.plot([x1, x2], [y1, y2], color=color, linewidth=2)
+                elif kind == "text" and len(params) >= 3:
+                    tx, ty = float(params[0]), float(params[1])
+                    txt = ",".join(params[2:])
+                    ax.text(tx, ty, txt, color=fg, fontsize=12, ha="center")
+            except (ValueError, IndexError):
+                continue
+
+        ax.set_xlim(-5, 5)
+        ax.set_ylim(-5, 5)
+        ax.set_aspect("equal")
+
+    def _draw_cat(self, ax, is_dark=True):
+        """画一只简笔猫。"""
+        import numpy as np
+        fg = "#e0e0e0" if is_dark else "#222"
+        accent = "#7c3aed"
+
+        # 头 (圆)
+        head = plt.Circle((0, 0), 2, fill=False, edgecolor=fg, linewidth=2.5)
+        ax.add_patch(head)
+
+        # 左耳 (三角形)
+        ax.plot([-1.6, -1.0, -1.8], [1.4, 2.5, 2.5], color=fg, linewidth=2)
+        ax.fill([-1.6, -1.0, -1.8], [1.4, 2.5, 2.5], color=accent, alpha=0.3)
+        # 右耳
+        ax.plot([1.6, 1.0, 1.8], [1.4, 2.5, 2.5], color=fg, linewidth=2)
+        ax.fill([1.6, 1.0, 1.8], [1.4, 2.5, 2.5], color=accent, alpha=0.3)
+
+        # 眼睛
+        left_eye = plt.Circle((-0.7, 0.5), 0.3, fill=True, facecolor=accent, edgecolor=fg, linewidth=1.5)
+        right_eye = plt.Circle((0.7, 0.5), 0.3, fill=True, facecolor=accent, edgecolor=fg, linewidth=1.5)
+        ax.add_patch(left_eye)
+        ax.add_patch(right_eye)
+        # 瞳孔
+        ax.plot(-0.7, 0.5, "o", color=fg, markersize=4)
+        ax.plot(0.7, 0.5, "o", color=fg, markersize=4)
+
+        # 鼻子 (小三角)
+        ax.plot([0, -0.15, 0.15, 0], [0.0, -0.2, -0.2, 0.0], color="#f59e0b", linewidth=2)
+
+        # 嘴
+        theta = np.linspace(0, np.pi, 30)
+        ax.plot(0.3 * np.cos(theta) - 0.3, -0.3 * np.sin(theta) - 0.3, color=fg, linewidth=1.5)
+        ax.plot(0.3 * np.cos(theta) + 0.3, -0.3 * np.sin(theta) - 0.3, color=fg, linewidth=1.5)
+
+        # 胡须
+        for dy in [-0.15, -0.35, -0.55]:
+            ax.plot([-0.5, -2.0], [dy, dy - 0.1], color=fg, linewidth=1, alpha=0.7)
+            ax.plot([0.5, 2.0], [dy, dy - 0.1], color=fg, linewidth=1, alpha=0.7)
+
+        ax.set_xlim(-3.5, 3.5)
+        ax.set_ylim(-3.5, 3.5)
+        ax.set_aspect("equal")
+        ax.axis("off")
 
     # ── 清理 ──
 
