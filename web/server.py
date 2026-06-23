@@ -275,16 +275,14 @@ async def chat(request: Request):
     strategy = body.get("strategy", "default")
     session_id = body.get("session_id", "")
 
-    # 访问控制：如果设置了 WEB_ACCESS_CODE，需要验证
-    access_code = os.getenv("WEB_ACCESS_CODE", "")
+    # 访问控制：填了正确访问码 → 管理员不限次；不填/填错 → 普通用户有限次
+    owner_code = os.getenv("WEB_ACCESS_CODE", "")
     is_owner = False
-    if access_code:
-        if body.get("code") != access_code:
-            return StreamingResponse(
-                iter([f"event: error\ndata: {json.dumps({'text': '访问码错误'})}\n\n"]),
-                media_type="text/event-stream",
-            )
-        is_owner = True  # 知道访问码 = 管理员，不限次
+    if owner_code:
+        user_code = body.get("code", "")
+        if user_code == owner_code:
+            is_owner = True  # 管理员，不限次
+        # 不填或填错 → 普通用户，有限次（不拒绝）
 
     if not task:
         return {"error": "Empty message"}
