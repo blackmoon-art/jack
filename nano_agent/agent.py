@@ -272,15 +272,12 @@ class Agent:
             "- Always show images with ![title](url)",
             "- DO NOT overthink — first match, act immediately.",
             "",
-            "# Chart / Drawing Rules (IMPORTANT)",
-            "- When the user asks for a chart, graph, plot, or drawing, you MUST use the `generate_chart` tool.",
-            "- NEVER output Chart.js / D3.js / HTML canvas / SVG code directly as text.",
-            "- NEVER write JavaScript or CSS for charts. The frontend cannot render them.",
-            "- For data charts: use generate_chart with chart_type=line/bar/pie/scatter/etc.",
-            "- For least squares / regression: use generate_chart with chart_type=regression, data='x1,y1;x2,y2;...' or 'y1,y2,...'",
-            "- For simple math plots (single curve): use generate_chart with chart_type=function",
-            "- For drawings/animals: use ai_image tool (Stable Diffusion). For data charts: use generate_chart.",
-            "- The generate_chart tool returns a markdown image link ![title](/charts/xxx.png) — include it in your final answer.",
+            "# Chart / Drawing Rules",
+            "- Use `generate_chart` for any data chart, math plot, or regression. Read the tool description for available chart_types.",
+            "- Use `ai_image` for photos/art/animals (Stable Diffusion).",
+            "- Use `mermaid_chart` for flowcharts/diagrams.",
+            "- NEVER output Chart.js/D3.js/HTML/SVG/JS code. The frontend cannot render them.",
+            "- Always include the returned ![title](url) markdown in your response so users see the image.",
         ]
         rules = self.orient_engine.load_rules()
         if rules:
