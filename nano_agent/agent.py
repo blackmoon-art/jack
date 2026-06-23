@@ -277,8 +277,8 @@ class Agent:
             "- NEVER output Chart.js / D3.js / HTML canvas / SVG code directly as text.",
             "- NEVER write JavaScript or CSS for charts. The frontend cannot render them.",
             "- For data charts: use generate_chart with chart_type=line/bar/pie/scatter/etc.",
+            "- For least squares / regression: use generate_chart with chart_type=regression, data='x1,y1;x2,y2;...' or 'y1,y2,...'",
             "- For simple math plots (single curve): use generate_chart with chart_type=function",
-            "- For complex math illustrations (scatter+line, least squares, geometry with multiple elements): use `bash` to write a Python matplotlib script. Save PNG to the charts dir.",
             "- For drawings/animals: use ai_image tool (Stable Diffusion). For data charts: use generate_chart.",
             "- The generate_chart tool returns a markdown image link ![title](/charts/xxx.png) — include it in your final answer.",
         ]

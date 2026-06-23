@@ -21,9 +21,9 @@ logger = logging.getLogger("nano_agent.tools.chart")
 class Chart:
     # 工具注册声明
     TOOLS = [
-        ("generate_chart", "Generate charts, math plots, and shape drawings. Data charts: chart_type=line/bar/pie (data='10,20,30'). Math: chart_type=function (data='sin(x);-3;3'). Drawings: chart_type=draw or cat (labels='circle:0,0,3,red;rect:1,1,2,1,blue').", "generate_chart",
-         {"chart_type": {"type": "string", "description": "Chart type: line, curve, bar, scatter, pie, histogram, area, heatmap, radar, bubble, function, draw, cat (default: line)"},
-          "data": {"type": "string", "description": "Data series (comma-separated). Multiple series separated by semicolons"},
+        ("generate_chart", "Generate charts, math plots, and regression analysis. Data: chart_type=line/bar (data='10,20'). Least squares: chart_type=regression, data='x1,y1;x2,y2' or 'y1,y2,...'. Math: chart_type=function (data='sin(x);-3;3'). Drawings: chart_type=draw/cat.", "generate_chart",
+         {"chart_type": {"type": "string", "description": "Chart type: line, curve, bar, scatter, pie, histogram, area, heatmap, radar, bubble, function, regression, draw, cat (default: line)"},
+          "data": {"type": "string", "description": "Data: comma-sep values. Regression: 'x,y;x,y...' or 'y1,y2...'. Multi-series: semicolon-sep."},
           "title": {"type": "string", "description": "Chart title"},
           "labels": {"type": "string", "description": "Series labels or shape definitions (semicolon-separated)"},
           "x_label": {"type": "string", "description": "X-axis label"},
@@ -115,10 +115,12 @@ class Chart:
                 self._draw_bubble(ax, data_sets, label_sets, is_dark)
             elif chart_type == "function":
                 self._draw_function(ax, data_sets, label_sets, is_dark)
+            elif chart_type == "regression":
+                self._draw_regression(ax, data_sets, label_sets, is_dark)
             elif chart_type in ("draw", "cat"):
                 self._draw_shapes(ax, labels, is_dark, is_cat=(chart_type == "cat"))
             else:
-                return f"Error: Unknown chart type '{chart_type}'. Supported: line, curve, bar, scatter, pie, histogram, area, heatmap, radar, bubble, function, draw, cat"
+                return f"Error: Unknown chart type '{chart_type}'. Supported: line, curve, bar, scatter, pie, histogram, area, heatmap, radar, bubble, function, regression, draw, cat"
         except Exception as e:
             plt.close(fig)
             return f"Error generating chart: {e}"
@@ -439,6 +441,62 @@ class Chart:
         ax.set_ylim(-3.5, 3.5)
         ax.set_aspect("equal")
         ax.axis("off")
+
+    def _draw_regression(self, ax, data_sets, label_sets, is_dark=True):
+        """最小二乘回归 — 散点 + 拟合直线 + 方程 + R²。
+        data 格式: "x1,y1;x2,y2;x3,y3" 或 "y1,y2,y3"（后者自动生成 x=0,1,2...）
+        """
+        import numpy as np
+        fg = "#e0e0e0" if is_dark else "#333"
+
+        # 解析数据点
+        pts = []
+        for ds in data_sets:
+            for item in ds:
+                parts = item.split(",")
+                if len(parts) >= 2:
+                    pts.append((float(parts[0]), float(parts[1])))
+
+        # 如果只有一组逗号数值，当作 y 值，自动生成 x=0,1,2...
+        if not pts and data_sets and data_sets[0]:
+            ys = [float(x) for x in data_sets[0]]
+            pts = [(i, y) for i, y in enumerate(ys)]
+
+        if len(pts) < 2:
+            ax.text(0.5, 0.5, "Need ≥2 data points for regression", transform=ax.transAxes,
+                    ha="center", color=fg)
+            return
+
+        xs = np.array([p[0] for p in pts])
+        ys = np.array([p[1] for p in pts])
+
+        # 最小二乘: y = a + bx
+        n = len(xs)
+        b = (n * (xs * ys).sum() - xs.sum() * ys.sum()) / (n * (xs * xs).sum() - xs.sum() ** 2)
+        a = (ys.sum() - b * xs.sum()) / n
+
+        # R²
+        y_pred = a + b * xs
+        ss_res = ((ys - y_pred) ** 2).sum()
+        ss_tot = ((ys - ys.mean()) ** 2).sum()
+        r2 = 1 - ss_res / ss_tot if ss_tot > 0 else 0
+
+        # 画散点
+        ax.scatter(xs, ys, color="#7c3aed", s=60, zorder=5, alpha=0.8, edgecolors="white", linewidth=0.5)
+
+        # 拟合直线
+        x_line = np.linspace(xs.min(), xs.max(), 200)
+        ax.plot(x_line, a + b * x_line, color="#f59e0b", linewidth=2, zorder=4)
+
+        # 方程 + R²
+        sign = "+" if b >= 0 else "-"
+        eq = f"y = {a:.2f} {sign} {abs(b):.2f}x"
+        ax.text(0.05, 0.95, f"{eq}\nR² = {r2:.4f}", transform=ax.transAxes,
+                fontsize=12, color=fg, verticalalignment="top",
+                bbox=dict(boxstyle="round", facecolor="#1a1a2e" if is_dark else "#f5f5f5",
+                          edgecolor=fg, alpha=0.8))
+        ax.set_xlabel("x", color=fg)
+        ax.set_ylabel("y", color=fg)
 
     # ── 清理 ──
 
