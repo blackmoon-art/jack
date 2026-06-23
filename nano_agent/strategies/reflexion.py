@@ -82,11 +82,6 @@ class ReflexionStrategy(BaseStrategy):
             return {"status": "failed", "reason": "result starts with error signal",
                     "missing": "valid output", "score": 2}
 
-        # 快速路径：结果太短
-        if len(result_lower) < 20:
-            return {"status": "partial", "reason": "result too short",
-                    "missing": "substantial answer", "score": 3}
-
         # 快速路径：明显成功（足够长 + 成功信号词）
         if any(s in result_lower for s in _SUCCESS_SIGNALS) and len(result_lower) > 100:
             return {"status": "success", "reason": "result contains success signals",
