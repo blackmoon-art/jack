@@ -115,7 +115,7 @@ _SESSION_TTL_SECONDS = 7200  # 2 小时未访问则可淘汰
 # ── 使用次数限制 ──────────────────────────────────────
 
 USAGE_FILE = Path(__file__).parent / "usage.json"
-DAILY_LIMIT = int(os.getenv("DAILY_LIMIT_PER_USER", "20"))
+DAILY_LIMIT = int(os.getenv("DAILY_LIMIT_PER_USER", "0"))  # 0 = 不限
 
 
 def _today() -> str:

@@ -4,12 +4,11 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, interactive-widget=resizes-content">
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
-<meta name="ngrok" content="allow">
 <title>Sleeping fox</title>
 <style>
   * { margin:0; padding:0; box-sizing:border-box; }
   body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-         background:#0a0a0a; color:#f0f0f0; height:100vh; height:100dvh; display:flex; flex-direction:column; }
+         background:#111; color:#e0e0e0; height:100vh; height:100dvh; display:flex; flex-direction:column; }
   header { background:#1a1a2e; padding:12px 20px; display:flex; align-items:center;
            gap:16px; border-bottom:1px solid #333; }
   header h1 { font-size:18px; color:#7c3aed; }
@@ -21,18 +20,22 @@
          word-wrap:break-word; }
   .msg.user { align-self:flex-end; background:#7c3aed; color:#fff !important; }
   .msg.agent { align-self:flex-start; background:#1e1e2e; border:1px solid #333; color:#ffffff !important; }
-  .msg .label { font-size:11px; font-weight:600; margin-bottom:4px; opacity:0.7; }
   .msg .content { white-space:pre-wrap; color:#ffffff; }
-  .msg .content strong, .msg .content h1, .msg .content h2, .msg .content h3, .msg .content em { color:#ffffff; }
-  .thought { padding:8px 12px; margin:4px 0; border-left:3px solid #f59e0b; font-size:13px;
-             color:#fbbf24; background:#1a1a15; border-radius:0 6px 6px 0; }
-  .tool-call { padding:8px 12px; margin:4px 0; border-left:3px solid #3b82f6; font-size:13px;
-               background:#0f172a; border-radius:0 6px 6px 0; font-family:monospace; }
-  .tool-call .name { color:#60a5fa; font-weight:600; }
-  .tool-result { padding:8px 12px; margin:4px 0; border-left:3px solid #10b981; font-size:13px;
-                 color:#6ee7b7; background:#0a1a15; border-radius:0 6px 6px 0;
-                 max-height:200px; overflow-y:auto; }
-  .orient { padding:6px 10px; margin:4px 0; font-size:12px; color:#94a3b8; font-style:italic; }
+  .msg .content strong { color:#ffffff; }
+  .msg .content h1, .msg .content h2, .msg .content h3 { color:#ffffff; margin:8px 0 4px; }
+  .msg .content em { color:#dddddd; }
+  .msg .content table { border-collapse:collapse; margin:8px 0; width:100%; }
+  .msg .content th, .msg .content td { border:1px solid #444; padding:4px 10px; text-align:left; color:#ffffff; }
+  .msg .content th { background:#2a2a3e; font-weight:600; }
+  .msg .content pre { background:#0d0d1a; border:1px solid #333; border-radius:8px;
+                       padding:12px; overflow-x:auto; margin:8px 0; font-size:13px; }
+  .msg .content code { background:#333; padding:1px 5px; border-radius:3px; font-size:12px; }
+  .msg .content pre code { background:none; padding:0; }
+  .msg .content img { max-width:100%; border-radius:8px; margin:8px 0; }
+  .msg .content a { color:#7c3aed; text-decoration:underline; }
+  .msg .content ul, .msg .content ol { margin:4px 0 4px 20px; }
+  .msg .content li { margin:2px 0; }
+
   /* 思考过程折叠 */
   .thinking-summary { display:inline-block; padding:3px 10px; margin:0 0 6px 0;
                        background:#1e1e2e; border:1px solid #333; border-radius:10px;
@@ -43,6 +46,25 @@
   .thinking-summary.open::before { content:'▼ '; font-size:9px; }
   .thinking-block { display:none; }
   .thinking-block.visible { display:block; }
+  .thought { padding:8px 12px; margin:4px 0; border-left:3px solid #f59e0b; font-size:13px;
+             color:#fbbf24; background:#1a1a15; border-radius:0 6px 6px 0; }
+  .tool-call { padding:8px 12px; margin:4px 0; border-left:3px solid #3b82f6; font-size:13px;
+               background:#0f172a; border-radius:0 6px 6px 0; font-family:monospace; }
+  .tool-call .name { color:#60a5fa; font-weight:600; }
+  .tool-result { padding:8px 12px; margin:4px 0; border-left:3px solid #10b981; font-size:13px;
+                 color:#6ee7b7; background:#0a1a15; border-radius:0 6px 6px 0;
+                 max-height:200px; overflow-y:auto; }
+  .orient { padding:6px 10px; margin:4px 0; font-size:12px; color:#94a3b8; font-style:italic; }
+
+  /* Loading 动画 */
+  .loading-dots { display:inline-flex; gap:4px; padding:8px 0; }
+  .loading-dots span { width:8px; height:8px; border-radius:50%; background:#7c3aed;
+                        animation: bounce 1.4s infinite ease-in-out; }
+  .loading-dots span:nth-child(1) { animation-delay:0s; }
+  .loading-dots span:nth-child(2) { animation-delay:0.2s; }
+  .loading-dots span:nth-child(3) { animation-delay:0.4s; }
+  @keyframes bounce { 0%,80%,100% { transform:scale(0); } 40% { transform:scale(1); } }
+
   footer { padding:16px 20px; border-top:1px solid #333; display:flex; gap:10px; background:#1a1a2e; }
   footer input { flex:1; background:#000; color:#e0e0e0;
                  border:1px solid #444; padding:10px 16px;
@@ -107,9 +129,10 @@ document.getElementById('session-info').textContent = `会话: ${SESSION_ID}`;
 
 let currentMsg = null;
 let thinkingCount = 0;
-let chartImages = [];  // 本轮生成的图表图片 URL
+let chartImages = [];
 
-// 页面加载时恢复历史对话
+// ── 历史恢复 ─────────────────────────────────────────
+
 (async function restoreHistory() {
   try {
     const res = await fetch(`/api/sessions/${SESSION_ID}/history`, {
@@ -125,10 +148,13 @@ let chartImages = [];  // 本轮生成的图表图片 URL
   } catch(e) { /* 忽略 */ }
 })();
 
+// ── 消息渲染 ─────────────────────────────────────────
+
 function addMessage(role, text, extraHtml = '') {
   const div = document.createElement('div');
   div.className = `msg ${role}`;
-  const body = extraHtml + (text ? `<div class="content">${linkify(text)}</div>` : '');
+  const content = text ? renderContent(text) : '';
+  const body = extraHtml + (content ? `<div class="content">${content}</div>` : '');
   div.innerHTML = body || '';
   $messages.appendChild(div);
   $messages.scrollTop = $messages.scrollHeight;
@@ -136,63 +162,114 @@ function addMessage(role, text, extraHtml = '') {
 }
 
 function addThinkingBlock(cls, text) {
-  // 思考过程已隐藏
+  if (!currentMsg) return;
+  let block = currentMsg.querySelector('.thinking-block');
+  if (!block) {
+    block = document.createElement('div');
+    block.className = 'thinking-block';
+    currentMsg.appendChild(block);
+  }
+
+  const inner = document.createElement('div');
+  inner.className = cls;
+  inner.innerHTML = escapeHtml(text);
+  block.appendChild(inner);
+
+  thinkingCount++;
+  let tag = currentMsg.querySelector('.thinking-summary');
+  if (tag) tag.textContent = `👽 ${thinkingCount} 步思考过程`;
 }
 
 function ensureThinkingTag() {
-  // 思考过程已隐藏
+  if (!currentMsg) return;
+  if (currentMsg.querySelector('.thinking-summary')) return;
+  const tag = document.createElement('div');
+  tag.className = 'thinking-summary';
+  tag.textContent = `👽 ${thinkingCount} 步思考过程`;
+  tag.addEventListener('click', () => {
+    const block = tag.parentElement.querySelector('.thinking-block');
+    if (!block) return;
+    const open = block.classList.toggle('visible');
+    tag.classList.toggle('open', open);
+  });
+  currentMsg.insertBefore(tag, currentMsg.firstChild);
 }
+
+function removeThinkingIfEmpty() {
+  // 如果思考块里没有内容，移除整个折叠区域
+  if (!currentMsg) return;
+  const block = currentMsg.querySelector('.thinking-block');
+  const tag = currentMsg.querySelector('.thinking-summary');
+  if (block && !block.children.length) {
+    block.remove();
+    if (tag) tag.remove();
+  }
+}
+
+// ── Markdown 渲染 ─────────────────────────────────────
 
 function escapeHtml(s) {
   return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 }
 
-function renderMarkdown(text) {
-  let html = text;
-  // Headers
-  html = html.replace(/^### (.+)$/gm, '<h3 style="font-size:15px;margin:8px 0 4px;">$1</h3>');
-  html = html.replace(/^## (.+)$/gm, '<h2 style="font-size:16px;margin:8px 0 4px;">$1</h2>');
-  html = html.replace(/^# (.+)$/gm, '<h1 style="font-size:18px;margin:8px 0 4px;">$1</h1>');
-  // Bold
+function renderContent(text) {
+  // 1. Escape HTML
+  let html = escapeHtml(text);
+
+  // 2. Code blocks: ```lang\n...\n``` → <pre><code>...</code></pre>
+  html = html.replace(/```(\w*)\n([\s\S]*?)```/g, function(match, lang, code) {
+    return `<pre><code>${code.trim()}</code></pre>`;
+  });
+
+  // 3. Markdown table: | ... | ... |\n|---|---|\n| ... | ... |
+  html = html.replace(/((?:^\|.+\|$\n?)+)/gm, function(tableBlock) {
+    const rows = tableBlock.trim().split('\n');
+    let tableHtml = '<table>';
+    let isHeader = true;
+    for (const row of rows) {
+      // Skip separator rows
+      if (/^\|[\s:|-]+\|$/.test(row)) continue;
+      const cells = row.split('|').filter(c => c.trim() !== '');
+      const tag = isHeader ? 'th' : 'td';
+      tableHtml += '<tr>' + cells.map(c => `<${tag}>${c.trim()}</${tag}>`).join('') + '</tr>';
+      isHeader = false;
+    }
+    tableHtml += '</table>';
+    return tableHtml;
+  });
+
+  // 4. Images: ![alt](url) → <img>
+  html = html.replace(/!\[([^\]]*)\]\(([^)]+)\)/g,
+    '<img src="$2" alt="$1" />');
+
+  // 5. Links: [text](url) → <a>
+  html = html.replace(/\[([^\]]+)\]\((https?:\/\/[^\s\)]+)\)/g,
+    '<a href="$2" target="_blank" rel="noopener">$1</a>');
+
+  // 6. Headers
+  html = html.replace(/^### (.+)$/gm, '<h3>$1</h3>');
+  html = html.replace(/^## (.+)$/gm, '<h2>$1</h2>');
+  html = html.replace(/^# (.+)$/gm, '<h1>$1</h1>');
+
+  // 7. Bold & Italic
   html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
-  // Italic
   html = html.replace(/\*(.+?)\*/g, '<em>$1</em>');
-  // Inline code
-  html = html.replace(/`([^`]+)`/g, '<code style="background:#333;padding:1px 5px;border-radius:3px;font-size:12px;">$1</code>');
-  // Mermaid code blocks: ```mermaid ... ```
-  html = html.replace(/<code>mermaid\n([\s\S]*?)<\/code>/g,
-    '<code class="language-mermaid">$1</code>');
+
+  // 8. Inline code
+  html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
+
+  // 9. Unordered lists: - item or * item
+  html = html.replace(/^- (.+)$/gm, '<li>$1</li>');
+  html = html.replace(/((?:<li>.*<\/li>\n?)+)/g, '<ul>$1</ul>');
+
+  // 10. Bare URLs
+  html = html.replace(/(https?:\/\/[^\s<>"']+)(?=\s|$)/g,
+    '<a href="$1" target="_blank" rel="noopener">$1</a>');
+
   return html;
 }
 
-function linkify(text) {
-  // 1. escape HTML
-  // 2. Markdown images: ![alt](url) → <img> (must be before links)
-  // 3. Markdown links: [text](url) → <a>
-  // 4. Bare URLs → <a>
-  // 5. Render markdown (bold/italic/headers/code)
-  const escaped = escapeHtml(text);
-  // Images first (before links, so ![alt](url) isn't consumed by link regex)
-  let linked = escaped.replace(
-    /!\[([^\]]*)\]\(([^)]+)\)/g,
-    '<img src="$2" alt="$1" style="max-width:100%;border-radius:8px;margin:8px 0;" />'
-  );
-  // Markdown links
-  linked = linked.replace(
-    /\[([^\]]+)\]\((https?:\/\/[^\s\)]+)\)/g,
-    '<a href="$2" target="_blank" rel="noopener" style="color:#7c3aed;text-decoration:underline;">$1</a>'
-  );
-  // Bare URLs
-  linked = linked.replace(
-    /(https?:\/\/[^\s<>"']+?)(?:[)}\]>,.!?;:*_~]+)?(?=\s|$)/g,
-    function(match, url) {
-      const trailing = match.slice(url.length);
-      return '<a href="' + url + '" target="_blank" rel="noopener" style="color:#7c3aed;text-decoration:underline;">' + url + '</a>' + trailing;
-    }
-  );
-  // Then render markdown (headers/bold/italic/code)
-  return renderMarkdown(linked);
-}
+// ── 发送消息 ─────────────────────────────────────────
 
 async function send() {
   const task = $input.value.trim();
@@ -200,12 +277,16 @@ async function send() {
 
   $send.disabled = true;
   $input.disabled = true;
-  $status.textContent = '思考中...';
   thinkingCount = 0;
   chartImages = [];
 
   addMessage('user', task);
-  currentMsg = null;
+
+  // 显示 loading 动画
+  currentMsg = addMessage('agent', '');
+  currentMsg.innerHTML = '<div class="loading-dots"><span></span><span></span><span></span></div>';
+
+  $status.textContent = '思考中...';
   $messages.scrollTop = $messages.scrollHeight;
 
   try {
@@ -226,6 +307,7 @@ async function send() {
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
     let buffer = '';
+    let gotContent = false;  // 是否收到了实质内容
 
     while (true) {
       const {done, value} = await reader.read();
@@ -249,67 +331,96 @@ async function send() {
         try {
           const data = JSON.parse(dataStr);
 
-          // 思考过程事件 → 折叠
-          if (['text', 'tool_call', 'tool_result', 'orient'].includes(eventType)) {
-            if (!currentMsg) currentMsg = addMessage('agent', '');
-            ensureThinkingTag();
-          }
-
           switch (eventType) {
-            case 'text':
+            case 'text': {
+              // 状态通知（Task/Strategy/计划等），显示在思考折叠块
+              if (!gotContent) {
+                // 第一次收到内容，移除 loading 动画
+                currentMsg.innerHTML = '';
+                gotContent = true;
+              }
               if (data.text) {
-                const el = document.createElement('div');
-                el.textContent = data.text;
-                el.style.cssText = 'color:#fbbf24;font-size:12px;margin:4px 0;';
+                ensureThinkingTag();
                 addThinkingBlock('thought', data.text);
               }
               break;
-            case 'tool_call':
+            }
+            case 'tool_call': {
+              if (!gotContent) { currentMsg.innerHTML = ''; gotContent = true; }
+              ensureThinkingTag();
               addThinkingBlock('tool-call',
                 `🔧 ${data.name}(${JSON.stringify(data.args)})`);
+              $status.textContent = `执行: ${data.name}...`;
               break;
-            case 'tool_result':
+            }
+            case 'tool_result': {
+              if (!gotContent) { currentMsg.innerHTML = ''; gotContent = true; }
+              ensureThinkingTag();
               addThinkingBlock('tool-result', data.result?.slice(0, 1000) || '');
-              // 收集图表图片 URL (从 ![...](url) markdown)
+              // 收集图表图片 URL
               const urls = (data.result || '').match(/!\[[^\]]*\]\((\/charts\/[^)]+)\)/g);
               if (urls) urls.forEach(m => {
                 const u = m.match(/\(\/charts\/[^)]+\)/)[0].slice(1, -1);
                 if (!chartImages.includes(u)) chartImages.push(u);
               });
               break;
-            case 'orient':
+            }
+            case 'orient': {
+              if (!gotContent) { currentMsg.innerHTML = ''; gotContent = true; }
+              ensureThinkingTag();
               addThinkingBlock('orient',
                 `💡 ${data.implication || data.interpretation || ''}`.slice(0, 200));
               break;
-            case 'done':
+            }
+            case 'done': {
+              // 最终答案 → 替换当前消息内容
               if (data.text) {
                 const imgs = chartImages.map(u =>
                   `<img src="${u}" style="max-width:100%;border-radius:8px;margin:8px 0;" />`
                 ).join('');
-                currentMsg = null;
-                addMessage('agent', data.text, imgs);
+                // 清空当前消息，显示最终答案
+                currentMsg.innerHTML = imgs + `<div class="content">${renderContent(data.text)}</div>`;
+              } else {
+                // done 没有 text，移除空气泡
+                removeThinkingIfEmpty();
+                if (!currentMsg.querySelector('.content, .thinking-summary')) {
+                  currentMsg.remove();
+                }
               }
+              currentMsg = null;
               $status.textContent = '就绪';
               break;
-            case 'error':
-              if (!currentMsg) currentMsg = addMessage('agent', '');
+            }
+            case 'error': {
+              if (!gotContent) { currentMsg.innerHTML = ''; gotContent = true; }
+              ensureThinkingTag();
               addThinkingBlock('tool-result', `❌ ${data.text}`);
               $status.textContent = '错误';
               break;
+            }
           }
         } catch(e) { /* skip malformed */ }
       }
       $messages.scrollTop = $messages.scrollHeight;
     }
+
+    // 流结束但没收到 done → 清理
+    if (currentMsg) {
+      removeThinkingIfEmpty();
+      if (!currentMsg.querySelector('.content, .thinking-summary')) {
+        currentMsg.remove();
+      }
+      currentMsg = null;
+    }
+
   } catch (err) {
     const msg = err.message || String(err);
-    if (msg.includes('Failed to fetch') || msg.includes('NetworkError')) {
-      addThinkingBlock('tool-result', '❌ 连接失败：服务器可能重启中或网络不稳定，请稍后重试');
-    } else if (msg.includes('timeout')) {
-      addThinkingBlock('tool-result', '❌ 请求超时，任务可能太复杂，请简化后重试');
-    } else {
-      addThinkingBlock('tool-result', `❌ 错误: ${msg}`);
+    // 清理 loading 或空气泡
+    if (currentMsg) {
+      currentMsg.innerHTML = `<div class="content" style="color:#ef4444;">❌ ${escapeHtml(msg)}</div>`;
+      currentMsg = null;
     }
+    $status.textContent = '错误';
   }
 
   $send.disabled = false;
