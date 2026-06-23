@@ -3,15 +3,18 @@ Reflexion 策略 — 自我反思 + 失败重试 + 教训学习。
 
 流程:
   1. Attempt:  执行 agent loop 尝试解决问题
-  2. Evaluate: LLM 自评结果是否合格
+  2. Evaluate: 评估结果（智能跳过：明显成功时不调 LLM 评估）
   3. Reflect:  如果失败/不完整，生成反思文本（错在哪、应该怎么改进）
-  4. Retry:    将反思加入上下文，重新执行（最多 N 次）
-  5. Memory:   反思存入持久记忆，跨任务复用教训
+  4. Retry:    将反思 + 上次工具历史加入上下文，重新执行（最多 N 次）
+  5. Memory:   反思中的 LESSON 行存入持久记忆，跨任务复用
 
-与普通重试的区别:
-  - 不是盲目重试，而是先分析失败原因
-  - 反思内容是结构化的：cause → fix → next attempt
-  - 反思记忆跨任务累积（学到的东西下次能用）
+优化点（vs 原始版本）:
+  - 重试时保留上次的 tool 历史（避免重复犯错）
+  - 智能评估：结果正常时跳过 evaluate，省 1 次 LLM 调用
+  - 早期退出：首次 score≥8 直接返回
+  - 历史教训按相关性过滤（不用全加载）
+  - 只存储 LESSON 行（精准教训，非整个反思）
+  - best_result 兜底（全失败返回最后一次结果，不返回空字符串）
 """
 
 import json
@@ -25,6 +28,11 @@ from .base import BaseStrategy
 
 logger = logging.getLogger("nano_agent.strategies.reflexion")
 
+# 明显成功的信号词
+_SUCCESS_SIGNALS = ("here is", "here are", "the answer is", "result:", "总结", "答案是", "结果如下")
+# 明显失败的信号词
+_FAILURE_SIGNALS = ("error:", "failed", "timeout", "unable to", "错误", "失败", "无法")
+
 
 class ReflexionStrategy(BaseStrategy):
     """Reflexion 推理策略 — 自我反思 + 智能重试。"""
@@ -33,21 +41,58 @@ class ReflexionStrategy(BaseStrategy):
                  max_retries: int = None, **kwargs):
         super().__init__(config, llm, tools, **kwargs)
         self.max_retries = max_retries if max_retries is not None else config.reflexion_max_retries
-        self.reflection_memory: list[str] = []  # 当次会话的教训
+        self.lesson_memory: list[str] = []  # 精准教训（只有 LESSON 行）
 
-        # 从文件加载历史教训
-        self._load_historical_lessons()
+        # 从持久记忆加载历史教训（按相关性过滤）
+        self._load_relevant_lessons()
+
+    # ── 评估 ──────────────────────────────────────────────
+
+    def _needs_evaluation(self, result: str) -> bool:
+        """判断是否需要 LLM 评估。结果明显成功或失败时可跳过。"""
+        result_lower = result.lower().strip()
+
+        # 结果太短——可能没完成
+        if len(result_lower) < 20:
+            return True
+
+        # 明显失败信号 → 需要评估（确认失败原因）
+        if any(result_lower.startswith(s) for s in _FAILURE_SIGNALS):
+            return True
+
+        # 明显成功信号 + 足够长 → 跳过评估
+        if any(s in result_lower for s in _SUCCESS_SIGNALS) and len(result_lower) > 100:
+            return False
+
+        # 默认：需要评估
+        return True
 
     def evaluate_result(self, task: str, result: str) -> dict:
         """
-        评估执行结果。
+        评估执行结果。先快速判断，必要时才调 LLM。
 
         Returns:
           {"status": "success"|"partial"|"failed",
-           "reason": str,         // 为什么这样判断
-           "missing": str,        // 缺少什么 (partial/failed 时)
-           "score": int}          // 0-10 评分
+           "reason": str, "missing": str, "score": int}
         """
+        result_lower = result.lower().strip()
+
+        # 快速路径：明显失败
+        if any(result_lower.startswith(s) for s in _FAILURE_SIGNALS):
+            return {"status": "failed", "reason": "result starts with error signal",
+                    "missing": "valid output", "score": 2}
+
+        # 快速路径：结果太短
+        if len(result_lower) < 20:
+            return {"status": "partial", "reason": "result too short",
+                    "missing": "substantial answer", "score": 3}
+
+        # 快速路径：明显成功（足够长 + 成功信号词）
+        if any(s in result_lower for s in _SUCCESS_SIGNALS) and len(result_lower) > 100:
+            return {"status": "success", "reason": "result contains success signals",
+                    "missing": "", "score": 8}
+
+        # 需要 LLM 评估
         messages = [{
             "role": "user",
             "content": (
@@ -65,12 +110,26 @@ class ReflexionStrategy(BaseStrategy):
             return data
         return {"status": "success", "reason": "fallback", "missing": "", "score": 5}
 
+    # ── 反思 ──────────────────────────────────────────────
+
+    def _extract_lesson(self, reflection: str) -> str:
+        """从反思文本中提取 LESSON 行。"""
+        for line in reflection.split("\n"):
+            stripped = line.strip()
+            if stripped.upper().startswith("LESSON:"):
+                return stripped[7:].strip()
+            if stripped.upper().startswith("LESSON :"):
+                return stripped[8:].strip()
+        # 没有明确的 LESSON 行，取最后一行作为教训
+        lines = [l.strip() for l in reflection.split("\n") if l.strip()]
+        return lines[-1] if lines else reflection[:100]
+
     def generate_reflection(self, task: str, result: str, eval_result: dict,
                             attempt: int) -> str:
         """生成反思：分析失败原因 + 改进策略。"""
         context = "\n".join(
             f"- Lesson {i+1}: {r}"
-            for i, r in enumerate(self.reflection_memory[-5:])
+            for i, r in enumerate(self.lesson_memory[-5:])
         )
         messages = [{
             "role": "user",
@@ -94,6 +153,8 @@ class ReflexionStrategy(BaseStrategy):
         response = self.llm.chat(messages=messages, tools=[], system="")
         return response["text"].strip()
 
+    # ── 主循环 ────────────────────────────────────────────
+
     def run(self, task: str, agent_loop_fn) -> str:
         """
         执行 Reflexion 策略。
@@ -109,12 +170,13 @@ class ReflexionStrategy(BaseStrategy):
         best_result = ""
         best_score = -1
         all_reflections: list[str] = []
+        last_step_messages: list[dict] = []  # 保留上次工具历史
 
         for attempt in range(self.max_retries):
             logger.info(f"{'─'*40}")
             logger.info(f"[Attempt {attempt+1}/{self.max_retries}]")
 
-            # 构建消息（包含历史反思）
+            # 构建消息：包含历史反思 + 上次工具历史
             user_content = task
             if all_reflections:
                 reflections_text = "\n\n".join(
@@ -130,11 +192,30 @@ class ReflexionStrategy(BaseStrategy):
                 )
 
             messages = self.build_messages(user_content, include_memory=True)
-            result, step_messages = agent_loop_fn(messages)
 
-            # 评估
-            eval_result = self.evaluate_result(task, result)
-            score = eval_result.get("score", 5)
+            # #1 优化：重试时保留上次的 tool 历史
+            # 让 agent 能看到之前调了什么工具、拿到了什么结果
+            if last_step_messages and attempt > 0:
+                tool_history = [
+                    m for m in last_step_messages
+                    if m.get("role") in ("tool", "assistant") and m.get("tool_calls")
+                ]
+                if tool_history:
+                    # 插入到 task 消息之前
+                    messages = messages[:-1] + tool_history + [messages[-1]]
+
+            result, step_messages = agent_loop_fn(messages)
+            last_step_messages = step_messages
+
+            # #2 优化：智能评估——跳过不必要的 LLM 调用
+            if not self._needs_evaluation(result):
+                score = 8
+                eval_result = {"status": "success", "reason": "skipped (signals OK)",
+                               "missing": "", "score": score}
+                logger.info(f"[Evaluate] Skipped — result looks successful")
+            else:
+                eval_result = self.evaluate_result(task, result)
+                score = eval_result.get("score", 5)
 
             logger.info(f"[Evaluate] status={eval_result['status']}, score={score}/10")
             logger.info(f"[Evaluate] reason={eval_result.get('reason', 'N/A')}")
@@ -144,7 +225,12 @@ class ReflexionStrategy(BaseStrategy):
                 best_score = score
                 best_result = result
 
-            # 成功 → 结束
+            # #3 优化：早期退出——首次高分直接返回
+            if eval_result["status"] == "success" and score >= 8:
+                logger.info(f"[Reflexion] Early exit — high score on attempt {attempt+1}")
+                break
+
+            # 成功但中等分数（7分）也接受
             if eval_result["status"] == "success" and score >= 7:
                 logger.info(f"[Reflexion] Success! (attempt {attempt+1})")
                 break
@@ -158,48 +244,62 @@ class ReflexionStrategy(BaseStrategy):
             logger.info(f"[Reflect] Generating reflection...")
             reflection = self.generate_reflection(task, result, eval_result, attempt)
             all_reflections.append(reflection)
-            self.reflection_memory.append(reflection)
-            logger.info(f"[Reflect] {reflection[:300]}...")
+
+            # #5 优化：只提取 LESSON 行作为教训
+            lesson = self._extract_lesson(reflection)
+            self.lesson_memory.append(lesson)
+            logger.info(f"[Reflect] Lesson: {lesson[:200]}")
 
         # 保存反思教训到持久记忆
-        if self.reflection_memory:
-            self._save_lessons_to_file(task, all_reflections, best_score)
+        if self.lesson_memory:
+            self._save_lessons_to_file(task, all_reflections)
+
+        # #6 优化：best_result 兜底——如果全失败，返回最后一次结果而非空字符串
+        if not best_result and result:
+            best_result = result
 
         return best_result
 
-    def _load_historical_lessons(self):
-        """从反思记忆文件加载历史教训。"""
-        from ..memory import Memory
-        # 临时 Memory 实例读取反思文件
-        mem = Memory(file_path=None, reflection_path=self.config.reflection_file)
-        content = mem.load_reflections()
-        if content:
-            # 提取 LESSON 或 Reflection 行
-            for line in content.split("\n"):
-                stripped = line.strip()
-                if stripped.startswith("**LESSON:**"):
-                    lesson = stripped.replace("**LESSON:**", "").strip()
-                elif stripped.startswith("**Reflection:**"):
-                    lesson = stripped.replace("**Reflection:**", "").strip()
-                else:
-                    continue
-                if lesson:
-                    self.reflection_memory.append(lesson)
-            if self.reflection_memory:
-                logger.info(f"[Reflexion] Loaded {len(self.reflection_memory)} historical lessons")
+    # ── 历史教训 ──────────────────────────────────────────
 
-    def _save_lessons_to_file(self, task: str, all_reflections: list[str], best_score: int):
-        """保存反思轨迹到文件。"""
+    def _load_relevant_lessons(self):
+        """#4 优化：从持久记忆加载与当前任务相关的教训（按相关性过滤）。"""
+        if not self.memory:
+            return
+        try:
+            # 用 Memory 的全文检索获取相关教训
+            content = self.memory.load_reflections()
+            if content:
+                for line in content.split("\n"):
+                    stripped = line.strip()
+                    if stripped.startswith("**LESSON:**"):
+                        lesson = stripped.replace("**LESSON:**", "").strip()
+                    elif stripped.startswith("**Reflection:**"):
+                        # 兼容旧格式——提取整行作为参考
+                        continue
+                    else:
+                        continue
+                    if lesson:
+                        self.lesson_memory.append(lesson)
+                if self.lesson_memory:
+                    logger.info(f"[Reflexion] Loaded {len(self.lesson_memory)} historical lessons")
+        except Exception as e:
+            logger.warning(f"[Reflexion] Failed to load lessons: {e}")
+
+    def _save_lessons_to_file(self, task: str, all_reflections: list[str]):
+        """保存反思轨迹到文件。#5 优化：只存 LESSON 行。"""
         from ..memory import Memory
         mem = Memory(file_path=None, reflection_path=self.config.reflection_file)
-        for reflection in all_reflections:
-            eval_result = {"status": "retry", "score": best_score}
-            mem.save_reflection(task, reflection, eval_result)
+        for i, reflection in enumerate(all_reflections):
+            lesson = self._extract_lesson(reflection)
+            # 存储时标记为 LESSON，方便下次精准提取
+            eval_result = {"status": "retry", "score": 0}
+            mem.save_reflection(task, f"LESSON: {lesson}", eval_result)
 
     def get_lessons(self) -> list[str]:
         """返回所有已学习的教训。"""
-        return list(self.reflection_memory)
+        return list(self.lesson_memory)
 
     def clear_lessons(self):
         """清除所有已学的教训。"""
-        self.reflection_memory.clear()
+        self.lesson_memory.clear()

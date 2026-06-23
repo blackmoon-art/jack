@@ -58,9 +58,18 @@ class Search:
         return f"No search results found for '{query}'."
 
     def fetch_url(self, url: str) -> str:
-        """抓取网页并提取文本内容。"""
+        """抓取网页并提取文本内容。阻止内网/本地地址防止 SSRF。"""
         if not url.startswith(("http://", "https://")):
             return "Error: URL must start with http:// or https://"
+        # SSRF 防护：检查目标 IP 是否为内网地址
+        host = urllib.parse.urlparse(url).hostname
+        if host in ("localhost", "127.0.0.1", "::1", "0.0.0.0"):
+            return "Error: Access to localhost is blocked"
+        if host.startswith(("192.168.", "10.", "172.16.", "172.17.", "172.18.",
+                           "172.19.", "172.20.", "172.21.", "172.22.", "172.23.",
+                           "172.24.", "172.25.", "172.26.", "172.27.", "172.28.",
+                           "172.29.", "172.30.", "172.31.")):
+            return "Error: Access to internal network is blocked"
         try:
             req = urllib.request.Request(url, headers={
                 "User-Agent": (

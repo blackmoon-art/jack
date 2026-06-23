@@ -147,8 +147,14 @@ def get_or_create_session(session_id: Optional[str] = None) -> str:
         new_id = session_id or uuid.uuid4().hex[:12]
         if new_id not in sessions:
             history = db_load_history(new_id)
+            config = Config()
+            # 会话级 work_dir 隔离：每个用户在 workspace 下有自己的子目录
+            import os as _os
+            session_dir = _os.path.join(config.work_dir, f"session_{new_id}")
+            _os.makedirs(session_dir, exist_ok=True)
+            config.work_dir = session_dir
             sessions[new_id] = {
-                "agent": Agent(Config()),  # Config() provides charts_dir
+                "agent": Agent(config),
                 "history": history,
                 "last_access": _time.time(),
             }
