@@ -1,23 +1,5 @@
 **Reflection:** LESSON: be better
 
-## 2026-06-23 15:51:10
-**Task:** task
-**Status:** retry
-**Score:** 8
-**Reflection:** LESSON: lesson 1
-
-## 2026-06-23 15:51:10
-**Task:** task
-**Status:** retry
-**Score:** 8
-**Reflection:** LESSON: lesson 2
-
-## 2026-06-23 15:51:10
-**Task:** task
-**Status:** retry
-**Score:** 8
-**Reflection:** LESSON: be better
-
 ## 2026-06-23 16:07:06
 **Task:** task
 **Status:** retry
@@ -193,6 +175,24 @@
 **Reflection:** LESSON: lesson 2
 
 ## 2026-06-23 16:31:49
+**Task:** task
+**Status:** retry
+**Score:** 0
+**Reflection:** LESSON: be better
+
+## 2026-06-23 16:32:28
+**Task:** task
+**Status:** retry
+**Score:** 0
+**Reflection:** LESSON: lesson 1
+
+## 2026-06-23 16:32:28
+**Task:** task
+**Status:** retry
+**Score:** 0
+**Reflection:** LESSON: lesson 2
+
+## 2026-06-23 16:32:28
 **Task:** task
 **Status:** retry
 **Score:** 0

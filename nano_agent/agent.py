@@ -142,9 +142,6 @@ class Agent:
 
     def _execute_tools_parallel(self, tool_calls: list, messages: list):
         """并行执行多个独立的工具调用。"""
-        from threading import Lock
-        lock = Lock()
-
         def run_one(tc):
             self.execute_tool(tc, messages, orient_fn=self._current_orient_fn)
 
