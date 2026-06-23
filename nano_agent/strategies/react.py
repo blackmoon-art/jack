@@ -112,7 +112,6 @@ Final Answer: The current directory contains 2 files: agent.py and README.md."""
         logger.info(f"{'='*60}")
 
         messages = [
-            {"role": "system", "content": self._react_system_prompt()},
             {"role": "user", "content": task},
         ]
         self.thought_trail = []
@@ -123,11 +122,11 @@ Final Answer: The current directory contains 2 files: agent.py and README.md."""
             logger.info(f"{'─'*40}")
             logger.info(f"[ReAct Step {step}]")
 
-            # 调用 LLM（传入 tools，使用 FC）
+            # 调用 LLM（传入 tools，使用 FC；system 通过 system 参数传递，兼容所有 provider）
             response = self.llm.chat(
                 messages=messages,
                 tools=tool_schemas,
-                system="",
+                system=self._react_system_prompt(),
             )
             llm_text = response["text"]
             tool_calls = response["tool_calls"]

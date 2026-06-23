@@ -141,12 +141,12 @@ class ToolRegistry:
         self._register("generate_chart", "Generate charts, math plots, and drawings. For data: use line/bar/pie. For math: chart_type='function', data='sin(x);-3;3'. For drawing animals/objects: chart_type='draw', data='' (empty), labels='shape commands separated by ;'. Shapes: circle:x,y,radius,color | ellipse:x,y,rx,ry,color | rect:x,y,w,h,color | triangle:x1,y1,x2,y2,x3,y3,color | line:x1,y1,x2,y2,width,color. Fox: circle:0,0,3,#7c3aed;circle:-0.8,0.5,0.5,white;circle:0.8,0.5,0.5,white;circle:-0.8,0.5,0.2,black;circle:0.8,0.5,0.2,black;circle:0,-0.5,0.4,#f59e0b;triangle:-2,2,-1,3.5,0,2.5,#7c3aed;triangle:2,2,1,3.5,0,2.5,#7c3aed", self._chart.generate_chart, {
             "chart_type": {"type": "string", "description": "Chart type: line, curve, bar, scatter, pie, histogram, area, heatmap, radar, bubble, function, draw, cat (default: line)"},
             "title": {"type": "string", "description": "Chart title"},
-            "data": {"type": "string", "description": "Data values: comma-separated numbers. Multiple series: semicolons. For draw/cat: leave empty."},
+            "data": {"type": "string", "description": "Data values: comma-separated numbers. Multiple series: semicolons. For draw/cat: leave empty or pass empty string."},
             "labels": {"type": "string", "description": "Labels: comma-separated text. For draw: shape commands separated by semicolons (see tool description for format)."},
             "x_label": {"type": "string", "description": "X-axis label"},
             "y_label": {"type": "string", "description": "Y-axis label"},
             "filename": {"type": "string", "description": "Output filename (optional)"},
-        }, required=["data"])
+        }, required=[])
 
     # ── 内部注册 ──────────────────────────────────────
 

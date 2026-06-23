@@ -1,7 +1,7 @@
 """画图工具：generate_chart — matplotlib 生成 14 种图表。
 
 line | curve | bar | scatter | pie | histogram | area
-heatmap | radar | bubble | function | draw | cat | pythagorean
+heatmap | radar | bubble | function | draw | cat
 
 图片保存到 web/static/charts/ 目录，前端可访问。
 """
@@ -37,21 +37,8 @@ class Chart:
         filename: str = "",
         style: str = "dark",
     ) -> str:
-        """
-        生成图表并保存为 PNG 图片。
-
-        Args:
-            chart_type: 图表类型 (line, curve, bar, scatter, pie, histogram, area, heatmap, radar, bubble)
-            title: 图表标题
-            data: 数据，逗号分隔的数值；多组用分号分隔。heatmap 需矩阵格式（行用分号，列用逗号）。bubble 需 x;y;size 三组。
-            labels: 标签，逗号分隔；多组用分号分隔
-            x_label: X 轴标签
-            y_label: Y 轴标签
-            filename: 文件名 (可选)
-            style: dark 或 light (默认 dark)
-        """
         # 解析数据 (raw types 不过度拆分逗号)
-        raw_types = {"draw", "cat", "pythagorean"}
+        raw_types = {"draw", "cat"}
         if chart_type in raw_types:
             data_sets = [[data.strip()]] if data.strip() else [[]]
             label_sets = [[labels.strip()]] if labels.strip() else [[]]
@@ -62,7 +49,7 @@ class Chart:
             except Exception as e:
                 return f"Error parsing data: {e}"
 
-        no_data_types = {"cat", "pythagorean", "draw"}
+        no_data_types = {"cat", "draw"}
         if (not data_sets or not data_sets[0]) and chart_type not in no_data_types:
             return "Error: data is required (e.g. '10,20,30,40')"
 
@@ -116,7 +103,7 @@ class Chart:
             elif chart_type == "draw":
                 self._draw_freeform(ax, data_sets, label_sets, is_dark)
             else:
-                return f"Error: Unknown chart type '{chart_type}'. Supported: line, curve, bar, scatter, pie, histogram, area, heatmap, radar, bubble"
+                return f"Error: Unknown chart type '{chart_type}'. Supported: line, curve, bar, scatter, pie, histogram, area, heatmap, radar, bubble, function, cat, draw"
         except Exception as e:
             plt.close(fig)
             return f"Error generating chart: {e}"
@@ -176,7 +163,9 @@ class Chart:
             ax.plot(x, vals, color=colors[i % len(colors)], marker="o",
                     linewidth=2, markersize=4, label=label)
         if any(i < len(label_sets) and label_sets[i] for i in range(len(data_sets))):
-            ax.legend(facecolor="#222", edgecolor="#444", labelcolor="#ccc")
+            lc = "#222" if is_dark else "#f0f0f0"
+            ax.legend(facecolor=lc, edgecolor="#444" if is_dark else "#ccc",
+                      labelcolor="#ccc" if is_dark else "#333")
 
     def _draw_curve(self, ax, data_sets, label_sets, is_dark=True):
         """平滑曲线 — scipy spline 优先，回退到 numpy polyfit。"""
@@ -201,7 +190,9 @@ class Chart:
             ax.plot(x, y, color=colors[i % len(colors)], linewidth=2, label=label)
             ax.scatter(range(n), vals, color=colors[i % len(colors)], s=20, zorder=5)
         if any(i < len(label_sets) and label_sets[i] for i in range(len(data_sets))):
-            ax.legend(facecolor="#222", edgecolor="#444", labelcolor="#ccc")
+            lc = "#222" if is_dark else "#f0f0f0"
+            ax.legend(facecolor=lc, edgecolor="#444" if is_dark else "#ccc",
+                      labelcolor="#ccc" if is_dark else "#333")
 
     def _draw_bar(self, ax, data_sets, label_sets, is_dark=True):
         colors = ["#7c3aed", "#3b82f6", "#10b981", "#f59e0b", "#ef4444"]
@@ -247,7 +238,9 @@ class Chart:
             label = label_sets[i][0] if i < len(label_sets) and label_sets[i] else None
             ax.hist(vals, bins=15, color=colors[i % len(colors)], alpha=0.7, label=label, edgecolor="#333")
         if len(data_sets) > 1:
-            ax.legend(facecolor="#222", edgecolor="#444", labelcolor="#ccc")
+            lc = "#222" if is_dark else "#f0f0f0"
+            ax.legend(facecolor=lc, edgecolor="#444" if is_dark else "#ccc",
+                      labelcolor="#ccc" if is_dark else "#333")
 
     def _draw_area(self, ax, data_sets, label_sets):
         colors = ["#7c3aed", "#3b82f6", "#10b981"]
@@ -258,7 +251,9 @@ class Chart:
                             alpha=0.4, label=label)
             ax.plot(range(len(vals)), vals, color=colors[i % len(colors)], linewidth=1.5)
         if any(i < len(label_sets) and label_sets[i] for i in range(len(data_sets))):
-            ax.legend(facecolor="#222", edgecolor="#444", labelcolor="#ccc")
+            lc = "#222" if is_dark else "#f0f0f0"
+            ax.legend(facecolor=lc, edgecolor="#444" if is_dark else "#ccc",
+                      labelcolor="#ccc" if is_dark else "#333")
 
     # ── 新图表类型 ──
 

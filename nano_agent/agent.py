@@ -230,6 +230,15 @@ class Agent:
             "- Pick the right tool based on its description. Trust the tool descriptions.",
             "- Always show images with ![title](url)",
             "- DO NOT overthink — first match, act immediately.",
+            "",
+            "# Chart / Drawing Rules (IMPORTANT)",
+            "- When the user asks for a chart, graph, plot, or drawing, you MUST use the `generate_chart` tool.",
+            "- NEVER output Chart.js / D3.js / HTML canvas / SVG code directly as text.",
+            "- NEVER write JavaScript or CSS for charts. The frontend cannot render them.",
+            "- For data charts: use generate_chart with chart_type=line/bar/pie/scatter/etc.",
+            "- For math plots: use generate_chart with chart_type=function, data='expression;x_min;x_max'",
+            "- For drawings/animals: use generate_chart with chart_type=cat or chart_type=draw",",
+            "- The generate_chart tool returns a markdown image link ![title](/charts/xxx.png) — include it in your final answer.",
         ]
         rules = self.orient_engine.load_rules()
         if rules:

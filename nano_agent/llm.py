@@ -2,10 +2,13 @@
 LLM 客户端抽象 — 统一 Anthropic / OpenAI / DeepSeek / OpenRouter 接口。
 """
 
+import logging
 import time
 from typing import Any
 
 from .config import Config
+
+logger = logging.getLogger("nano_agent.llm")
 
 
 def _create_anthropic_client(cfg: Config):
@@ -32,21 +35,40 @@ class LLM:
         self.config = config
         self._client = None  # 懒初始化
         self._model_override: str | None = None  # 运行时模型覆盖
+        self._provider_override: str | None = None  # 运行时 provider 覆盖（不修改共享 Config）
+
+    # 模型名前缀 → provider 映射（不修改共享 Config）
+    _MODEL_PROVIDER_MAP = {
+        "claude": "anthropic",
+        "deepseek": "openai_compatible",
+        "qwen": "openai_compatible",
+        "glm": "openai_compatible",
+        "moonshot": "openai_compatible",
+    }
 
     def set_model(self, model: str):
-        """运行时覆盖模型名称。用于 Web UI 模型切换。"""
+        """运行时覆盖模型名称。用于 Web UI 模型切换。
+
+        不修改共享的 Config 对象，而是用实例级 _provider_override
+        避免影响其他 session。
+        """
         self._model_override = model
-        # 切换 provider 如果需要
-        if model.startswith("claude"):
-            self.config.provider = "anthropic"
-            self._client = None  # 重新创建客户端
-        elif any(model.startswith(p) for p in ("deepseek", "qwen", "glm", "moonshot")):
-            self.config.provider = "deepseek"
-            self._client = None
+        self._provider_override = None
+        self._client = None  # 重新创建客户端
+
+        for prefix, provider in self._MODEL_PROVIDER_MAP.items():
+            if model.startswith(prefix):
+                self._provider_override = provider
+                break
         else:
-            # openrouter / openai 兼容
-            self.config.provider = "openai"
-            self._client = None
+            self._provider_override = "openai_compatible"
+
+    @property
+    def _provider(self) -> str:
+        """当前生效的 provider（优先使用实例级覆盖，不修改共享 Config）。"""
+        if self._provider_override is not None:
+            return self._provider_override
+        return self.config.provider
 
     @property
     def _model(self) -> str:
@@ -54,7 +76,7 @@ class LLM:
 
     def _get_client(self):
         if self._client is None:
-            if self.config.is_anthropic:
+            if self._provider == "anthropic":
                 self._client = _create_anthropic_client(self.config)
             else:
                 self._client = _create_openai_client(self.config)
@@ -66,10 +88,23 @@ class LLM:
     def clean_json_response(text: str) -> str:
         """清理 LLM 返回的 JSON 文本：去 markdown 代码块包裹。"""
         text = text.strip()
-        if text.startswith("```"):
-            text = text.split("\n", 1)[-1]
-            if text.endswith("```"):
-                text = text[:-3]
+        # 处理 ```json ... ``` 或 ``` ... ``` 包裹
+        # 支持代码块不在开头的情况（如 "Here is the JSON:\n```json\n...\n```"）
+        if '```' in text:
+            # 找到第一个 ``` 开头
+            start = text.find('```')
+            if start >= 0:
+                # 跳过 ``` 和可选的语言标记
+                after_start = text.index('```', start) + 3
+                # 跳过语言标记（如 json）
+                newline_pos = text.find('\n', after_start)
+                if newline_pos >= 0 and newline_pos - after_start < 20:
+                    # 看起来像语言标记
+                    after_start = newline_pos + 1
+                # 找结尾 ```
+                end = text.rfind('```')
+                if end > after_start:
+                    text = text[after_start:end]
         return text.strip()
 
     @staticmethod
@@ -106,7 +141,7 @@ class LLM:
         """
         for attempt in range(3):
             try:
-                if self.config.is_anthropic:
+                if self._provider == "anthropic":
                     return self._chat_anthropic(messages, tools, system)
                 else:
                     return self._chat_openai(messages, tools, system)

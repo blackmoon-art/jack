@@ -101,26 +101,56 @@ def db_clear_session(session_id: str):
 
 
 import threading
+import time as _time
 
-# Session storage: session_id -> {"agent": Agent, "history": list}
+# Session storage: session_id -> {"agent": Agent, "history": list, "last_access": float}
 # 线程安全：所有读写都经过 _sessions_lock
 _sessions_lock = threading.Lock()
 sessions: dict[str, dict] = {}
 
+# Session 淘汰配置
+_MAX_SESSIONS = 100          # 最大会话数
+_SESSION_TTL_SECONDS = 7200  # 2 小时未访问则可淘汰
+
 STATIC_DIR = Path(__file__).parent / "static"
+
+
+def _evict_sessions():
+    """淘汰过期或超量的 session（需在 _sessions_lock 内调用）。"""
+    now = _time.time()
+    # 1. 淘汰超时的 session
+    expired = [
+        sid for sid, s in sessions.items()
+        if now - s.get("last_access", 0) > _SESSION_TTL_SECONDS
+    ]
+    for sid in expired:
+        del sessions[sid]
+        logger.info(f"Evicted expired session {sid}")
+    # 2. 如果还超量，按 LRU 淘汰
+    if len(sessions) > _MAX_SESSIONS:
+        sorted_sessions = sorted(
+            sessions.items(), key=lambda x: x[1].get("last_access", 0)
+        )
+        for sid, _ in sorted_sessions[:len(sessions) - _MAX_SESSIONS]:
+            del sessions[sid]
+            logger.info(f"Evicted LRU session {sid}")
 
 
 def get_or_create_session(session_id: Optional[str] = None) -> str:
     """获取或创建会话。新 session 或内存中不存在时从 DB 恢复历史。线程安全。"""
     with _sessions_lock:
         if session_id and session_id in sessions:
+            sessions[session_id]["last_access"] = _time.time()
             return session_id
+        # 淘汰后再创建
+        _evict_sessions()
         new_id = session_id or uuid.uuid4().hex[:12]
         if new_id not in sessions:
             history = db_load_history(new_id)
             sessions[new_id] = {
                 "agent": Agent(Config()),
                 "history": history,
+                "last_access": _time.time(),
             }
             if history:
                 logger.info(f"Restored session {new_id}: {len(history)} messages from DB")
@@ -130,12 +160,14 @@ def get_or_create_session(session_id: Optional[str] = None) -> str:
 # ── SSE 流式响应 ──────────────────────────────────────
 
 def agent_stream(task: str, strategy: str, session_id: str):
-    """Generator that yields SSE events as the agent runs.
-
-    Args:
-        show_thinking: 是否发送思考过程事件 (orient/tool_call/tool_result/text)
-    """
-    agent = sessions[session_id]["agent"]
+    """Generator that yields SSE events as the agent runs."""
+    # 在锁内安全获取 agent 引用
+    with _sessions_lock:
+        if session_id not in sessions:
+            yield f"event: error\ndata: {json.dumps({'text': 'Session not found'})}\n\n"
+            return
+        agent = sessions[session_id]["agent"]
+        sessions[session_id]["last_access"] = _time.time()
 
     # 用队列收集 agent 事件
     queue: Queue = Queue()
@@ -159,7 +191,6 @@ def agent_stream(task: str, strategy: str, session_id: str):
     thread.start()
 
     # 流式发送事件（带心跳，防止浏览器超时断开）
-    import time as _time
     last_heartbeat = _time.time()
     while True:
         try:
@@ -231,10 +262,11 @@ async def chat(request: Request):
 async def get_history(session_id: str):
     """Get chat history for a session."""
     with _sessions_lock:
-        if session_id not in sessions:
-            history = db_load_history(session_id)
-            return {"history": history}
-        return {"history": sessions[session_id]["history"]}
+        if session_id in sessions:
+            return {"history": sessions[session_id]["history"]}
+    # 不在内存中，从 DB 加载
+    history = db_load_history(session_id)
+    return {"history": history}
 
 
 @app.delete("/api/sessions/{session_id}")
@@ -277,7 +309,12 @@ CHARTS_DIR.mkdir(exist_ok=True)
 @app.get("/charts/{filename}")
 async def serve_chart(filename: str):
     from fastapi.responses import FileResponse
-    filepath = CHARTS_DIR / filename
+    # 防止路径遍历：resolve 后检查是否在 CHARTS_DIR 内
+    filepath = (CHARTS_DIR / filename).resolve()
+    try:
+        filepath.relative_to(CHARTS_DIR.resolve())
+    except ValueError:
+        return {"error": "Access denied"}
     if not filepath.exists():
         return {"error": "Chart not found"}
     return FileResponse(filepath, media_type="image/png", headers={"Cache-Control": "public, max-age=86400"})
