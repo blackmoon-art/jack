@@ -40,6 +40,7 @@ class BaseStrategy:
         self.tools = tools
         self.memory = kwargs.get("memory")  # 可选 Memory 实例
         self._emit: Optional[Callable[[str, dict], None]] = None
+        self._orient_fn: Optional[Callable] = None  # 由 Agent 注入（已绑定原始任务）
 
     def emit(self, event_type: str, data: dict):
         """发送事件给回调（如果已设置）。静默失败。"""
@@ -76,7 +77,8 @@ class BaseStrategy:
         Args:
             tool_call:    {'name': str, 'arguments': dict, 'id': str}
             messages:     消息列表（会被修改）
-            orient_fn:    可选的 Orient 函数 f(result_text, task) -> dict|None
+            orient_fn:    Orient 函数 f(result_text) -> dict|None
+                          不传则用 self._orient_fn（由 Agent 注入）
 
         Returns:
             {'name': str, 'result': str, 'success': bool}
@@ -102,10 +104,11 @@ class BaseStrategy:
         self.emit("tool_result", {"name": name, "result": result_text, "success": is_success})
         logger.debug(f"[Tool Result] {result_text[:200]}")
 
-        # Orient: 显式解读（可选）
+        # Orient: 显式解读（使用注入的 orient_fn 或参数传入的）
+        _orient = orient_fn or self._orient_fn
         content = result_text
-        if orient_fn:
-            orientation = orient_fn(result_text, args.get("task", ""))
+        if _orient:
+            orientation = _orient(result_text)
             if orientation:
                 self.emit("orient", orientation)
                 content = (

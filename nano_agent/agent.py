@@ -21,6 +21,7 @@ O-O-D-A 阶段:
 
 import json
 import logging
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Callable, Optional
 
 from .config import Config
@@ -50,6 +51,7 @@ class Agent:
         self._strategy_instance = None
         self._last_orientation: Optional[dict] = None  # 最近一次 Orient 结果
         self._on_event = None
+        self._current_orient_fn: Optional[Callable] = None  # 当前任务的 Orient 函数（绑定原始任务）
 
     # ── 主入口 ──────────────────────────────────────────
 
@@ -72,6 +74,9 @@ class Agent:
         self._on_event = on_event
         self._emit("text", {"text": f"Task: {task}\nStrategy: {strategy}"})
 
+        # 创建绑定原始任务的 Orient 函数
+        self._current_orient_fn = lambda obs: self._orient(obs, task=task)
+
         # auto 模式：LLM 根据用户意图自动选策略
         if strategy == "auto":
             strategy = self._auto_select_strategy(task)
@@ -89,6 +94,7 @@ class Agent:
         self.memory.save_context(task, final)
         self.memory.save_persistent(task, final)
         self._on_event = None
+        self._current_orient_fn = None
         return final
 
     def _emit(self, event_type: str, data: dict):
@@ -102,10 +108,11 @@ class Agent:
     # ── 策略实现 ────────────────────────────────────────
 
     def _run_strategy(self, strategy_cls, task: str, **kwargs) -> str:
-        """通用策略执行：实例化 → 注入事件回调 + memory → 缓存 → 运行。"""
+        """通用策略执行：实例化 → 注入事件回调 + memory + orient → 缓存 → 运行。"""
         kwargs.setdefault("memory", self.memory)
         s = strategy_cls(self.config, self.llm, self.tools, **kwargs)
         s._emit = self._emit  # 透传事件回调，让策略能发事件
+        s._orient_fn = self._current_orient_fn  # 透传 Orient（已绑定原始任务）
         self._strategy_instance = s
         return s.run(task, self._agent_loop)
 
@@ -133,6 +140,19 @@ class Agent:
             pass
         return "default"
 
+    def _execute_tools_parallel(self, tool_calls: list, messages: list):
+        """并行执行多个独立的工具调用。"""
+        from threading import Lock
+        lock = Lock()
+
+        def run_one(tc):
+            self.execute_tool(tc, messages, orient_fn=self._current_orient_fn)
+
+        with ThreadPoolExecutor(max_workers=len(tool_calls)) as executor:
+            futures = [executor.submit(run_one, tc) for tc in tool_calls]
+            for f in as_completed(futures):
+                f.result()  # 有异常会在这里抛出
+
     def _strategy_defaults(self, strategy: str) -> dict:
         """从 Config 获取策略默认参数。"""
         defaults = {}
@@ -156,7 +176,7 @@ class Agent:
         is_success = observation.success
         self._emit("tool_result", {"name": name, "result": result_text, "success": is_success})
         logger.debug(f"[Tool Result] {result_text[:200]}")
-        orientation = (orient_fn(result_text, args.get("task", "")) if orient_fn else None)
+        orientation = (orient_fn(result_text) if orient_fn else None)
         if orientation:
             self._emit("orient", orientation)
             enriched = (f"{result_text}\n\n"
@@ -203,9 +223,12 @@ class Agent:
                     self._emit("text", {"text": response["text"]})
                 return response["text"], messages
 
-            # ── Act: 执行工具 ──
-            for tc in response["tool_calls"]:
-                self.execute_tool(tc, messages, orient_fn=self._orient)
+            # ── Act: 并行执行工具 ──
+            if len(response["tool_calls"]) == 1:
+                self.execute_tool(response["tool_calls"][0], messages,
+                                  orient_fn=self._current_orient_fn)
+            else:
+                self._execute_tools_parallel(response["tool_calls"], messages)
 
         logger.warning(f"Max iterations ({self.config.max_iterations}) reached, "
                         f"forcing stop. Last tool: "
