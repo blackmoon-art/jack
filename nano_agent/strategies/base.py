@@ -72,57 +72,32 @@ class BaseStrategy:
 
     def execute_tool(self, tool_call: dict, messages: list[dict],
                       orient_fn: Optional[Callable] = None) -> dict:
-        """执行单个工具调用，发送事件，追加消息。
-
-        Args:
-            tool_call:    {'name': str, 'arguments': dict, 'id': str}
-            messages:     消息列表（会被修改）
-            orient_fn:    Orient 函数 f(result_text) -> dict|None
-                          不传则用 self._orient_fn（由 Agent 注入）
-
-        Returns:
-            {'name': str, 'result': str, 'success': bool}
-        """
+        """委托给 Agent 的统一实现，确保行为一致。"""
+        fn = getattr(self, '_execute_tool', None)
+        if fn:
+            fn(tool_call, messages, orient_fn=orient_fn)
+            return {"name": tool_call.get("name", ""), "result": "", "success": True}
+        # 兜底：没有注入时自行处理
         from ..tools.observation import Observation
-
         name = tool_call["name"]
         args = tool_call.get("arguments", {})
         if isinstance(args, str):
             import json as _json
-            try:
-                args = _json.loads(args)
-            except _json.JSONDecodeError:
-                args = {}
-
+            try: args = _json.loads(args)
+            except _json.JSONDecodeError: args = {}
         self.emit("tool_call", {"name": name, "args": args})
-        logger.info(f"[Tool] {name}({json.dumps(args, ensure_ascii=False)[:200]})")
-
         observation = self.tools.execute(name, args)
         result_text = str(observation)
-        is_success = observation.success  # execute() 保证返回 Observation
-
+        is_success = observation.success
         self.emit("tool_result", {"name": name, "result": result_text, "success": is_success})
-        logger.debug(f"[Tool Result] {result_text[:200]}")
-
-        # Orient: 显式解读（使用注入的 orient_fn 或参数传入的）
         _orient = orient_fn or self._orient_fn
         content = result_text
         if _orient:
             orientation = _orient(result_text)
             if orientation:
                 self.emit("orient", orientation)
-                content = (
-                    f"{result_text}\n\n"
-                    f"[Orient] interpretation={orientation.get('interpretation', '')[:200]}\n"
-                    f"[Orient] implication={orientation.get('implication', '')[:200]}"
-                )
-
-        messages.append({
-            "role": "tool",
-            "tool_call_id": tool_call.get("id", ""),
-            "content": content,
-        })
-
+                content = f"{result_text}\n\n[Orient] interpretation={orientation.get('interpretation', '')[:200]}\n[Orient] implication={orientation.get('implication', '')[:200]}"
+        messages.append({"role": "tool", "tool_call_id": tool_call.get("id", ""), "content": content})
         return {"name": name, "result": result_text, "success": is_success}
 
     def run(self, task: str, agent_loop_fn) -> str:

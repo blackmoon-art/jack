@@ -132,6 +132,7 @@ class Agent:
         s = DefaultStrategy(self.config, self.llm, self.tools, memory=self.memory)
         s._emit = self._emit
         s._orient_fn = self._current_orient_fn
+        s._execute_tool = self.execute_tool
         self._strategy_instance = s
         messages = s.build_messages(task)
         system_prompt = self._system_prompt()
@@ -229,6 +230,7 @@ class Agent:
         s = strategy_cls(self.config, self.llm, self.tools, **kwargs)
         s._emit = self._emit  # 透传事件回调，让策略能发事件
         s._orient_fn = self._current_orient_fn  # 透传 Orient（已绑定原始任务）
+        s._execute_tool = self.execute_tool
         self._strategy_instance = s
         return s.run(task, self._agent_loop)
 
@@ -308,9 +310,17 @@ class Agent:
         return defaults
 
     def execute_tool(self, tc: dict, messages: list, orient_fn=None):
-        """执行单个工具调用并追加结果到 messages。"""
+        """执行单个工具调用并追加结果到 messages。
+        同时被基类策略使用——基类的同名方法委托到这里，避免两套实现。"""
         name = tc["name"]
-        args = tc["arguments"] if isinstance(tc["arguments"], dict) else {}
+        args = tc.get("arguments", {})
+        # 兼容 LLM 返回 JSON 字符串参数
+        if isinstance(args, str):
+            try:
+                args = json.loads(args)
+            except json.JSONDecodeError:
+                args = {}
+
         self._emit("tool_call", {"name": name, "args": args})
         logger.info(f"[Tool] {name}({json.dumps(args, ensure_ascii=False)[:200]})")
         observation = self.tools.execute(name, args)
@@ -318,15 +328,25 @@ class Agent:
         is_success = observation.success
         self._emit("tool_result", {"name": name, "result": result_text, "success": is_success})
         logger.debug(f"[Tool Result] {result_text[:200]}")
-        orientation = (orient_fn(result_text) if orient_fn else None)
-        if orientation:
-            self._emit("orient", orientation)
-            enriched = (f"{result_text}\n\n"
-                        f"[Orient] interpretation={orientation.get('interpretation', '')[:200]}\n"
-                        f"[Orient] implication={orientation.get('implication', '')[:200]}")
-            messages.append({"role": "tool", "tool_call_id": tc["id"], "content": enriched})
-        else:
-            messages.append({"role": "tool", "tool_call_id": tc["id"], "content": result_text})
+
+        # Orient
+        _fn = orient_fn or self._current_orient_fn
+        content = result_text
+        if _fn:
+            orientation = _fn(result_text)
+            if orientation:
+                self._emit("orient", orientation)
+                content = (
+                    f"{result_text}\n\n"
+                    f"[Orient] interpretation={orientation.get('interpretation', '')[:200]}\n"
+                    f"[Orient] implication={orientation.get('implication', '')[:200]}"
+                )
+
+        messages.append({
+            "role": "tool",
+            "tool_call_id": tc.get("id", ""),
+            "content": content,
+        })
 
     # ── 核心循环 (O-O-D-A) ──────────────────────────────
 
