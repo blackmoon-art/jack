@@ -200,7 +200,7 @@ class Agent:
             override = (
                 "SYSTEM OVERRIDE: You must use a drawing tool ({tools}) now. "
                 "Context of the conversation:\n{ctx}\n"
-                "Based on this context, user's request '{task}' requires a visual. "
+                "Based on this context, the user's request requires a visual. "
                 "Draw exactly what the context suggests — modify the previous diagram or create a new one as appropriate. "
                 "Text-only response is NOT acceptable."
             ).format(tools=", ".join(_VISUAL_TOOLS[:3]), ctx=ctx_summary.strip())
