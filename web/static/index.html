@@ -40,8 +40,17 @@
   .msg .content pre code { background:none; padding:0; }
   .msg .content img { max-width:100%; border-radius:8px; margin:8px 0; }
   .msg .content a { color:#7c3aed; text-decoration:underline; }
-  .msg .content .katex-display { margin:12px 0; overflow-x:auto; }
-  .msg .content .katex { font-size:1.1em; }
+  .msg .content .katex-display { margin:20px 0; overflow-x:auto; padding:12px 4px; }
+  .msg .content .katex { font-size:1.15em; }
+  .msg .content .katex-display > .katex { font-size:1.35em; }
+  /* 暗色主题：仿教科书数学排版 */
+  .msg .content .katex, .msg .content .katex * { color:#f0ece4; }
+  .msg .content .katex .mbin { color:#c4b5fd; }        /* + - × ÷ */
+  .msg .content .katex .mrel { color:#c4b5fd; }        /* = < > ≈ ≠ */
+  .msg .content .katex .mopen, .katex .mclose { color:#b0adab; }  /* ( ) [ ] */
+  .msg .content .katex .mop { color:#fbbf24; }         /* ∑ ∏ ∫ lim */
+  .msg .content .katex .mord.mathbf { color:#faf5ff; font-weight:700; } /* bold */
+  .msg .content .katex .mfrac .frac-line { border-bottom:1.5px solid #78716c; }
   .msg .content ul, .msg .content ol { margin:4px 0 4px 20px; }
   .msg .content li { margin:2px 0; }
 
@@ -244,6 +253,7 @@ function escapeHtml(s) {
 
 function renderMath(el) {
   // 渲染 $$...$$ 块级公式和 $...$ 行内公式
+  if (typeof renderMathInElement === 'undefined') return;
   try {
     renderMathInElement(el, {
       delimiters: [
@@ -251,8 +261,15 @@ function renderMath(el) {
         {left: '$', right: '$', display: false},
       ],
       throwOnError: false,
+      strict: false,
+      trust: true,
+      macros: {
+        '\\R': '\\mathbb{R}',
+        '\\N': '\\mathbb{N}',
+        '\\Z': '\\mathbb{Z}',
+      },
     });
-  } catch(e) { /* KaTeX 未加载则忽略 */ }
+  } catch(e) { /* 忽略 */ }
 }
 
 // ── Markdown 渲染 ─────────────────────────────────────
