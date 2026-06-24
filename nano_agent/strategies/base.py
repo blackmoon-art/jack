@@ -50,23 +50,23 @@ class BaseStrategy:
             except Exception as e:
                 logger.warning(f"Strategy emit error ({event_type}): {e}")
 
-    def build_messages(self, task: str, include_memory: bool = True) -> list[dict]:
-        """构建消息列表，注入窗口记忆和长期记忆。
-
-        所有策略应使用此方法构建初始 messages，确保记忆一致。
-        """
+    def build_messages(self, task: str, include_memory: bool = True,
+                        include_long_term: bool = False) -> list[dict]:
+        """构建消息列表，注入窗口记忆。长期记忆需显式开启。"""
         messages = []
         if include_memory and self.memory:
             for msg in self.memory.get_window_messages():
                 messages.append(msg)
-            # 长期记忆检索
-            relevant = self.memory.load_relevant(task, top_k=3)
-            if relevant:
-                messages.append({
-                    "role": "user",
-                    "content": f"[Context from past experience]\n{relevant}"
-                })
-                messages.append({"role": "assistant", "content": "Understood, I will consider this context."})
+            # 长期记忆：默认关闭，避免旧对话干扰当前上下文
+            # 仅 reflexion 等需要跨会话学习的策略开启
+            if include_long_term:
+                relevant = self.memory.load_relevant(task, top_k=3)
+                if relevant:
+                    messages.append({
+                        "role": "user",
+                        "content": f"[Context from past experience]\n{relevant}"
+                    })
+                    messages.append({"role": "assistant", "content": "Understood, I will consider this context."})
         messages.append({"role": "user", "content": task})
         return messages
 

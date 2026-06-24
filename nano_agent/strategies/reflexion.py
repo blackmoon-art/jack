@@ -190,7 +190,7 @@ class ReflexionStrategy(BaseStrategy):
                     f"{task}"
                 )
 
-            messages = self.build_messages(user_content, include_memory=True)
+            messages = self.build_messages(user_content, include_memory=True, include_long_term=True)
 
             # #1 优化：重试时保留上次的 tool 历史
             # 让 agent 能看到之前调了什么工具、拿到了什么结果
