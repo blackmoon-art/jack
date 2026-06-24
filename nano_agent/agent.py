@@ -168,22 +168,24 @@ class Agent:
                            'chart', 'diagram', 'graph', 'plot', '改', '换', '修改',
                            '加', '添加', '再加', '调整', '重新', '换一个')
         _VISUAL_TOOLS = ('mermaid_chart', 'generate_chart', 'draw_circuit', 'drawio_diagram', 'ai_image')
+        _RESET_KEYWORDS = ('天气', '新闻', '计算', '翻译', '搜索', '查', '什么是', '怎么',
+                          'who', 'what', 'when', 'why', 'how', '解释')
 
-        # 检测上下文：最近一轮是否用了画图工具
+        # 上下文检测：上一条有图 + 本条不是新话题 → 自动续图
         had_visual_context = False
-        if self.memory:
+        is_new_topic = any(kw in task.lower() for kw in _RESET_KEYWORDS)
+        if self.memory and not is_new_topic:
             msgs = self.memory.get_window_messages()
             if msgs and len(msgs) >= 2:
-                last_assistant = msgs[-1]["content"] if msgs[-1]["role"] == "assistant" else ""
-                had_visual_context = any(
-                    f"![" in last_assistant or f"/charts/" in last_assistant
-                    for _ in [1]
-                )
+                last = msgs[-1]["content"] if msgs[-1]["role"] == "assistant" else ""
+                if "![" in last or "/charts/" in last:
+                    # 只往前看一条：防止无限续图
+                    had_visual_context = True
 
         needs_visual = any(kw in task.lower() for kw in _VISUAL_KEYWORDS) or had_visual_context
 
         if not tool_calls and needs_visual:
-            logger.warning(f"FORCING TOOL: task='{task[:60]}' context_visual={had_visual_context}")
+            logger.warning(f"FORCING TOOL: task='{task[:60]}' ctx={had_visual_context}")
             self._emit("text", {"text": "🔧 正在生成图片..."})
             override = ("SYSTEM OVERRIDE: Previous context involves visual output. "
                        "You MUST call a drawing tool ({}) to fulfill this request. "
