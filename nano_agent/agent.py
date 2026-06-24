@@ -163,49 +163,60 @@ class Agent:
             # 继续循环：让 LLM 决定下一步
             return self._agent_loop(messages)[0]
 
-        # 代码级强制：关键词 + 上下文检测 → 必须调工具
-        _VISUAL_KEYWORDS = ('画', '图', 'draw', '生成图', '画图', '绘图', '作图',
-                           'chart', 'diagram', 'graph', 'plot', '改', '换', '修改',
-                           '加', '添加', '再加', '调整', '重新', '换一个')
-        _VISUAL_TOOLS = ('mermaid_chart', 'generate_chart', 'draw_circuit', 'drawio_diagram', 'ai_image')
-        _RESET_KEYWORDS = ('天气', '新闻', '计算', '翻译', '搜索', '查', '什么是', '怎么',
-                          'who', 'what', 'when', 'why', 'how', '解释')
+        # 智能画图检测：关键词 + 上下文 → 决定是否出图
+        _DRAW_KW = ('画', '图', 'draw', '生成', '作图', '绘图', 'chart', 'diagram', 'graph')
+        _EDIT_KW = ('改', '换', '修改', '调整', '重画', '重新', '换成', '改成')
+        _ADD_KW  = ('加', '添加', '再加', '加上', '补充', '增加')
+        _QA_KW   = ('天气', '新闻', '计算', '翻译', '搜索', '查', '什么是', '怎么',
+                    '为什么', 'who', 'what', 'when', 'why', 'how', '解释',
+                    'hello', 'hi', 'hey', '你好', '谢谢', '再见', '帮助')
 
-        # 上下文检测：上一条有图 + 本条不是新话题 → 自动续图
-        had_visual_context = False
-        is_new_topic = any(kw in task.lower() for kw in _RESET_KEYWORDS)
-        if self.memory and not is_new_topic:
+        is_draw = any(k in task.lower() for k in _DRAW_KW)
+        is_edit = any(k in task.lower() for k in _EDIT_KW)
+        is_add  = any(k in task.lower() for k in _ADD_KW)
+        is_qa   = any(k in task.lower() for k in _QA_KW)
+
+        # 上下文：上一轮用户是否主动要求了视觉内容（防止无限续图链）
+        prev_visual = False
+        if self.memory:
             msgs = self.memory.get_window_messages()
-            if msgs and len(msgs) >= 2:
-                last = msgs[-1]["content"] if msgs[-1]["role"] == "assistant" else ""
-                if "![" in last or "/charts/" in last:
-                    # 只往前看一条：防止无限续图
-                    had_visual_context = True
+            for m in reversed(msgs):
+                if m["role"] == "user":
+                    prev_visual = any(k in m["content"].lower() for k in _DRAW_KW + _EDIT_KW + _ADD_KW)
+                    break
 
-        needs_visual = any(kw in task.lower() for kw in _VISUAL_KEYWORDS) or had_visual_context
+        needs_visual = is_draw or (not is_qa and prev_visual and (is_edit or is_add))
 
         if not tool_calls and needs_visual:
-            logger.warning(f"FORCING TOOL: task='{task[:60]}' ctx={had_visual_context}")
+            logger.info(f"VISUAL: '{task[:50]}' draw={is_draw} edit={is_edit} prev={prev_visual}")
             self._emit("text", {"text": "🔧 正在生成图片..."})
-            # 提取最近对话上下文（含前一条图的描述），帮 LLM 理解要画什么
-            ctx_summary = ""
+
+            ctx = ""
             if self.memory:
-                recent = self.memory.get_window_messages()[-4:]  # 最近2轮
-                for m in recent:
-                    role = "用户" if m["role"] == "user" else "助手"
-                    # 截断图片数据，保留文字描述
-                    txt = m["content"][:200].split("![")[0].strip()
-                    if txt:
-                        ctx_summary += f"[{role}]: {txt}\n"
+                for m in self.memory.get_window_messages()[-6:]:
+                    r = "用户" if m["role"] == "user" else "助手"
+                    txt = m["content"][:150].split("![")[0].strip()
+                    if txt: ctx += f"[{r}]: {txt}\n"
+
+            # 优先让 LLM 尝试调用工具
             override = (
-                "SYSTEM OVERRIDE: You must use a drawing tool ({tools}) now. "
-                "Context of the conversation:\n{ctx}\n"
-                "Based on this context, the user's request requires a visual. "
-                "Draw exactly what the context suggests — modify the previous diagram or create a new one as appropriate. "
-                "Text-only response is NOT acceptable."
-            ).format(tools=", ".join(_VISUAL_TOOLS[:3]), ctx=ctx_summary.strip())
+                "Call a drawing tool NOW. Context:\n{ctx}\n"
+                "User said: '{task}'. You MUST call one of: mermaid_chart, generate_chart, draw_circuit."
+            ).format(ctx=ctx.strip(), task=task[:200])
             messages.append({"role": "user", "content": override})
-            return self._agent_loop(messages)[0]
+            result, msgs = self._agent_loop(messages)
+
+            # LLM 还是没调工具 → 代码直接兜底
+            had_tool = any(m.get("role") == "assistant" and m.get("tool_calls") for m in msgs[-4:])
+            if not had_tool:
+                try:
+                    from nano_agent.tools.diagram import Diagram
+                    d = Diagram(work_dir=self.config.work_dir, charts_dir=self.config.charts_dir)
+                    img = d.mermaid_chart(f"flowchart LR\n  A[{task[:40]}]-->B[Result]", theme="dark")
+                    return result + "\n\n" + img
+                except Exception:
+                    pass
+            return result
 
         if not full_text.strip():
             return self._agent_loop(messages)[0]
