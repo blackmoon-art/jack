@@ -404,11 +404,15 @@ async function send() {
             case 'done': {
               // 最终答案 → 替换当前消息内容
               if (data.text) {
+                let answerText = data.text;
+                // 清除 LLM 幻觉的绝对 URL 图片（chartImages 已提供相对路径版本）
+                answerText = answerText.replace(/!\[[^\]]*\]\(https?:\/\/[^\s)]*\/charts\/[^\s)]+\)/g, '');
+
                 const imgs = chartImages.map(u =>
                   `<img src="${u}" style="max-width:100%;border-radius:8px;margin:8px 0;" />`
                 ).join('');
                 // 清空当前消息，显示最终答案
-                currentMsg.innerHTML = imgs + `<div class="content">${renderContent(data.text)}</div>`;
+                currentMsg.innerHTML = imgs + `<div class="content">${renderContent(answerText)}</div>`;
                 // 渲染数学公式
                 const contentDiv = currentMsg.querySelector('.content');
                 if (contentDiv) renderMath(contentDiv);
