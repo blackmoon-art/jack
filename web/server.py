@@ -348,6 +348,10 @@ async def index():
     return HTMLResponse(html, headers={"Cache-Control": "no-cache, no-store", "ngrok-skip-browser-warning": "1"})
 
 
+# 静态资源（KaTeX、字体等本地文件）
+app.mount("/static", StaticFiles(directory=str(STATIC_DIR), check_dir=False), name="static")
+
+
 # ── 静态资源 ──────────────────────────────────────────
 
 @app.get("/fox.png")
