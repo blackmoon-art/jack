@@ -186,7 +186,7 @@ class Agent:
                     prev_visual = any(k in m["content"].lower() for k in _DRAW_KW + _EDIT_KW + _ADD_KW)
                     break
 
-        needs_visual = is_draw or (not is_qa and prev_visual and (is_edit or is_add))
+        needs_visual = is_draw or is_edit or is_add or (not is_qa and prev_visual)
 
         if not tool_calls and needs_visual:
             logger.info(f"VISUAL: '{task[:50]}' draw={is_draw} edit={is_edit} prev={prev_visual}")
