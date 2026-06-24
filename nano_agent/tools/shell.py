@@ -78,7 +78,7 @@ class Shell:
                 pass
         return None
 
-    # 危险模式黑名单 — bash -c 内部不允许的命令
+    # 危险模式黑名单 — bash -c 内部不允许的命令/模式
     _DANGEROUS_PATTERNS = (
         'rm -rf /', 'mkfs', 'dd if=', ':(){:|:&}', 'format c:',
         'shutdown', 'reboot', 'init 0', 'init 6',
@@ -91,6 +91,10 @@ class Shell:
         'import os', 'os.system', 'subprocess',  # Python 注入
         '| bash', '| sh', '| zsh',  # 管道执行
     )
+
+    # shell 元字符 — bash -c 禁止使用，防止利用管道/重定向/子shell 绕过白名单
+    _FORBIDDEN_META = ('|', ';', '&', '>', '<', '$(',
+                       '`', '&&', '||', '$(', '${',)
 
     def bash(self, command: str) -> Observation:
         """安全执行 bash 命令：shell=False + shlex + 白名单前缀。"""
@@ -115,15 +119,31 @@ class Shell:
         if path_error:
             return Observation.error("bash", path_error, args={"command": command})
 
-        # bash -c 安全检查：对内部命令做递归白名单 + 危险模式黑名单
+        # bash -c 安全检查：黑名单 + 元字符阻断 + 递归白名单
         if cmd_name == 'bash' and '-c' in parts:
             inner_cmd = ' '.join(parts[parts.index('-c') + 1:])
             inner_lower = inner_cmd.lower()
-            # 黑名单检查
+
+            # 1. 黑名单检查
             for pattern in self._DANGEROUS_PATTERNS:
                 if pattern.lower() in inner_lower:
-                    return Observation.error("bash", f"Dangerous pattern blocked in bash -c command: {pattern}", args={"command": command})
-            # 递归白名单：内部命令的第一个词也必须在白名单中
+                    return Observation.error(
+                        "bash",
+                        f"Dangerous pattern blocked in bash -c: {pattern}",
+                        args={"command": command},
+                    )
+
+            # 2. shell 元字符检查 — 防止管道/重定向/命令链/子shell 绕过
+            for meta in self._FORBIDDEN_META:
+                if meta in inner_cmd:
+                    return Observation.error(
+                        "bash",
+                        f"Shell metacharacter '{meta}' not allowed in bash -c. "
+                        "Use separate commands or file_ops tools instead.",
+                        args={"command": command},
+                    )
+
+            # 3. 递归白名单：内部命令的第一个词也必须在白名单中
             try:
                 inner_parts = shlex.split(inner_cmd)
             except ValueError:
