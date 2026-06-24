@@ -359,9 +359,9 @@ class Agent:
             "Keep answers reasonably short — use bullet points and tables over long paragraphs. Don't over-explain, skip filler."
             "",
             "# Quick Rules",
-            "- Knowledge/definition questions → answer directly, NO tools needed. Be fast.",
-            "- Only use tools when: real-time data, file ops, charts, search, or user explicitly asks.",
-            "- Knowledge/advice/guide questions (how to, tips, why) → answer directly from your knowledge, NO tools or charts needed.",
+            "- Simple knowledge/definition → answer directly, no tools. Be fast.",
+            "- Charts, diagrams, images, search, data → ALWAYS use the right tool. Don't describe it, draw it.",
+            "- Follow-up requests inherit context from the conversation above. If the user says 'draw it', draw what was JUST discussed.",
             "- Pick the right tool based on its description. Trust the tool descriptions.",
             "- Always show images with ![title](url)",
             "- A股大盘用 stock_market，美股大盘用 stock_market_us，不要用 stock_info 逐个查询指数。",
@@ -369,7 +369,7 @@ class Agent:
             "# Chart / Drawing Rules",
             "- Use `generate_chart` for any data chart, math plot, or regression. Read the tool description for available chart_types.",
             "- Use `ai_image` for photos/art/animals (Stable Diffusion).",
-            "- Use `mermaid_chart` for flowcharts/diagrams.",
+            "- Use `mermaid_chart` for flowcharts/circuit diagrams/architecture.",
             "- NEVER output Chart.js/D3.js/HTML/SVG/JS code. The frontend cannot render them.",
             "- Always include the returned ![title](url) markdown in your response so users see the image.",
         ]
