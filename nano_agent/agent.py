@@ -163,13 +163,32 @@ class Agent:
             # 继续循环：让 LLM 决定下一步
             return self._agent_loop(messages)[0]
 
-        # 代码级强制：用户明确要图但 LLM 没调工具 → 重试
+        # 代码级强制：关键词 + 上下文检测 → 必须调工具
         _VISUAL_KEYWORDS = ('画', '图', 'draw', '生成图', '画图', '绘图', '作图',
-                           'chart', 'diagram', 'graph', 'plot')
-        if not tool_calls and any(kw in task.lower() for kw in _VISUAL_KEYWORDS):
-            logger.warning(f"FORCING TOOL: task='{task[:60]}' had no tool_call, retrying")
+                           'chart', 'diagram', 'graph', 'plot', '改', '换', '修改',
+                           '加', '添加', '再加', '调整', '重新', '换一个')
+        _VISUAL_TOOLS = ('mermaid_chart', 'generate_chart', 'draw_circuit', 'drawio_diagram', 'ai_image')
+
+        # 检测上下文：最近一轮是否用了画图工具
+        had_visual_context = False
+        if self.memory:
+            msgs = self.memory.get_window_messages()
+            if msgs and len(msgs) >= 2:
+                last_assistant = msgs[-1]["content"] if msgs[-1]["role"] == "assistant" else ""
+                had_visual_context = any(
+                    f"![" in last_assistant or f"/charts/" in last_assistant
+                    for _ in [1]
+                )
+
+        needs_visual = any(kw in task.lower() for kw in _VISUAL_KEYWORDS) or had_visual_context
+
+        if not tool_calls and needs_visual:
+            logger.warning(f"FORCING TOOL: task='{task[:60]}' context_visual={had_visual_context}")
             self._emit("text", {"text": "🔧 正在生成图片..."})
-            messages.append({"role": "user", "content": "SYSTEM OVERRIDE: You must call a drawing tool (mermaid_chart, generate_chart, or draw_circuit) to create this visual. Responding with text only is not acceptable."})
+            override = ("SYSTEM OVERRIDE: Previous context involves visual output. "
+                       "You MUST call a drawing tool ({}) to fulfill this request. "
+                       "Text-only response is NOT acceptable.").format(", ".join(_VISUAL_TOOLS[:3]))
+            messages.append({"role": "user", "content": override})
             return self._agent_loop(messages)[0]
 
         if not full_text.strip():
