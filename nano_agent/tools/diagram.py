@@ -97,12 +97,14 @@ class Diagram:
         """用 PlantUML 渲染状态图（布局远优于 Mermaid stateDiagram）。"""
         import re as _re3
 
-        # mermaid stateDiagram → PlantUML 转换
         lines = code.strip().split("\n")
         plant_lines = ["@startuml"]
         for line in lines:
             s = line.strip()
             if not s or _re3.match(r'stateDiagram', s, _re3.IGNORECASE):
+                continue
+            # 分隔线跳过
+            if s == "---" or s == "--":
                 continue
             # 转换: A --> B: label → A --> B : label
             m = _re3.match(r'(\S+?)\s*-->\s*([^:\s]+)\s*:?\s*(.*)', s)
@@ -111,18 +113,40 @@ class Diagram:
                 lbl_suffix = f" : {lbl}" if lbl else ""
                 plant_lines.append(f"{src} --> {tgt}{lbl_suffix}")
                 continue
-            # note right of X: text → note right of X : text
-            m2 = _re3.match(r'note\s+(right|left)\s+of\s+(\w+)\s*:?\s*(.*)', s, _re3.IGNORECASE)
-            if m2:
-                plant_lines.append(f"note {m2.group(1)} of {m2.group(2)} : {m2.group(3)}")
+            # note right of X: text → note right of X : text（冒号切分，支持中文）
+            if _re3.match(r'note\s+(right|left)\s+of\s+', s, _re3.IGNORECASE):
+                # 格式: note <pos> of <name>: <text>  或  note <pos> of <name> : <text>
+                header, _, rest = s.partition(" of ")
+                pos = header.split()[-1] if header else "right"
+                if ":" in rest:
+                    name, _, text = rest.partition(":")
+                    plant_lines.append(f"note {pos} of {name.strip()} : {text.strip()}")
+                else:
+                    plant_lines.append(f"note {pos} of {rest.strip()}")
                 continue
-            # 复合状态
-            if _re3.match(r'state\s+"?\w+"?\s*\{', s):
+            # 复合状态 state Name { → state Name {
+            if _re3.match(r'state\s+.*\{', s):
                 plant_lines.append(s)
                 continue
             if s in ("}", "}"):
                 plant_lines.append(s)
                 continue
+            # state 声明: state "Name" as Alias 或 state Name: desc
+            m3 = _re3.match(r'state\s+(.+?)\s*:?\s*(.*)', s)
+            if m3:
+                state_def = m3.group(1).strip()
+                desc = m3.group(2).strip()
+                if desc:
+                    plant_lines.append(f"state {state_def} : {desc}")
+                else:
+                    plant_lines.append(f"state {state_def}")
+                continue
+            # 描述: Name: description → Name : description
+            m4 = _re3.match(r'(\S+?)\s*:\s*(.+)', s)
+            if m4 and "-->" not in s:
+                plant_lines.append(f"{m4.group(1)} : {m4.group(2)}")
+                continue
+            # 其他合法行直接透传
             plant_lines.append(s)
         plant_lines.append("@enduml")
 
