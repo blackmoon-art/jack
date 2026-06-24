@@ -75,9 +75,9 @@ class BaseStrategy:
         """委托给 Agent 的统一实现，确保行为一致。"""
         fn = getattr(self, '_execute_tool', None)
         if fn:
-            fn(tool_call, messages, orient_fn=orient_fn)
-            return {"name": tool_call.get("name", ""), "result": "", "success": True}
-        # 兜底：没有注入时自行处理
+            return fn(tool_call, messages, orient_fn=orient_fn)
+        # 兜底：依赖注入未完成，仅在兼容模式使用
+        logger.warning("_execute_tool not injected — using fallback. Strategy should be created by Agent.run().")
         from ..tools.observation import Observation
         name = tool_call["name"]
         args = tool_call.get("arguments", {})
@@ -85,10 +85,12 @@ class BaseStrategy:
             import json as _json
             try: args = _json.loads(args)
             except _json.JSONDecodeError: args = {}
+        logger.info(f"[Tool:fallback] {name}({json.dumps(args, ensure_ascii=False)[:200]})")
         self.emit("tool_call", {"name": name, "args": args})
         observation = self.tools.execute(name, args)
         result_text = str(observation)
         is_success = observation.success
+        logger.debug(f"[Tool Result:fallback] {result_text[:200]}")
         self.emit("tool_result", {"name": name, "result": result_text, "success": is_success})
         _orient = orient_fn or self._orient_fn
         content = result_text

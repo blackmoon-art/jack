@@ -347,6 +347,7 @@ class Agent:
             "tool_call_id": tc.get("id", ""),
             "content": content,
         })
+        return {"name": name, "result": result_text, "success": is_success}
 
     # ── 核心循环 (O-O-D-A) ──────────────────────────────
 
