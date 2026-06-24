@@ -322,7 +322,7 @@ class Agent:
         logger.warning(f"Max iterations ({self.config.max_iterations}) reached, "
                         f"forcing stop. Last tool: "
                         f"{response.get('tool_calls', [{}])[0].get('name', 'N/A') if response.get('tool_calls') else 'N/A'}")
-        return "Max iterations reached.", messages
+        return "I am tired... 😴 Let me rest a bit. Could you try again or rephrase?", messages
 
     # ── Orient 阶段 ─────────────────────────────────────
 
