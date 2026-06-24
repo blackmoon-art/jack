@@ -21,8 +21,10 @@ logger = logging.getLogger("nano_agent.tools.chart")
 class Chart:
     # 工具注册声明
     TOOLS = [
-        ("generate_chart", "Generate charts, math plots, and regression analysis. Data: chart_type=line/bar (data='10,20'). Least squares: chart_type=regression, data='x1,y1;x2,y2' or 'y1,y2,...'. Math: chart_type=function (data='sin(x);-3;3'). Drawings: chart_type=draw/cat.", "generate_chart",
-         {"chart_type": {"type": "string", "description": "Chart type: line, curve, bar, scatter, pie, histogram, area, heatmap, radar, bubble, function, regression, draw, cat (default: line)"},
+        ("generate_chart", "Generate coordinate graphs & data charts. For function plots, bar/line/pie charts, regressions. "
+         "NOT for geometric shapes, 3D figures, cubes, triangles — use mermaid_chart for those. "
+         "chart_type: line/curve/bar/scatter/pie/function/regression.", "generate_chart",
+         {"chart_type": {"type": "string", "description": "Chart type: line, curve, bar, scatter, pie, histogram, area, heatmap, radar, bubble, function, regression (default: line)"},
           "data": {"type": "string", "description": "Data: comma-sep values. Regression: 'x,y;x,y...' or 'y1,y2...'. Multi-series: semicolon-sep."},
           "title": {"type": "string", "description": "Chart title"},
           "labels": {"type": "string", "description": "Series labels or shape definitions (semicolon-separated)"},
