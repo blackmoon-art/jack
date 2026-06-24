@@ -116,7 +116,9 @@ class AIImage:
         filepath.write_bytes(image_data)
         url = f"/charts/{filename}"
         logger.info(f"Image saved: {url}")
-        return f"AI Image generated: {url}\n![{prompt[:80]}]({url})"
+        # 转义 alt text: prompt 中的 [ ] ( ) 会破坏 markdown 图片语法
+        alt = prompt[:80].replace('[', '(').replace(']', ')').replace('(', ' ').replace(')', ' ')
+        return f"![AI Image]({url})\n> {alt}\n{url}"
 
     # ── 后端 1: pollinations.ai (免费兜底) ──────────────
 
@@ -226,7 +228,8 @@ class AIImage:
         image.save(filepath, "PNG")
 
         url = f"/charts/{filename}"
-        return f"AI Image generated: {url}\n![{prompt[:80]}]({url})"
+        alt = prompt[:80].replace('[', '(').replace(']', ')').replace('(', ' ').replace(')', ' ')
+        return f"![AI Image]({url})\n> {alt}\n{url}"
 
     @staticmethod
     def _load_pipeline():
