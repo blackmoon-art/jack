@@ -187,9 +187,23 @@ class Agent:
         if not tool_calls and needs_visual:
             logger.warning(f"FORCING TOOL: task='{task[:60]}' ctx={had_visual_context}")
             self._emit("text", {"text": "🔧 正在生成图片..."})
-            override = ("SYSTEM OVERRIDE: Previous context involves visual output. "
-                       "You MUST call a drawing tool ({}) to fulfill this request. "
-                       "Text-only response is NOT acceptable.").format(", ".join(_VISUAL_TOOLS[:3]))
+            # 提取最近对话上下文（含前一条图的描述），帮 LLM 理解要画什么
+            ctx_summary = ""
+            if self.memory:
+                recent = self.memory.get_window_messages()[-4:]  # 最近2轮
+                for m in recent:
+                    role = "用户" if m["role"] == "user" else "助手"
+                    # 截断图片数据，保留文字描述
+                    txt = m["content"][:200].split("![")[0].strip()
+                    if txt:
+                        ctx_summary += f"[{role}]: {txt}\n"
+            override = (
+                "SYSTEM OVERRIDE: You must use a drawing tool ({tools}) now. "
+                "Context of the conversation:\n{ctx}\n"
+                "Based on this context, user's request '{task}' requires a visual. "
+                "Draw exactly what the context suggests — modify the previous diagram or create a new one as appropriate. "
+                "Text-only response is NOT acceptable."
+            ).format(tools=", ".join(_VISUAL_TOOLS[:3]), ctx=ctx_summary.strip())
             messages.append({"role": "user", "content": override})
             return self._agent_loop(messages)[0]
 
