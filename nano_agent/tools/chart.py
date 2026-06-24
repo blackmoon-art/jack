@@ -24,8 +24,8 @@ class Chart:
         ("generate_chart", "Generate coordinate graphs & data charts. For function plots, bar/line/pie charts, regressions. "
          "NOT for geometric shapes, 3D figures, cubes, triangles — use mermaid_chart for those. "
          "chart_type: line/curve/bar/scatter/pie/function/regression.", "generate_chart",
-         {"chart_type": {"type": "string", "description": "Chart type: line, curve, bar, scatter, pie, histogram, area, heatmap, radar, bubble, function, regression (default: line)"},
-          "data": {"type": "string", "description": "Data: comma-sep values. Regression: 'x,y;x,y...' or 'y1,y2...'. Multi-series: semicolon-sep."},
+         {"chart_type": {"type": "string", "description": "Chart type: line, curve, bar, scatter, pie, histogram, area, heatmap, radar, bubble, function, regression, wireframe (default: line). wireframe draws 3D edges: data='x1,y1,z1;x2,y2,z2' per edge"},
+          "data": {"type": "string", "description": "Data: comma-sep values. Regression: 'x,y;x,y...' or 'y1,y2...'. Wireframe: 'x1,y1,z1;x2,y2,z2;...' edges. Multi-series: semicolon-sep."},
           "title": {"type": "string", "description": "Chart title"},
           "labels": {"type": "string", "description": "Series labels or shape definitions (semicolon-separated)"},
           "x_label": {"type": "string", "description": "X-axis label"},
@@ -55,6 +55,7 @@ class Chart:
         y_label: str = "",
         filename: str = "",
         style: str = "dark",
+        **kwargs,  # 忽略 width/height 等误传参数，防止报错中断
     ) -> str:
         # 解析数据 (raw types 不过度拆分逗号)
         raw_types = set()
@@ -68,7 +69,7 @@ class Chart:
             except Exception as e:
                 return f"Error parsing data: {e}"
 
-        no_data_types = {"draw", "cat"}
+        no_data_types = {"draw", "cat", "wireframe"}
         if (not data_sets or not data_sets[0]) and chart_type not in no_data_types:
             return "Error: data is required (e.g. '10,20,30,40')"
 
@@ -119,16 +120,20 @@ class Chart:
                 self._draw_function(ax, data_sets, label_sets, is_dark)
             elif chart_type == "regression":
                 self._draw_regression(ax, data_sets, label_sets, is_dark)
+            elif chart_type == "wireframe":
+                self._draw_wireframe(fig, data, label_sets, is_dark, title)
             elif chart_type in ("draw", "cat"):
                 self._draw_shapes(ax, labels, is_dark, is_cat=(chart_type == "cat"))
             else:
-                return f"Error: Unknown chart type '{chart_type}'. Supported: line, curve, bar, scatter, pie, histogram, area, heatmap, radar, bubble, function, regression, draw, cat"
+                return f"Error: Unknown chart type '{chart_type}'. Supported: line, curve, bar, scatter, pie, histogram, area, heatmap, radar, bubble, function, regression, wireframe"
         except Exception as e:
             plt.close(fig)
             return f"Error generating chart: {e}"
 
-        # 样式
-        if chart_type not in ("pie", "radar"):
+        # 样式（wireframe 用 3D 轴，跳过 2D 样式）
+        if chart_type == "wireframe":
+            pass
+        elif chart_type not in ("pie", "radar"):
             ax.tick_params(colors=fg)
             for spine in ["bottom", "left"]:
                 ax.spines[spine].set_color(grid_c)
@@ -443,6 +448,61 @@ class Chart:
         ax.set_ylim(-3.5, 3.5)
         ax.set_aspect("equal")
         ax.axis("off")
+
+    def _draw_wireframe(self, fig, data, label_sets, is_dark, title):
+        """3D 线框模型 — 立方体、锥体、球体网格等。
+        data 格式: 每条边用分号分隔 "x1,y1,z1;x2,y2,z2;..."
+        """
+        from mpl_toolkits.mplot3d import Axes3D  # noqa: F401
+        import numpy as np
+
+        fg = "#e0e0e0" if is_dark else "#333"
+        bg = "#1a1a2e" if is_dark else "#fafafa"
+
+        ax = fig.add_subplot(111, projection='3d')
+        ax.set_facecolor(bg)
+        fig.patch.set_facecolor(bg)
+
+        # 解析边数据
+        edges_data = data if data else ""
+        if not edges_data.strip():
+            # 默认：画一个立方体
+            edges_data = (
+                "0,0,0;1,0,0; 1,0,0;1,1,0; 1,1,0;0,1,0; 0,1,0;0,0,0;"
+                "0,0,1;1,0,1; 1,0,1;1,1,1; 1,1,1;0,1,1; 0,1,1;0,0,1;"
+                "0,0,0;0,0,1; 1,0,0;1,0,1; 1,1,0;1,1,1; 0,1,0;0,1,1"
+            )
+
+        edges = [e.strip() for e in edges_data.replace("\n", ";").split(";") if e.strip()]
+        for edge in edges:
+            parts = edge.split(",")
+            if len(parts) >= 6:
+                x1, y1, z1 = float(parts[0]), float(parts[1]), float(parts[2])
+                x2, y2, z2 = float(parts[3]), float(parts[4]), float(parts[5])
+                ax.plot([x1, x2], [y1, y2], [z1, z2],
+                        color="#7c3aed" if is_dark else "#7c3aed",
+                        linewidth=2, alpha=0.9)
+
+        # 等比例
+        try:
+            ax.set_box_aspect([1, 1, 1])
+        except Exception:
+            pass
+
+        ax.tick_params(colors=fg, labelsize=9)
+        for spine in ax.xaxis.get_major_ticks() + ax.yaxis.get_major_ticks() + ax.zaxis.get_major_ticks():
+            pass
+
+        ax.set_xlabel("X" if not label_sets else label_sets[0][0] if label_sets[0] else "X",
+                      color=fg, fontsize=10)
+        ax.set_ylabel("Y", color=fg, fontsize=10)
+        ax.set_zlabel("Z", color=fg, fontsize=10)
+
+        # 正交投影
+        try:
+            ax.set_proj_type('ortho')
+        except Exception:
+            pass
 
     def _draw_regression(self, ax, data_sets, label_sets, is_dark=True):
         """最小二乘回归 — 散点 + 拟合直线 + 方程 + R²。

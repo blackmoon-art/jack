@@ -23,8 +23,10 @@ _pipeline = None
 class AIImage:
     # 工具注册声明
     TOOLS = [
-        ("ai_image", "Generate AI images from text prompts. Use for: animals, people, scenes, art, logos. Prompt in English.", "generate_image",
-         {"prompt": {"type": "string", "description": "Image description in English"},
+        ("ai_image", "AI photo/art generation. ONLY for: realistic photos, digital art, animals, people, landscapes. "
+         "NEVER for: geometric shapes, cubes, diagrams, charts — use generate_chart or mermaid_chart instead. "
+         "Prompt must be in English.", "generate_image",
+         {"prompt": {"type": "string", "description": "Visual description in English. NOT for geometric shapes or diagrams."},
           "negative_prompt": {"type": "string", "description": "What to exclude"},
           "width": {"type": "integer", "description": "Image width (default: 512)"},
           "height": {"type": "integer", "description": "Image height (default: 512)"}},
