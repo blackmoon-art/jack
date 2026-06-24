@@ -24,7 +24,7 @@ class Chart:
         ("generate_chart", "Generate coordinate graphs & data charts. For function plots, bar/line/pie charts, regressions. "
          "NOT for geometric shapes, 3D figures, cubes, triangles — use mermaid_chart for those. "
          "chart_type: line/curve/bar/scatter/pie/function/regression.", "generate_chart",
-         {"chart_type": {"type": "string", "description": "Chart type: line, curve, bar, scatter, pie, histogram, area, heatmap, radar, bubble, function, regression, wireframe (default: line). wireframe draws 3D edges: data='x1,y1,z1;x2,y2,z2' per edge"},
+         {"chart_type": {"type": "string", "description": "Chart type: line, curve, bar, scatter, pie, histogram, area, heatmap, radar, bubble, function, regression, wireframe, geometry (default: line). geometry draws proof diagrams: data='x1,y1;x2,y2;...' closed polygon"},
           "data": {"type": "string", "description": "Data: comma-sep values. Regression: 'x,y;x,y...' or 'y1,y2...'. Wireframe: 'x1,y1,z1;x2,y2,z2;...' edges. Multi-series: semicolon-sep."},
           "title": {"type": "string", "description": "Chart title"},
           "labels": {"type": "string", "description": "Series labels or shape definitions (semicolon-separated)"},
@@ -69,7 +69,7 @@ class Chart:
             except Exception as e:
                 return f"Error parsing data: {e}"
 
-        no_data_types = {"draw", "cat", "wireframe"}
+        no_data_types = {"draw", "cat", "wireframe", "geometry"}
         if (not data_sets or not data_sets[0]) and chart_type not in no_data_types:
             return "Error: data is required (e.g. '10,20,30,40')"
 
@@ -122,6 +122,8 @@ class Chart:
                 self._draw_regression(ax, data_sets, label_sets, is_dark)
             elif chart_type == "wireframe":
                 self._draw_wireframe(fig, data, label_sets, is_dark, title)
+            elif chart_type == "geometry":
+                self._draw_geometry(ax, data, label_sets, is_dark)
             elif chart_type in ("draw", "cat"):
                 self._draw_shapes(ax, labels, is_dark, is_cat=(chart_type == "cat"))
             else:
@@ -503,6 +505,100 @@ class Chart:
             ax.set_proj_type('ortho')
         except Exception:
             pass
+
+    def _draw_geometry(self, ax, data, label_sets, is_dark):
+        """2D 几何证明图 — 勾股定理、三角形、多边形等。
+        data 格式: 每组顶点用分号分隔，每组是一个闭合多边形
+        例: 直角三角形 "0,0;3,0;0,4" + 三个正方形
+        """
+        import numpy as np
+        from matplotlib.patches import Polygon, FancyBboxPatch
+
+        fg = "#e0e0e0" if is_dark else "#333"
+        bg = "#1a1a2e" if is_dark else "#fafafa"
+        colors = ["#7c3aed", "#3b82f6", "#10b981", "#f59e0b", "#ef4444", "#ec4899"]
+
+        ax.set_facecolor(bg)
+        ax.set_aspect('equal')
+        ax.grid(True, alpha=0.15, color=fg)
+        ax.tick_params(colors=fg, labelsize=9)
+
+        # 解析多边形组
+        shapes_data = data if data else "0,0;3,0;0,4"  # 默认直角三角形
+        shapes = [s.strip() for s in shapes_data.split(";") if s.strip()]
+
+        # 默认勾股定理图
+        if len(shapes) <= 3:
+            # 自动生成勾股定理：直角三角形的三个正方形
+            tri = [(0, 0), (3, 0), (0, 4)]
+            colors_iter = iter(colors)
+
+            # 画三角形
+            tri_arr = np.array(tri)
+            tri_patch = Polygon(tri_arr, closed=True, facecolor="none",
+                               edgecolor=colors[0], linewidth=2.5, alpha=0.9)
+            ax.add_patch(tri_patch)
+
+            # 标注顶点
+            labels = ["A", "B", "C"]
+            for i, (x, y) in enumerate(tri):
+                ax.text(x - 0.1, y - 0.3, labels[i], color=fg, fontsize=12, fontweight="bold")
+
+            # 边标签
+            ax.text(1.5, -0.3, "a = 3", color=colors[1], fontsize=11, ha="center")
+            ax.text(-0.6, 2.0, "b = 4", color=colors[2], fontsize=11, ha="center")
+            ax.text(1.8, 2.2, "c = 5", color="#f59e0b", fontsize=11, ha="center")
+
+            # a² 正方形（边3）
+            a_sq = [(0, 0), (3, 0), (3, -3), (0, -3)]
+            ax.add_patch(Polygon(a_sq, closed=True, facecolor=colors[1], alpha=0.2,
+                                edgecolor=colors[1], linewidth=2))
+            ax.text(1.5, -1.5, "a² = 9", color=colors[1], fontsize=12, ha="center", fontweight="bold")
+
+            # b² 正方形（边4）
+            b_sq = [(0, 0), (-4, 0), (-4, 4), (0, 4)]
+            ax.add_patch(Polygon(b_sq, closed=True, facecolor=colors[2], alpha=0.2,
+                                edgecolor=colors[2], linewidth=2))
+            ax.text(-2, 2, "b² = 16", color=colors[2], fontsize=12, ha="center", fontweight="bold")
+
+            # c² 正方形（边5），需要旋转
+            c_sq = [(0, 4), (3, 0), (8, 3), (5, 7)]
+            ax.add_patch(Polygon(c_sq, closed=True, facecolor="#f59e0b", alpha=0.2,
+                                edgecolor="#f59e0b", linewidth=2))
+            ax.text(4, 3.7, "c² = 25", color="#f59e0b", fontsize=12, ha="center", fontweight="bold")
+
+            # 公式
+            ax.text(1.5, 5.5, "a² + b² = c²", color=fg, fontsize=15, ha="center", fontweight="bold")
+            ax.text(1.5, 4.8, "9 + 16 = 25 ✓", color="#10b981", fontsize=13, ha="center", fontweight="bold")
+
+            margin = 6
+            ax.set_xlim(-margin, margin + 3)
+            ax.set_ylim(-margin, margin + 3)
+        else:
+            # 自定义多边形
+            for i, shape in enumerate(shapes):
+                pts_str = [p.strip() for p in shape.split(",")]
+                if len(pts_str) < 2:
+                    continue
+                pts = [(float(pts_str[j]), float(pts_str[j+1]))
+                       for j in range(0, len(pts_str) - 1, 2)]
+                if len(pts) < 2:
+                    continue
+                color = colors[i % len(colors)]
+                pts_arr = np.array(pts)
+                ax.add_patch(Polygon(pts_arr, closed=False, facecolor="none",
+                                     edgecolor=color, linewidth=2, alpha=0.8))
+                # 标顶点
+                for j, (x, y) in enumerate(pts):
+                    ax.plot(x, y, 'o', color=color, markersize=4)
+                    ax.text(x + 0.1, y + 0.1, f"{j+1}", color=fg, fontsize=8)
+
+            ax.autoscale_view()
+
+        ax.spines["top"].set_visible(False)
+        ax.spines["right"].set_visible(False)
+        ax.spines["bottom"].set_color(fg + "44")
+        ax.spines["left"].set_color(fg + "44")
 
     def _draw_regression(self, ax, data_sets, label_sets, is_dark=True):
         """最小二乘回归 — 散点 + 拟合直线 + 方程 + R²。
