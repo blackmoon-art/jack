@@ -163,6 +163,14 @@ class Agent:
             # 继续循环：让 LLM 决定下一步
             return self._agent_loop(messages)[0]
 
+        # 代码级强制：用户明确要图但 LLM 没调工具 → 重试
+        _VISUAL_KEYWORDS = ('画', '图', 'draw', '生成图', '画图', '绘图', '作图',
+                           'chart', 'diagram', 'graph', 'plot')
+        if not tool_calls and any(kw in task.lower() for kw in _VISUAL_KEYWORDS):
+            logger.info("Detected visual request without tool call, forcing retry")
+            messages.append({"role": "user", "content": "You MUST call mermaid_chart or generate_chart to draw this. Do not describe — actually draw it with a tool."})
+            return self._agent_loop(messages)[0]
+
         if not full_text.strip():
             return self._agent_loop(messages)[0]
 
