@@ -5,6 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, interactive-widget=resizes-content">
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
 <title>Sleeping fox</title>
+<meta name="theme-color" content="#7c3aed">
+<link rel="manifest" href="/static/manifest.json">
 <script async src="https://www.googletagmanager.com/gtag/js?id=G-0DDNG3RPS6"></script>
 <script>window.dataLayer=window.dataLayer||[];function gtag(){dataLayer.push(arguments);}gtag('js',new Date());gtag('config','G-0DDNG3RPS6');</script>
 <link rel="stylesheet" href="/static/katex.min.css">
@@ -307,6 +309,8 @@ function renderContent(text) {
   // 5. Links: [text](url) → <a>
   html = html.replace(/\[([^\]]+)\]\((https?:\/\/[^\s\)]+)\)/g,
     '<a href="$2" target="_blank" rel="noopener">$1</a>');
+  html = html.replace(/\[([^\]]+)\]\((\/[^\s\)]+)\)/g,
+    '<a href="$2" rel="noopener">$1</a>');
 
   // 6. Headers
   html = html.replace(/^### (.+)$/gm, '<h3>$1</h3>');
@@ -500,6 +504,11 @@ async function send() {
 
 $send.addEventListener('click', send);
 $input.addEventListener('keydown', e => { if (e.key==='Enter') send(); });
+</script>
+<script>
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('/static/sw.js');
+}
 </script>
 </body>
 </html>

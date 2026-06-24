@@ -379,6 +379,41 @@ async def serve_chart(filename: str):
     return FileResponse(filepath, media_type="image/png", headers={"Cache-Control": "public, max-age=86400"})
 
 
+# ── 文件下载 ──────────────────────────────────────────
+
+@app.get("/api/download/{filename}")
+async def download_file(filename: str, session_id: str = ""):
+    """从会话工作目录下载文件到用户本地。"""
+    import glob as _g
+
+    # 如果没有指定 session，搜索所有活跃会话
+    search_dirs = []
+    if session_id:
+        with _sessions_lock:
+            if session_id in sessions:
+                search_dirs.append(sessions[session_id]["agent"].config.work_dir)
+    else:
+        with _sessions_lock:
+            for sid, s in sessions.items():
+                search_dirs.append(s["agent"].config.work_dir)
+
+    # 找到第一个匹配的文件
+    for d in search_dirs:
+        filepath = (Path(d) / filename).resolve()
+        try:
+            filepath.relative_to(Path(d).resolve())
+        except ValueError:
+            continue
+        if filepath.exists():
+            return FileResponse(
+                filepath,
+                filename=filename,
+                headers={"Content-Disposition": f"attachment; filename=\"{filename}\""},
+            )
+
+    return JSONResponse({"error": "File not found"}, status_code=404)
+
+
 # ── 启动 ──────────────────────────────────────────────
 
 if __name__ == "__main__":
