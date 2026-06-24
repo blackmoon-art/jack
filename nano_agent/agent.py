@@ -167,8 +167,9 @@ class Agent:
         _VISUAL_KEYWORDS = ('画', '图', 'draw', '生成图', '画图', '绘图', '作图',
                            'chart', 'diagram', 'graph', 'plot')
         if not tool_calls and any(kw in task.lower() for kw in _VISUAL_KEYWORDS):
-            logger.info("Detected visual request without tool call, forcing retry")
-            messages.append({"role": "user", "content": "You MUST call mermaid_chart or generate_chart to draw this. Do not describe — actually draw it with a tool."})
+            logger.warning(f"FORCING TOOL: task='{task[:60]}' had no tool_call, retrying")
+            self._emit("text", {"text": "🔧 正在生成图片..."})
+            messages.append({"role": "user", "content": "SYSTEM OVERRIDE: You must call a drawing tool (mermaid_chart, generate_chart, or draw_circuit) to create this visual. Responding with text only is not acceptable."})
             return self._agent_loop(messages)[0]
 
         if not full_text.strip():
