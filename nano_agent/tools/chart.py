@@ -72,7 +72,7 @@ class Chart:
 
         # 设置中文字体
         plt.rcParams["font.sans-serif"] = [
-            "Arial Unicode MS", "PingFang SC", "Heiti SC",
+            "WenQuanYi Micro Hei", "Noto Sans CJK SC", "Arial Unicode MS", "PingFang SC", "Heiti SC",
             "Microsoft YaHei", "SimHei", "DejaVu Sans",
         ]
         plt.rcParams["axes.unicode_minus"] = False

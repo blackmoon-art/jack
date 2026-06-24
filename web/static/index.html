@@ -128,7 +128,15 @@
 const ACCESS_CODE = '';
 let SESSION_ID = localStorage.getItem('nano_session_id');
 if (!SESSION_ID) {
-  SESSION_ID = crypto.randomUUID().slice(0, 12);
+  SESSION_ID = (function(){
+  var d = new Date().getTime();
+  if (typeof crypto !== 'undefined' && crypto.randomUUID) { return crypto.randomUUID(); }
+  return 'xxxxxxxxxxxx'.replace(/[x]/g, function(c) {
+    var r = (d + Math.random() * 16) % 16 | 0;
+    d = Math.floor(d / 16);
+    return r.toString(16);
+  });
+})().slice(0, 12);
   localStorage.setItem('nano_session_id', SESSION_ID);
 }
 const $messages = document.getElementById('messages');
