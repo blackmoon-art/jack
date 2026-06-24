@@ -22,12 +22,12 @@ class Diagram:
     # 工具注册声明
     TOOLS = [
         ("mermaid_chart",
-         "Generate clean diagrams from Mermaid syntax (PNG). Layout is auto-optimized.\n"
-         "Architecture: use 'flowchart TB', group layers with subgraph, label arrows with protocol/action.\n"
-         "Shapes: [(DB)] cylinder for databases, [/API/] parallelogram for APIs, ([Svc]) rounded for services,\n"
-         "       [Client] rectangle for clients, {Auth} diamond for decisions.\n"
-         "Arrows: --> data/request flow, -.-> async/event, ==> important path.\n"
-         "Flowcharts: A[Label]→B{Judge}→C([End]). State machines: stateDiagram-v2 with [*] start/end.",
+         "Generate diagrams & structural drawings from Mermaid syntax (PNG). Layout is auto-optimized.\n"
+         "Use for: geometric proofs, math diagrams (Pythagoras, geometry), architecture, flowcharts,\n"
+         "state machines, org charts. NOT for coordinate graphs or data plots — use generate_chart for those.\n"
+         "Architecture: 'flowchart TB', group layers with subgraph.\n"
+         "Shapes: [(DB)] database, [/API/] gateway, ([Svc]) service, [Client] client, {Auth} decision.\n"
+         "Arrows: --> request, -.-> async, ==> critical. State machines: stateDiagram-v2.",
          "mermaid_chart",
          {"code": {"type": "string",
                    "description": (
