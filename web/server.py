@@ -376,7 +376,12 @@ async def serve_chart(filename: str):
         return {"error": "Access denied"}
     if not filepath.exists():
         return {"error": "Chart not found"}
-    return FileResponse(filepath, media_type="image/png", headers={"Cache-Control": "public, max-age=86400"})
+    # 根据扩展名自动检测 MIME 类型
+    ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else "png"
+    mime_map = {"png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg",
+                "gif": "image/gif", "webp": "image/webp", "svg": "image/svg+xml"}
+    media_type = mime_map.get(ext, "image/png")
+    return FileResponse(filepath, media_type=media_type, headers={"Cache-Control": "public, max-age=86400"})
 
 
 # ── 文件下载 ──────────────────────────────────────────
