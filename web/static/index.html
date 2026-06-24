@@ -442,8 +442,9 @@ async function send() {
               // 最终答案 → 替换当前消息内容
               if (data.text) {
                 let answerText = data.text;
-                // 清除 LLM 幻觉的绝对 URL 图片（chartImages 已提供相对路径版本）
+                // 清除 LLM 幻觉的绝对 URL（markdown 格式 + 裸链接）
                 answerText = answerText.replace(/!\[[^\]]*\]\(https?:\/\/[^\s)]*\/charts\/[^\s)]+\)/g, '');
+                answerText = answerText.replace(/https?:\/\/[^\s]+\/charts\/[^\s)]+/g, '');
 
                 const imgs = chartImages.map(u =>
                   `<img src="${u}" style="max-width:100%;border-radius:8px;margin:8px 0;" />`

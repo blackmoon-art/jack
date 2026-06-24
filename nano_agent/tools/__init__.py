@@ -27,6 +27,7 @@ from .ppt import PPT
 from .chart import Chart
 from .diagram import Diagram
 from .ai_image import AIImage
+from .circuit import Circuit
 
 logger = logging.getLogger("nano_agent.tools")
 
@@ -51,6 +52,7 @@ class ToolRegistry:
         "_chart": Chart,
         "_diagram": Diagram,
         "_ai_image": AIImage,
+        "_circuit": Circuit,
         "_ppt": PPT,
     }
 
@@ -74,6 +76,7 @@ class ToolRegistry:
         self._chart = Chart(work_dir, charts_dir=charts_dir)
         self._diagram = Diagram(work_dir, charts_dir=charts_dir)
         self._ai_image = AIImage(work_dir, charts_dir=charts_dir)
+        self._circuit = Circuit(work_dir, charts_dir=charts_dir)
 
         # 自动注册工具
         self._tools: dict[str, dict[str, Any]] = {}
@@ -176,6 +179,7 @@ class ToolRegistry:
         "mermaid_chart": "_diagram",
         "drawio_diagram": "_diagram",
         "ai_image": "_ai_image",
+        "draw_circuit": "_circuit",
         "generate_chart": "_chart",
         "_search_brave": ("_search", "_search_brave"),
         "_search_duckduckgo": ("_search", "_search_duckduckgo"),
