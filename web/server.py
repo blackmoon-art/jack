@@ -363,6 +363,18 @@ async def fox_icon():
 
 CHARTS_DIR = STATIC_DIR / "charts"
 CHARTS_DIR.mkdir(exist_ok=True)
+_MAX_CHART_FILES = 200  # 最多保留的图片数量
+
+
+def cleanup_old_charts():
+    """启动时清理旧图表文件，保留最新的 N 个。"""
+    try:
+        files = sorted(CHARTS_DIR.glob("*"), key=lambda f: f.stat().st_mtime, reverse=True)
+        for f in files[_MAX_CHART_FILES:]:
+            f.unlink()
+            logger.info(f"Cleaned up old chart: {f.name}")
+    except Exception as e:
+        logger.warning(f"Chart cleanup failed: {e}")
 
 
 @app.get("/charts/{filename}")
@@ -428,4 +440,5 @@ if __name__ == "__main__":
     logger.info(f"Sleeping fox Web UI — http://localhost:{port}")
     logger.info(f"Model: {Config().model} | Provider: {Config().provider}")
 
+    cleanup_old_charts()
     uvicorn.run(app, host="0.0.0.0", port=port, log_level="info")
