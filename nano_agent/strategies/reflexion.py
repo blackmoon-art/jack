@@ -170,6 +170,7 @@ class ReflexionStrategy(BaseStrategy):
         best_score = -1
         all_reflections: list[str] = []
         last_step_messages: list[dict] = []  # 保留上次工具历史
+        result = ""  # 初始化，防止 max_retries=0 时未绑定
 
         for attempt in range(self.max_retries):
             logger.info(f"{'─'*40}")
