@@ -41,6 +41,7 @@ class BaseStrategy:
         self.memory = kwargs.get("memory")  # 可选 Memory 实例
         self._emit: Optional[Callable[[str, dict], None]] = None
         self._orient_fn: Optional[Callable] = None  # 由 Agent 注入（已绑定原始任务）
+        self._model_override: Optional[str] = None   # 请求级模型覆盖（线程安全）
 
     def emit(self, event_type: str, data: dict):
         """发送事件给回调（如果已设置）。静默失败。"""
@@ -126,7 +127,8 @@ class BaseStrategy:
             解析后的 Python 对象 (dict/list)，或 None（全部重试失败）
         """
         for attempt in range(max_retries + 1):
-            response = self.llm.chat(messages=messages, tools=[], system="")
+            response = self.llm.chat(messages=messages, tools=[], system="",
+                                      model=self._model_override)
             text = self.llm.clean_json_response(response["text"])
             try:
                 return json.loads(text)

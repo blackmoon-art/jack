@@ -126,7 +126,7 @@ class TestAgentLoop(unittest.TestCase):
         """连续两次任务，第二次应该包含第一次的上下文。"""
         captured_messages = []
 
-        def record_chat(messages, tools, system=""):
+        def record_chat(messages, tools, system="", model=None):
             captured_messages.append(list(messages))
             return {"text": "OK", "tool_calls": [], "stop_reason": "stop"}
 
@@ -148,7 +148,7 @@ class TestAgentLoop(unittest.TestCase):
         """plan-execute 策略：第一次返回 plan，然后逐步执行。"""
         call_count = [0]
 
-        def sequential_chat(messages, tools, system=""):
+        def sequential_chat(messages, tools, system="", model=None):
             call_count[0] += 1
             if call_count[0] == 1:
                 return {

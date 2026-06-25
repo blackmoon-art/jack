@@ -146,7 +146,8 @@ class ReflexionStrategy(BaseStrategy):
                 f"LESSON: <1 sentence general lesson for future tasks>"
             ),
         }]
-        response = self.llm.chat(messages=messages, tools=[], system="")
+        response = self.llm.chat(messages=messages, tools=[], system="",
+                                  model=self._model_override)
         return response["text"].strip()
 
     # ── 主循环 ────────────────────────────────────────────

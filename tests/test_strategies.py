@@ -33,7 +33,7 @@ class MockLLM:
         self._default = {"text": "", "tool_calls": [], "stop_reason": "stop"}
         self.call_count = 0
 
-    def chat(self, messages, tools, system=""):
+    def chat(self, messages, tools, system="", model=None):
         self.call_count += 1
         if self._idx < len(self._responses):
             resp = self._responses[self._idx]

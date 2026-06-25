@@ -125,6 +125,7 @@ Final Answer: The current directory contains 2 files: agent.py and README.md."""
                 messages=messages,
                 tools=tool_schemas,
                 system=self._react_system_prompt(),
+                model=self._model_override,
             )
             llm_text = response["text"]
             tool_calls = response["tool_calls"]

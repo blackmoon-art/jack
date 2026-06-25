@@ -64,7 +64,8 @@ class PlanExecuteStrategy(BaseStrategy):
                 f"If 'partial' or 'failed', briefly explain why in a second sentence."
             ),
         }]
-        response = self.llm.chat(messages=messages, tools=[], system="")
+        response = self.llm.chat(messages=messages, tools=[], system="",
+                                  model=self._model_override)
         return response["text"].strip()
 
     def revise_plan(self, task: str, remaining_steps: list[str], failure_reason: str) -> list[str]:
@@ -175,7 +176,8 @@ class PlanExecuteStrategy(BaseStrategy):
                 + "\n".join(f"Step {i+1} result: {r[:1000]}" for i, r in enumerate(results))
             ),
         }]
-        response = self.llm.chat(messages=summary_msg, tools=[], system="Be concise and helpful.")
+        response = self.llm.chat(messages=summary_msg, tools=[], system="Be concise and helpful.",
+                                  model=self._model_override)
         final = response["text"].strip()
         logger.info(f"[Plan-Execute] Complete: {len(results)} steps, summary generated.")
         return final

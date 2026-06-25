@@ -58,6 +58,7 @@ class Agent:
 
     def run(self, task: str, strategy: str = "default",
             on_event: Optional[Callable[[str, dict], None]] = None,
+            model_override: Optional[str] = None,
             **strategy_kwargs) -> str:
         """
         执行用户任务。
@@ -67,12 +68,14 @@ class Agent:
             strategy: 推理策略 (default | react | plan-execute | reflexion | tree-of-thought)
             on_event: 可选事件回调 f(event_type, data)
                       event_type: "text" | "tool_call" | "tool_result" | "orient" | "done"
+            model_override: 单次请求的模型覆盖（不修改 Agent 实例状态，线程安全）
             **strategy_kwargs: 传递给策略的额外参数
 
         Returns:
             Agent 的最终回复文本
         """
         self._on_event = on_event
+        self._model_override = model_override  # 请求级模型覆盖
         self._emit("text", {"text": f"Task: {task}\nStrategy: {strategy}"})
 
         # auto 模式：LLM 根据用户意图自动选策略
@@ -141,7 +144,8 @@ class Agent:
         # 流式调用（带 tools），边生成边推送文本
         full_text = ""
         tool_calls = None
-        for chunk in self.llm.chat_stream(messages=messages, system=system_prompt, tools=schemas):
+        for chunk in self.llm.chat_stream(messages=messages, system=system_prompt, tools=schemas,
+                                            model=self._model_override):
             if isinstance(chunk, dict) and chunk.get("type") == "tool_calls":
                 tool_calls = chunk["tool_calls"]
                 break  # LLM 要调工具，中断流式
@@ -231,6 +235,7 @@ class Agent:
         s._emit = self._emit  # 透传事件回调，让策略能发事件
         s._orient_fn = self._current_orient_fn  # 透传 Orient（已绑定原始任务）
         s._execute_tool = self.execute_tool
+        s._model_override = self._model_override  # 透传请求级模型覆盖
         self._strategy_instance = s
         return s.run(task, self._agent_loop)
 
@@ -279,6 +284,7 @@ class Agent:
             resp = self.llm.chat(
                 messages=[{"role": "user", "content": prompt}],
                 tools=[], system="Reply with only one word.",
+                model=self._model_override,
             )
             name = resp["text"].strip().lower()
             if name in STRATEGY_REGISTRY:
@@ -374,6 +380,7 @@ class Agent:
                 messages=messages,
                 tools=schemas,
                 system=system_prompt,
+                model=self._model_override,
             )
 
             assistant_msg: dict[str, Any] = {"role": "assistant", "content": response["text"]}
@@ -418,6 +425,7 @@ class Agent:
             orientation = self.orient_engine.orient(
                 observation, task or "complete the current task",
                 memory_context, rules,
+                model=self._model_override,
             )
             self._last_orientation = orientation
             return orientation

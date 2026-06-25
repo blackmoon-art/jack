@@ -40,7 +40,8 @@ class Orient:
     # ── 主入口 ──────────────────────────────────────────
 
     def orient(self, observation: str, task: str,
-               memory_context: str = "", rules: str = "") -> dict:
+               memory_context: str = "", rules: str = "",
+               model: str | None = None) -> dict:
         """
         对观察进行定向解读。
 
@@ -49,6 +50,7 @@ class Orient:
             task:           当前任务目标
             memory_context: 相关记忆文本
             rules:          适用规则文本
+            model:          模型覆盖（请求级，线程安全）
 
         Returns:
             {"interpretation": str,   # 观察到的事实
@@ -64,8 +66,9 @@ class Orient:
             messages=[{"role": "user", "content": prompt}],
             tools=[],
             system="You are an analytical observer. Be precise and concise.",
+            model=model,
         )
-        return self._parse_orientation(response["text"], observation)
+        return self._parse_orientation(response["text"], observation, model=model)
 
     # ── 规则加载与匹配 ──────────────────────────────────
 
@@ -142,7 +145,8 @@ class Orient:
         ])
         return "\n".join(parts)
 
-    def _parse_orientation(self, text: str, observation: str = "") -> dict:
+    def _parse_orientation(self, text: str, observation: str = "",
+                            model: str | None = None) -> dict:
         """解析 LLM 返回的 JSON。含重试逻辑。"""
         import json as _json
         text = text.strip()
@@ -186,6 +190,7 @@ class Orient:
                     ],
                     tools=[],
                     system="You are an analytical observer. Be precise and concise.",
+                    model=model,
                 )
                 text = response["text"].strip()
                 if text.startswith("```"):

@@ -205,7 +205,8 @@ def get_or_create_session(session_id: Optional[str] = None) -> str:
 
 # ── SSE 流式响应 ──────────────────────────────────────
 
-def agent_stream(task: str, strategy: str, session_id: str):
+def agent_stream(task: str, strategy: str, session_id: str,
+                 model_override: str | None = None):
     """Generator that yields SSE events as the agent runs."""
     # 在锁内安全获取 agent 引用
     with _sessions_lock:
@@ -227,7 +228,8 @@ def agent_stream(task: str, strategy: str, session_id: str):
     def run():
         nonlocal last_item
         try:
-            agent.run(task, strategy=strategy, on_event=on_event)
+            agent.run(task, strategy=strategy, on_event=on_event,
+                      model_override=model_override)
         except Exception as e:
             logger.exception(f"Agent run failed: {e}")
             last_item = {"event": "error", "data": {"text": str(e)}}
@@ -289,15 +291,11 @@ async def chat(request: Request):
 
     session_id = get_or_create_session(session_id)
 
-    agent = sessions[session_id]["agent"]
-
-    # 模型切换
+    # 请求级模型覆盖（不修改 session 共享状态，线程安全）
     model = body.get("model", "")
-    if model:
-        agent.llm.set_model(model)
 
     return StreamingResponse(
-        agent_stream(task, strategy, session_id),
+        agent_stream(task, strategy, session_id, model_override=model or None),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",

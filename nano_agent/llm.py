@@ -128,23 +128,20 @@ class LLM:
             },
         }
 
-    def chat(self, messages: list, tools: list, system: str = "") -> dict:
+    def chat(self, messages: list, tools: list, system: str = "",
+             model: str | None = None) -> dict:
         """
-        调用 LLM，返回统一格式:
-          {
-            "text": str,            # 模型文本输出
-            "tool_calls": [         # 工具调用列表 (可能为空)
-              {"id": str, "name": str, "arguments": dict}
-            ],
-            "stop_reason": str,     # "end_turn" | "tool_use" | "max_tokens"
-          }
+        调用 LLM，返回统一格式。
+
+        Args:
+            model: 单次调用的模型覆盖（不修改实例状态，线程安全）
         """
         for attempt in range(3):
             try:
                 if self._provider == "anthropic":
-                    return self._chat_anthropic(messages, tools, system)
+                    return self._chat_anthropic(messages, tools, system, model=model)
                 else:
-                    return self._chat_openai(messages, tools, system)
+                    return self._chat_openai(messages, tools, system, model=model)
             except Exception as e:
                 # 只重试可恢复错误：429 限速、5xx 服务端错误、网络超时
                 retryable = False
@@ -219,7 +216,8 @@ class LLM:
                 converted.append({"role": role, "content": content})
         return converted
 
-    def _chat_anthropic(self, messages: list, tools: list, system: str) -> dict:
+    def _chat_anthropic(self, messages: list, tools: list, system: str,
+                        model: str | None = None) -> dict:
         # 转换 tools 格式到 Anthropic schema
         anthropic_tools = [
             {
@@ -234,7 +232,7 @@ class LLM:
         anthropic_messages = self._convert_messages_for_anthropic(messages)
 
         response = self._get_client().messages.create(
-            model=self._model,
+            model=model or self._model,
             system=system,
             messages=anthropic_messages,
             tools=anthropic_tools,
@@ -261,14 +259,15 @@ class LLM:
 
     # ── OpenAI 兼容实现 ───────────────────────────────────
 
-    def _chat_openai(self, messages: list, tools: list, system: str) -> dict:
+    def _chat_openai(self, messages: list, tools: list, system: str,
+                      model: str | None = None) -> dict:
         api_messages = []
         if system:
             api_messages.append({"role": "system", "content": system})
         api_messages.extend(messages)
 
         response = self._get_client().chat.completions.create(
-            model=self._model,
+            model=model or self._model,
             messages=api_messages,
             tools=tools,
             tool_choice="auto",
@@ -298,28 +297,33 @@ class LLM:
             "stop_reason": "tool_calls" if tool_calls else "stop",
         }
 
-    def chat_stream(self, messages: list, system: str = "", tools: list = None):
+    def chat_stream(self, messages: list, system: str = "", tools: list = None,
+                    model: str | None = None):
         """流式调用 LLM，yield 文本片段或 tool_calls 信号。
 
         如果 LLM 要调工具，会 yield {"type": "tool_calls", "tool_calls": [...]},
         调用方应中断流式处理。
 
+        Args:
+            model: 单次调用的模型覆盖（不修改实例状态，线程安全）
+
         Yields:
             str: 文本 chunk，或 dict: {"type": "tool_calls", "tool_calls": [...]}
         """
         if self._provider == "anthropic":
-            yield from self._chat_stream_anthropic(messages, system, tools)
+            yield from self._chat_stream_anthropic(messages, system, tools, model=model)
         else:
-            yield from self._chat_stream_openai(messages, system, tools)
+            yield from self._chat_stream_openai(messages, system, tools, model=model)
 
-    def _chat_stream_openai(self, messages: list, system: str = "", tools: list = None):
+    def _chat_stream_openai(self, messages: list, system: str = "", tools: list = None,
+                            model: str | None = None):
         """OpenAI 兼容 API 流式调用。支持 tools 参数，检测 tool_calls。"""
         api_messages = []
         if system:
             api_messages.append({"role": "system", "content": system})
         api_messages.extend(messages)
 
-        kwargs = {"model": self._model, "messages": api_messages, "stream": True}
+        kwargs = {"model": model or self._model, "messages": api_messages, "stream": True}
         if tools:
             kwargs["tools"] = tools
             kwargs["tool_choice"] = "auto"
@@ -364,11 +368,12 @@ class LLM:
                 parsed_calls.append({"id": tc["id"], "name": tc["name"], "arguments": args})
             yield {"type": "tool_calls", "tool_calls": parsed_calls}
 
-    def _chat_stream_anthropic(self, messages: list, system: str = "", tools: list = None):
+    def _chat_stream_anthropic(self, messages: list, system: str = "", tools: list = None,
+                               model: str | None = None):
         """Anthropic API 流式调用。支持 tools 参数。"""
         converted = self._convert_messages_for_anthropic(messages)
         kwargs = {
-            "model": self._model,
+            "model": model or self._model,
             "messages": converted,
             "max_tokens": 4096,
         }
