@@ -90,6 +90,11 @@ class Config:
         default_factory=lambda: os.getenv("BRAVE_SEARCH_API_KEY", "")
     )
 
+    # ── 安全模式 ──
+    public_mode: bool = field(
+        default_factory=lambda: os.getenv("AGENT_PUBLIC_MODE", "").lower() in ("1", "true", "yes")
+    )
+
     @property
     def is_anthropic(self) -> bool:
         return self.provider in ("anthropic", "claude")

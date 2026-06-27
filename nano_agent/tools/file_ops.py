@@ -38,9 +38,16 @@ class FileOps:
          ["pattern"]),
     ]
 
-    def __init__(self, sandbox: PathSandbox, work_dir: str):
+    def __init__(self, sandbox: PathSandbox, work_dir: str, public_mode: bool = False):
         self.sandbox = sandbox
         self.work_dir = work_dir
+        self.public_mode = public_mode
+
+    def get_tools(self) -> list:
+        """返回当前模式允许的工具列表。公网模式下只暴露只读工具。"""
+        if self.public_mode:
+            return [t for t in self.TOOLS if t[0] in ("read", "glob", "grep")]
+        return list(self.TOOLS)
 
     def read(self, path: str, offset: int = 0, limit: int = 500) -> Observation:
         """读取工作目录内的文件，带行号。"""
@@ -61,6 +68,8 @@ class FileOps:
 
     def write(self, path: str, content: str) -> Observation:
         """写入文件到工作目录内。"""
+        if self.public_mode:
+            return Observation.error("write_file", "Write access denied (public mode)")
         safe = self.sandbox.safe_path(path)
         safe.parent.mkdir(parents=True, exist_ok=True)
         try:
@@ -71,6 +80,8 @@ class FileOps:
 
     def edit(self, path: str, old_string: str, new_string: str) -> Observation:
         """精确替换文件中的字符串（仅替换一次，要求唯一匹配）。"""
+        if self.public_mode:
+            return Observation.error("edit_file", "Edit access denied (public mode)")
         safe = self.sandbox.safe_path(path)
         try:
             content = safe.read_text(encoding="utf-8")

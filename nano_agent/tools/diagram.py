@@ -27,7 +27,8 @@ class Diagram:
          "state machines, org charts. NOT for coordinate graphs or data plots — use generate_chart for those.\n"
          "Architecture: 'flowchart TB', group layers with subgraph.\n"
          "Shapes: [(DB)] database, [/API/] gateway, ([Svc]) service, [Client] client, {Auth} decision.\n"
-         "Arrows: --> request, -.-> async, ==> critical. State machines: stateDiagram-v2.",
+         "Arrows: --> request, -.-> async, ==> critical. State machines: stateDiagram-v2.\n"
+         "⚠️ Privacy: code is sent to mermaid.ink / plantuml.com for rendering. Do NOT include secrets or PII.",
          "mermaid_chart",
          {"code": {"type": "string",
                    "description": (

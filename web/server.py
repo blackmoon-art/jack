@@ -17,8 +17,8 @@ from typing import Optional
 # Ensure project root in path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse, StreamingResponse, FileResponse
+from fastapi import FastAPI, Request, UploadFile, File as FastAPIFile, Form
+from fastapi.responses import HTMLResponse, StreamingResponse, FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from nano_agent import Agent, Config
@@ -392,6 +392,36 @@ async def serve_chart(filename: str):
                 "gif": "image/gif", "webp": "image/webp", "svg": "image/svg+xml"}
     media_type = mime_map.get(ext, "image/png")
     return FileResponse(filepath, media_type=media_type, headers={"Cache-Control": "public, max-age=86400"})
+
+
+# ── 文件上传 ──────────────────────────────────────────
+
+@app.post("/api/upload")
+async def upload_file(file: UploadFile = FastAPIFile(...), session_id: str = Form("")):
+    """上传文件到会话工作目录，agent 可通过 read 工具读取。"""
+    if not file.filename:
+        return JSONResponse({"error": "No file selected"}, status_code=400)
+
+    # 确定目标目录（get_or_create_session 内部加锁，不可嵌套持有 _sessions_lock，否则死锁）
+    session_id = get_or_create_session(session_id)
+    with _sessions_lock:
+        work_dir = Path(sessions[session_id]["agent"].config.work_dir)
+
+    # 安全：只取文件名，防路径穿越
+    safe_name = Path(file.filename).name
+    filepath = work_dir / safe_name
+
+    try:
+        content = await file.read()
+        filepath.write_bytes(content)
+        return {
+            "ok": True,
+            "filename": safe_name,
+            "path": str(filepath.relative_to(work_dir)),
+            "size": len(content),
+        }
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
 
 
 # ── 文件下载 ──────────────────────────────────────────

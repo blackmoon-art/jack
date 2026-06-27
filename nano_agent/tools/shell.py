@@ -22,6 +22,15 @@ _SAFE_COMMAND_PREFIXES = [
 ]
 _SAFE_COMMAND_PREFIXES_TUPLE = tuple(_SAFE_COMMAND_PREFIXES)
 
+# ── 公网模式白名单（严格只读，禁止代码执行/文件修改/网络下载/包安装）───
+_PUBLIC_SAFE_COMMANDS = [
+    "ls", "cat", "head", "tail", "wc", "find", "grep",
+    "pwd", "echo", "date", "whoami", "uname", "env", "printenv",
+    "which", "command", "type", "file", "stat", "du", "df",
+    "diff", "sort", "uniq", "cut", "tr",
+]
+_PUBLIC_SAFE_COMMANDS_TUPLE = tuple(_PUBLIC_SAFE_COMMANDS)
+
 
 class Shell:
     # 工具注册声明
@@ -34,9 +43,11 @@ class Shell:
          ["expression"]),
     ]
 
-    def __init__(self, work_dir: str, bash_timeout: int = 120):
+    def __init__(self, work_dir: str, bash_timeout: int = 120, public_mode: bool = False):
         self.work_dir = work_dir
         self.bash_timeout = bash_timeout
+        self.public_mode = public_mode
+        self._safe_prefixes = _PUBLIC_SAFE_COMMANDS_TUPLE if public_mode else _SAFE_COMMAND_PREFIXES_TUPLE
         # 自动检测 venv，把 .venv/bin 加到 PATH
         self._env = os.environ.copy()
         venv_bin = os.path.join(work_dir, '.venv', 'bin')
@@ -88,11 +99,11 @@ class Shell:
             return Observation.error("bash", "Empty command", args={"command": command})
 
         cmd_name = os.path.basename(parts[0])
-        if not cmd_name.startswith(_SAFE_COMMAND_PREFIXES_TUPLE):
+        if not cmd_name.startswith(self._safe_prefixes):
             return Observation.error(
                 "bash",
-                f"Command '{parts[0]}' is not in the allowed list. "
-                f"Allowed prefixes: {', '.join(_SAFE_COMMAND_PREFIXES[:15])}...",
+                f"Command '{parts[0]}' is not allowed{f' (public mode)' if self.public_mode else ''}. "
+                f"Allowed: {', '.join(self._safe_prefixes)}",
                 args={"command": command},
             )
 

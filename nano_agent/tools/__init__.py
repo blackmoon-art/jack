@@ -28,6 +28,8 @@ from .chart import Chart
 from .diagram import Diagram
 from .ai_image import AIImage
 from .circuit import Circuit
+from .image_analyze import ImageAnalyzer
+from .document_parse import DocumentParser
 
 logger = logging.getLogger("nano_agent.tools")
 
@@ -54,18 +56,22 @@ class ToolRegistry:
         "_ai_image": AIImage,
         "_circuit": Circuit,
         "_ppt": PPT,
+        "_image_analyze": ImageAnalyzer,
+        "_document_parse": DocumentParser,
     }
 
     def __init__(self, work_dir: str, bash_timeout: int = 120,
-                 brave_api_key: str = "", charts_dir: str = ""):
+                 brave_api_key: str = "", charts_dir: str = "",
+                 public_mode: bool = False):
         self.sandbox = PathSandbox(work_dir)
         self.bash_timeout = bash_timeout
         self.work_dir = work_dir
         self.brave_api_key = brave_api_key
+        self.public_mode = public_mode
 
         # 实例化子模块
-        self._file_ops = FileOps(self.sandbox, work_dir)
-        self._shell = Shell(work_dir, bash_timeout)
+        self._file_ops = FileOps(self.sandbox, work_dir, public_mode=public_mode)
+        self._shell = Shell(work_dir, bash_timeout, public_mode=public_mode)
         self._search = Search(brave_api_key=brave_api_key)
         self._fetch = Fetch()
         self._weather = Weather()
@@ -77,6 +83,8 @@ class ToolRegistry:
         self._diagram = Diagram(work_dir, charts_dir=charts_dir)
         self._ai_image = AIImage(work_dir, charts_dir=charts_dir)
         self._circuit = Circuit(work_dir, charts_dir=charts_dir)
+        self._image_analyze = ImageAnalyzer(work_dir)
+        self._document_parse = DocumentParser(work_dir)
 
         # 自动注册工具
         self._tools: dict[str, dict[str, Any]] = {}
@@ -86,12 +94,16 @@ class ToolRegistry:
         self._register_manual_overrides()
 
     def _auto_register(self):
-        """从各工具类的 TOOLS 属性自动注册。"""
+        """从各工具类的 TOOLS 属性自动注册。公网模式下过滤危险工具。"""
         for attr_name, cls in self._MODULE_MAP.items():
             instance = getattr(self, attr_name, None)
             if instance is None:
                 continue
-            tools_def = getattr(cls, 'TOOLS', [])
+            # 支持实例级别的工具过滤（如 FileOps 公网模式下隐藏 write/edit）
+            if hasattr(instance, 'get_tools'):
+                tools_def = instance.get_tools()
+            else:
+                tools_def = getattr(cls, 'TOOLS', [])
             for name, desc, method_name, properties, required in tools_def:
                 func = getattr(instance, method_name)
                 self._register(name, desc, func, properties, required=required)

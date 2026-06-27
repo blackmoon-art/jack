@@ -44,7 +44,8 @@ class Agent:
         self.llm = LLM(self.config)
         self.tools = ToolRegistry(self.config.work_dir, self.config.bash_timeout,
                                    brave_api_key=self.config.brave_api_key or "",
-                                   charts_dir=self.config.charts_dir)
+                                   charts_dir=self.config.charts_dir,
+                                   public_mode=self.config.public_mode)
         self.memory = Memory(self.config.memory_window, self.config.memory_file,
                               self.config.reflection_file, self.config.long_term_db,
                               self.config.reflexion_db)
@@ -463,12 +464,8 @@ class Agent:
             "- When you write a file, ALWAYS provide a download link: [下载 {filename}](/api/download/{filename})",
             "- Example: [下载 report.txt](/api/download/report.txt)",
             "",
-            "# Chart / Drawing Rules — pick the right tool based on what the user wants to SEE",
-            "- Coordinate graphs, function plots, data charts, regressions → `generate_chart`",
-            "- 2D geometric proofs (Pythagoras, Euclid) → `generate_chart` chart_type='geometry' with shapes=vertices data",
-            "- Flowcharts, architecture, state machines, org charts → `mermaid_chart`",
-            "- 3D shapes (cube, pyramid, polyhedra, sphere) → ALWAYS `generate_chart` chart_type='wireframe'. NEVER use ai_image for geometric shapes.",
-            "- Photos, artwork, realistic images, animals, people → `ai_image`",
+            "# Chart / Drawing Rules — pick the right tool and chart_type based on the task",
+            "- Read the tool's `chart_type` descriptions carefully before choosing. Each type has a distinct purpose.",
             "- NEVER output Chart.js/D3.js/HTML/SVG/JS code. The frontend cannot render them.",
             "- Always include the returned ![title](url) markdown in your response so users see the image.",
         ]

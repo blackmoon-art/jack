@@ -85,15 +85,21 @@
   .loading-dots span:nth-child(3) { animation-delay:0.4s; }
   @keyframes bounce { 0%,80%,100% { transform:scale(0); } 40% { transform:scale(1); } }
 
-  footer { padding:16px 20px; border-top:1px solid #333; display:flex; gap:10px; background:#1a1a2e; }
+  footer { padding:16px 20px; border-top:1px solid #333; display:flex; gap:10px; align-items:center; background:#1a1a2e; }
   footer input { flex:1; background:#000; color:#e0e0e0;
                  border:1px solid #444; padding:10px 16px;
-                 border-radius:8px; font-size:14px; outline:none; }
+                 border-radius:8px; font-size:14px; outline:none; height:42px; box-sizing:border-box; }
   footer input::placeholder { color:#888; }
   footer input:focus { border-color:#7c3aed; }
-  footer button { background:#7c3aed; color:#fff; border:none; padding:10px 20px;
-                  border-radius:8px; cursor:pointer; font-size:14px; font-weight:600; }
+  footer button, footer select, footer label { height:42px; box-sizing:border-box; display:inline-flex; align-items:center;
+                                                  border-radius:8px; font-size:14px; padding:0 16px; }
+  footer button { background:#7c3aed; color:#fff; border:none; cursor:pointer; font-weight:600; white-space:nowrap; }
   footer button:disabled { opacity:0.5; cursor:not-allowed; }
+  footer select { background:#222; color:#e0e0e0; border:1px solid #444; cursor:pointer; }
+  #attach-btn { background:#333; border:1px solid #555; color:#ccc; cursor:pointer; white-space:nowrap; }
+  #attach-btn:hover { background:#444 !important; }
+  #upload-preview { background:#1a1a2e; border-bottom:1px solid #333; }
+  #upload-preview a { text-decoration:none; }
   @media (max-width:600px) {
     footer { flex-wrap:wrap; }
     footer input { flex:100%; }
@@ -114,25 +120,25 @@
     <option value="reflexion">Reflexion</option>
     <option value="tree-of-thought">Tree-of-Thought</option>
   </select>
-  <span class="info" id="status">就绪</span>
-
 </header>
 
 <div id="messages"></div>
 
-<div class="status" id="session-info"></div>
-
 <footer>
   <input type="text" id="input" placeholder="输入任务..." autofocus />
-  <select id="model" style="background:#222;color:#e0e0e0;border:1px solid #444;padding:8px 12px;border-radius:8px;font-size:13px;cursor:pointer;">
+  <select id="model">
     <option value="">Default</option>
     <option value="deepseek-v4-flash">deepseek-v4-flash</option>
     <option value="deepseek-v4-pro">deepseek-v4-pro</option>
     <option value="deepseek-chat">deepseek-chat</option>
     <option value="deepseek-reasoner">deepseek-reasoner</option>
   </select>
+  <label id="attach-btn">
+    <span id="attach-text">📎</span><input type="file" id="file-input" multiple style="position:fixed;left:-9999px;" />
+  </label>
   <button id="send">Send</button>
 </footer>
+<div id="upload-preview" style="display:none; padding:6px 20px; font-size:12px; color:#a78bfa;"></div>
 
 <script>
 // 访问码（管理员不用次数限制）
@@ -163,8 +169,86 @@ const $input = document.getElementById('input');
 const $send = document.getElementById('send');
 const $strategy = document.getElementById('strategy');
 const $model = document.getElementById('model');
-const $status = document.getElementById('status');
-document.getElementById('session-info').textContent = `会话: ${SESSION_ID}`;
+const $fileInput = document.getElementById('file-input');
+const $attachBtn = document.getElementById('attach-btn');
+const $attachText = document.getElementById('attach-text');
+const $uploadPreview = document.getElementById('upload-preview');
+
+let uploadedFiles = [];  // { filename, path, size }
+
+function uploadWithProgress(file, idx, total) {
+  return new Promise((resolve, reject) => {
+    const formData = new FormData();
+    formData.append('file', file);
+    formData.append('session_id', SESSION_ID);
+
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', '/api/upload');
+
+    xhr.upload.addEventListener('progress', (e) => {
+      if (e.lengthComputable) {
+        const pct = Math.round(e.loaded / e.total * 100);
+        const loadedKB = (e.loaded / 1024).toFixed(0);
+        const totalKB = (e.total / 1024).toFixed(0);
+        $uploadPreview.style.display = 'block';
+        $uploadPreview.innerHTML = `📎 ${idx+1}/${total} — ${file.name} ${pct}% (${loadedKB}/${totalKB}KB)`;
+      }
+    });
+
+    xhr.addEventListener('load', () => {
+      if (xhr.status === 200) {
+        try {
+          const data = JSON.parse(xhr.responseText);
+          if (data.ok) resolve(data);
+          else reject(new Error(data.error || 'Upload failed'));
+        } catch (e) { reject(new Error('Invalid response')); }
+      } else {
+        reject(new Error(`HTTP ${xhr.status}`));
+      }
+    });
+
+    xhr.addEventListener('error', () => reject(new Error('Network error')));
+    xhr.send(formData);
+  });
+}
+
+$fileInput.addEventListener('change', async () => {
+  const files = $fileInput.files;
+  if (!files.length) return;
+
+  let success = 0, fail = 0;
+  for (let i = 0; i < files.length; i++) {
+    try {
+      const data = await uploadWithProgress(files[i], i, files.length);
+      uploadedFiles.push(data);
+      success++;
+    } catch (e) {
+      console.error('Upload failed:', e);
+      fail++;
+    }
+  }
+
+  $fileInput.value = '';
+
+  if (uploadedFiles.length) {
+    $uploadPreview.style.display = 'block';
+    const items = uploadedFiles.map((f, idx) =>
+      `<span style="color:#a78bfa;">${f.filename}</span> (${(f.size/1024).toFixed(1)}KB)` +
+      `<a href="#" onclick="uploadedFiles.splice(${idx},1);if(!uploadedFiles.length){$uploadPreview.style.display='none'}else{renderUploadPreview()};return false" style="color:#ef4444;margin-left:4px;text-decoration:none;" title="Remove">❌</a>`
+    ).join(', ');
+    const failMsg = fail > 0 ? ` <span style="color:#ef4444;">(${fail} failed)</span>` : '';
+    $uploadPreview.innerHTML = `upload success✅ ${items}${failMsg} <a href="#" onclick="uploadedFiles=[];$uploadPreview.style.display='none';return false" style="color:#ef4444;margin-left:8px;">delete all</a>`;
+  }
+});
+
+function renderUploadPreview() {
+  if (!uploadedFiles.length) { $uploadPreview.style.display = 'none'; return; }
+  const items = uploadedFiles.map((f, idx) =>
+    `<span style="color:#a78bfa;">${f.filename}</span> (${(f.size/1024).toFixed(1)}KB)` +
+    `<a href="#" onclick="uploadedFiles.splice(${idx},1);if(!uploadedFiles.length){$uploadPreview.style.display='none'}else{renderUploadPreview()};return false" style="color:#ef4444;margin-left:4px;text-decoration:none;" title="Remove">❌</a>`
+  ).join(', ');
+  $uploadPreview.innerHTML = `upload success✅ ${items} <a href="#" onclick="uploadedFiles=[];$uploadPreview.style.display='none';return false" style="color:#ef4444;margin-left:8px;">delete all</a>`;
+}
 
 let currentMsg = null;
 let thinkingCount = 0;
@@ -338,7 +422,14 @@ function renderContent(text) {
 // ── 发送消息 ─────────────────────────────────────────
 
 async function send() {
-  const task = $input.value.trim();
+  let task = $input.value.trim();
+
+  // 附加上传文件信息
+  if (uploadedFiles.length) {
+    const fileList = uploadedFiles.map(f => f.filename).join(', ');
+    task = task ? `[Uploaded: ${fileList}] ${task}` : `[Uploaded: ${fileList}] Please analyze these files`;
+  }
+
   if (!task) return;
 
   $send.disabled = true;
@@ -348,11 +439,14 @@ async function send() {
 
   addMessage('user', task);
 
+  // 清除上传列表
+  uploadedFiles = [];
+  $uploadPreview.style.display = 'none';
+
   // 显示 loading 动画
   currentMsg = addMessage('agent', '');
   currentMsg.innerHTML = '<div class="loading-dots"><span></span><span></span><span></span></div>';
 
-  $status.textContent = '思考中...';
   $messages.scrollTop = $messages.scrollHeight;
 
   try {
@@ -416,7 +510,6 @@ async function send() {
               ensureThinkingTag();
               addThinkingBlock('tool-call',
                 `🔧 ${data.name}(${JSON.stringify(data.args)})`);
-              $status.textContent = `执行: ${data.name}...`;
               break;
             }
             case 'tool_result': {
@@ -468,14 +561,12 @@ async function send() {
                 }
               }
               currentMsg = null;
-              $status.textContent = '就绪';
               break;
             }
             case 'error': {
               if (!gotContent) { currentMsg.innerHTML = ''; gotContent = true; }
               ensureThinkingTag();
               addThinkingBlock('tool-result', `❌ ${data.text}`);
-              $status.textContent = '错误';
               break;
             }
           }
@@ -500,7 +591,6 @@ async function send() {
       currentMsg.innerHTML = `<div class="content" style="color:#ef4444;">❌ ${escapeHtml(msg)}</div>`;
       currentMsg = null;
     }
-    $status.textContent = '错误';
   }
 
   $send.disabled = false;

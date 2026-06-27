@@ -21,13 +21,13 @@ logger = logging.getLogger("nano_agent.tools.chart")
 class Chart:
     # 工具注册声明
     TOOLS = [
-        ("generate_chart", "Generate coordinate graphs & data charts. For function plots, bar/line/pie charts, regressions. "
-         "NOT for geometric shapes, 3D figures, cubes, triangles — use mermaid_chart for those. "
-         "chart_type: line/curve/bar/scatter/pie/function/regression.", "generate_chart",
-         {"chart_type": {"type": "string", "description": "Chart type: line, curve, bar, scatter, pie, histogram, area, heatmap, radar, bubble, function, regression, wireframe, geometry (default: line). geometry draws proof diagrams: data='x1,y1;x2,y2;...' closed polygon"},
-          "data": {"type": "string", "description": "Data: comma-sep values. Regression: 'x,y;x,y...' or 'y1,y2...'. Wireframe: 'x1,y1,z1;x2,y2,z2;...' edges. Multi-series: semicolon-sep."},
+        ("generate_chart", "Generate charts, coordinate graphs, geometric proof diagrams, and 3D wireframes. "
+         "geometric proofs (勾股定理, Pythagoras, triangle squares) → chart_type='geometry'. "
+         "data comparison → bar, trend → line, math → function, 3D → wireframe.", "generate_chart",
+         {"chart_type": {"type": "string", "description": "geometry: geometric proof (Pythagoras, Euclid) — auto-draws squares and labels. wireframe: 3D cube/pyramid. line: trend chart. bar: comparison. curve: smoothed line. scatter: x-y points. pie: proportions. function: math formula. regression: line fitting. histogram: distribution. area/heatmap/radar/bubble: specialized."},
+          "data": {"type": "string", "description": "Data: comma-sep values. Multi-series: semicolon-sep. To specify X values, use labels='x;...' and data='x1,x2;y1,y2'. Regression: 'x,y;x,y...'. Wireframe: 'x1,y1,z1;x2,y2,z2;...' edges."},
           "title": {"type": "string", "description": "Chart title"},
-          "labels": {"type": "string", "description": "Series labels or shape definitions (semicolon-separated)"},
+          "labels": {"type": "string", "description": "X-axis labels or series names (semicolon-separated). For bar: 'A,B;Series1;Series2'. For line/scatter with X coords: 'x;Series1'. Shape defs for draw/geometry."},
           "x_label": {"type": "string", "description": "X-axis label"},
           "y_label": {"type": "string", "description": "Y-axis label"},
           "width": {"type": "integer", "description": "Image width (default: 512)"},
@@ -57,17 +57,12 @@ class Chart:
         style: str = "dark",
         **kwargs,  # 忽略 width/height 等误传参数，防止报错中断
     ) -> str:
-        # 解析数据 (raw types 不过度拆分逗号)
-        raw_types = set()
-        if chart_type in raw_types:
-            data_sets = [[data.strip()]] if data.strip() else [[]]
-            label_sets = [[labels.strip()]] if labels.strip() else [[]]
-        else:
-            try:
-                data_sets = self._parse_multi(data)
-                label_sets = self._parse_multi(labels) if labels else []
-            except Exception as e:
-                return f"Error parsing data: {e}"
+        # 解析数据
+        try:
+            data_sets = self._parse_multi(data) if data else [[]]
+            label_sets = self._parse_multi(labels) if labels else []
+        except Exception as e:
+            return f"Error parsing data: {e}"
 
         no_data_types = {"draw", "cat", "wireframe", "geometry"}
         if (not data_sets or not data_sets[0]) and chart_type not in no_data_types:
@@ -159,9 +154,13 @@ class Chart:
         if not filename:
             ts = datetime.now().strftime("%Y%m%d_%H%M%S")
             filename = f"chart_{ts}.png"
+        # 安全：拒绝路径穿越，只取文件名部分
+        filename = Path(filename).name
         if not filename.endswith(".png"):
             filename += ".png"
-        filepath = self.charts_dir / filename
+        filepath = (self.charts_dir / filename).resolve()
+        if not str(filepath).startswith(str(self.charts_dir.resolve())):
+            return f"Error: path traversal blocked — '{filename}'"
 
         fig.savefig(filepath, dpi=150, bbox_inches="tight", facecolor=bg)
         plt.close(fig)
@@ -180,12 +179,23 @@ class Chart:
 
     # ── 绘图 ──
 
+    @staticmethod
+    def _extract_xy(data_sets, label_sets):
+        """如果 labels[0] 是 'x'，则 data_sets[0] 为 X 坐标，其余为 Y 系列。"""
+        if label_sets and label_sets[0] and label_sets[0][0].strip().lower() == "x":
+            x_vals = [float(v) for v in data_sets[0]]
+            y_sets = data_sets[1:]
+            y_labels = label_sets[1:]
+            return x_vals, y_sets, y_labels
+        return None, data_sets, label_sets
+
     def _draw_line(self, ax, data_sets, label_sets, is_dark=True):
+        x_vals, data_sets, label_sets = self._extract_xy(data_sets, label_sets)
         colors = ["#7c3aed", "#3b82f6", "#10b981", "#f59e0b", "#ef4444", "#ec4899"]
         for i, ds in enumerate(data_sets):
             vals = [float(x) for x in ds]
             label = label_sets[i][0] if i < len(label_sets) and label_sets[i] else None
-            x = range(len(vals))
+            x = x_vals if x_vals and len(x_vals) == len(vals) else range(len(vals))
             ax.plot(x, vals, color=colors[i % len(colors)], marker="o",
                     linewidth=2, markersize=4, label=label)
         if any(i < len(label_sets) and label_sets[i] for i in range(len(data_sets))):
@@ -196,25 +206,28 @@ class Chart:
     def _draw_curve(self, ax, data_sets, label_sets, is_dark=True):
         """平滑曲线 — scipy spline 优先，回退到 numpy polyfit。"""
         import numpy as np
+        x_vals, data_sets, label_sets = self._extract_xy(data_sets, label_sets)
         colors = ["#7c3aed", "#3b82f6", "#10b981", "#f59e0b", "#ef4444", "#ec4899"]
         for i, ds in enumerate(data_sets):
             vals = np.array([float(x) for x in ds])
             n = len(vals)
             if n < 3:
-                ax.plot(range(n), vals, color=colors[i % len(colors)], marker="o",
+                x = x_vals if x_vals and len(x_vals) == n else range(n)
+                ax.plot(x, vals, color=colors[i % len(colors)], marker="o",
                         linewidth=2, markersize=4)
                 continue
-            x = np.linspace(0, n - 1, 200)
+            x_smooth = np.linspace(x_vals[0] if x_vals else 0, x_vals[-1] if x_vals else n - 1, 200)
+            x_raw = x_vals if x_vals and len(x_vals) == n else np.arange(n)
             try:
                 from scipy.interpolate import make_interp_spline
-                spl = make_interp_spline(range(n), vals, k=min(3, n - 1))
-                y = spl(x)
+                spl = make_interp_spline(x_raw, vals, k=min(3, n - 1))
+                y = spl(x_smooth)
             except ImportError:
-                z = np.polyfit(range(n), vals, min(4, n - 1))
-                y = np.polyval(z, x)
+                z = np.polyfit(x_raw, vals, min(4, n - 1))
+                y = np.polyval(z, x_smooth)
             label = label_sets[i][0] if i < len(label_sets) and label_sets[i] else None
-            ax.plot(x, y, color=colors[i % len(colors)], linewidth=2, label=label)
-            ax.scatter(range(n), vals, color=colors[i % len(colors)], s=20, zorder=5)
+            ax.plot(x_smooth, y, color=colors[i % len(colors)], linewidth=2, label=label)
+            ax.scatter(x_raw, vals, color=colors[i % len(colors)], s=20, zorder=5)
         if any(i < len(label_sets) and label_sets[i] for i in range(len(data_sets))):
             lc = "#222" if is_dark else "#f0f0f0"
             ax.legend(facecolor=lc, edgecolor="#444" if is_dark else "#ccc",
@@ -229,7 +242,7 @@ class Chart:
             vals = [float(x) for x in ds]
             offset = (i - (n - 1) / 2) * width
             x = [j + offset for j in range(len(vals))]
-            label = label_sets[i][0] if i < len(label_sets) and label_sets[i] else None
+            label = label_sets[i+1][0] if i+1 < len(label_sets) and label_sets[i+1] else None
             ax.bar(x, vals, width=width, color=colors[i % len(colors)], label=label, alpha=0.85)
         if x_labels:
             ax.set_xticks(range(len(x_labels)))
@@ -238,13 +251,16 @@ class Chart:
             ax.legend(facecolor="#222" if is_dark else "#f0f0f0", edgecolor="#444" if is_dark else "#ccc", labelcolor="#ccc" if is_dark else "#333")
 
     def _draw_scatter(self, ax, data_sets, label_sets, is_dark=True):
+        x_vals, data_sets, label_sets = self._extract_xy(data_sets, label_sets)
         colors = ["#7c3aed", "#3b82f6", "#10b981"]
-        # 需要 x,y 对：第一组=x，第二组=y
+        # 单组数据：自动 X = 0,1,2...
         if len(data_sets) < 2:
             vals = [float(x) for x in data_sets[0]]
-            ax.scatter(range(len(vals)), vals, color=colors[0], s=60, alpha=0.8)
+            x = x_vals if x_vals and len(x_vals) == len(vals) else range(len(vals))
+            ax.scatter(x, vals, color=colors[0], s=60, alpha=0.8)
         else:
-            xs = [float(x) for x in data_sets[0]]
+            # 双组数据：第一组=X，第二组=Y（或用 labels="x" 显式指定）
+            xs = x_vals if x_vals else [float(x) for x in data_sets[0]]
             ys = [float(x) for x in data_sets[1]]
             ax.scatter(xs, ys, color=colors[0], s=60, alpha=0.8)
 
@@ -257,7 +273,7 @@ class Chart:
                startangle=90)
         ax.set_facecolor("#1a1a2e")
 
-    def _draw_histogram(self, ax, data_sets, label_sets):
+    def _draw_histogram(self, ax, data_sets, label_sets, is_dark=True):
         colors = ["#7c3aed", "#3b82f6"]
         for i, ds in enumerate(data_sets):
             vals = [float(x) for x in ds]
@@ -268,7 +284,7 @@ class Chart:
             ax.legend(facecolor=lc, edgecolor="#444" if is_dark else "#ccc",
                       labelcolor="#ccc" if is_dark else "#333")
 
-    def _draw_area(self, ax, data_sets, label_sets):
+    def _draw_area(self, ax, data_sets, label_sets, is_dark=True):
         colors = ["#7c3aed", "#3b82f6", "#10b981"]
         for i, ds in enumerate(data_sets):
             vals = [float(x) for x in ds]
@@ -342,6 +358,17 @@ class Chart:
         """数学函数绘图 — data[0][0] 是 Python 表达式，例: x**2, sin(x), log(x)。"""
         import numpy as np
         expr = data_sets[0][0] if data_sets and data_sets[0] else "x"
+
+        # 安全校验：禁止沙箱逃逸关键词
+        _FORBIDDEN = ('__', 'import', 'exec', 'eval', 'compile', 'open',
+                      'getattr', 'setattr', 'globals', 'locals', 'vars',
+                      'dir', 'type', 'breakpoint', 'input', 'class', 'base',
+                      'subclass', 'mro', 'builtin', 'system', 'popen', 'os')
+        expr_lower = expr.lower()
+        for kw in _FORBIDDEN:
+            if kw in expr_lower:
+                raise ValueError(f"Forbidden pattern '{kw}' in expression")
+
         x_range = (-5, 5)
         if len(data_sets) > 1 and data_sets[1]:
             x_range = (float(data_sets[1][0]) if data_sets[1] else -5,
