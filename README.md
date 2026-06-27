@@ -620,6 +620,24 @@ nano_agent_plus/
 
 当前架构评分 **8.5/10**。以下按优先级列出待改进项：
 
+### 🔴 策略-引擎交互契约问题 (2026-06-28 识别)
+
+**问题 1：agent_loop_fn 形同虚设**
+- `ReActStrategy.run()` 接收 `agent_loop_fn` 但完全忽略，自己直接调 `self.llm.chat()`，重写了一套 LLM→tool→result 循环
+- 其他 4 个策略正确使用了 `agent_loop_fn`
+- **方案**：增强 `_agent_loop` 接受 `system_prompt` 可选参数，ReAct 通过它注入 ReAct 专用 prompt，复用标准循环
+
+**问题 2：依赖注入靠猴子补丁**
+- `_run_strategy()` 和 `_run_stream_default()` 通过 `s._emit = self._emit` / `s._execute_tool = self.execute_tool` 等运行时属性注入
+- `BaseStrategy.execute_tool()` 用 `getattr(self, '_execute_tool', None)` 兜底 — 方法在类定义中不存在，IDE 看不到
+- 兩套注入代码（`_run_strategy` vs `_run_stream_default`）是复制粘贴的
+- **方案**：定义 `StrategyContext` dataclass 统一传递 `config/llm/tools/memory/emit/execute_tool/agent_loop`，策略 `__init__` 接收 context 而非逐个参数
+
+**问题 3：default 策略完全绕过 BaseStrategy**
+- `Agent.run()` 中 `if strategy == "default"` 走 `_run_stream_default` 特殊路径，其他策略走 `_run_strategy`
+- 两条路径有各自的注入代码，加新字段需改两处
+- **方案**：将流式优化逻辑移入 `DefaultStrategy.run()`，统一走 `_run_strategy`，删掉 `if strategy == "default"` 特殊分支
+
 ### P3: Agent 类职责偏重
 
 `agent.py` ~260 行承担 5 个职责：组件装配、任务编排、事件分发、核心循环、Prompt 构建。改 prompt 逻辑要动 agent.py，改循环逻辑也要动 agent.py。
