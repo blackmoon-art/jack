@@ -28,3 +28,5 @@ least_squares*
 draw_circle*
 combined_ols*
 .DS_Store
+web/reflexion_trace.db
+web/session_*/
