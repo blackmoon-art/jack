@@ -1,9 +1,7 @@
 """文档解析工具 — 提取 PDF/DOCX/XLSX/CSV/TXT 的文字和表格内容。"""
 
 import csv
-import io
 import logging
-import os
 from pathlib import Path
 
 logger = logging.getLogger("nano_agent.tools.document_parse")
@@ -117,16 +115,18 @@ class DocumentParser:
 
             for sheet_name in wb.sheetnames:
                 ws = wb[sheet_name]
-                rows = list(ws.iter_rows(values_only=True))
-                rows = [r for r in rows if any(c is not None for c in r)]
+                rows = []
+                for i, row in enumerate(ws.iter_rows(values_only=True)):
+                    if i >= 100:
+                        text_parts.append(f"(Showing first 100 rows, {ws.max_row or '?'} total)")
+                        break
+                    if any(c is not None for c in row):
+                        rows.append(row)
 
                 if not rows:
                     continue
 
                 text_parts.append(f"\n## Sheet: {sheet_name}")
-                if len(rows) > 100:
-                    text_parts.append(f"(Showing first 100 of {len(rows)} rows)")
-                    rows = rows[:100]
 
                 # 格式化为 markdown table
                 max_cols = max(len(r) for r in rows)

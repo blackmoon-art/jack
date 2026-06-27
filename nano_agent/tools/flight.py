@@ -13,6 +13,7 @@ API 后端：Amadeus Self-Service（免费注册，测试额度充足）
 import json
 import logging
 import os
+import threading
 import time
 import urllib.request
 import urllib.parse
@@ -26,7 +27,7 @@ logger = logging.getLogger("nano_agent.tools.flight")
 
 # Amadeus token 缓存
 _token_cache: dict = {"token": "", "expires_at": 0}
-_TOKEN_LOCK = __import__('threading').Lock()
+_TOKEN_LOCK = threading.Lock()
 
 
 def _get_amadeus_token(api_key: str, api_secret: str) -> str:
