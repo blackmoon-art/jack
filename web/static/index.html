@@ -427,7 +427,7 @@ async function send() {
   // 附加上传文件信息
   if (uploadedFiles.length) {
     const fileList = uploadedFiles.map(f => f.filename).join(', ');
-    task = task ? `[Uploaded: ${fileList}] ${task}` : `[Uploaded: ${fileList}]`;
+    task = task ? `[Uploaded: ${fileList}] ${task}` : `[Uploaded: ${fileList}] Please analyze these files`;
   }
 
   if (!task) return;
