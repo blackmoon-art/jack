@@ -18,7 +18,7 @@ from typing import Optional
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from fastapi import FastAPI, Request, UploadFile, File as FastAPIFile, Form
-from fastapi.responses import HTMLResponse, StreamingResponse, FileResponse, JSONResponse
+from fastapi.responses import HTMLResponse, StreamingResponse, FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from nano_agent import Agent, Config
