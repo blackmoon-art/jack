@@ -221,9 +221,6 @@ class ReflexionStrategy(BaseStrategy):
             logger.info(f"[Evaluate] status={eval_result['status']}, score={score}/10")
             logger.info(f"[Evaluate] reason={eval_result.get('reason', 'N/A')}")
 
-            # 保存尝试到轨迹
-            self._save_attempt(attempt, result, eval_result)
-
             # 保留最佳结果
             if score > best_score:
                 best_score = score
@@ -232,16 +229,19 @@ class ReflexionStrategy(BaseStrategy):
             # #3 优化：早期退出——首次高分直接返回
             if eval_result["status"] == "success" and score >= 8:
                 logger.info(f"[Reflexion] Early exit — high score on attempt {attempt+1}")
+                self._save_attempt(attempt, result, eval_result)
                 break
 
             # 成功但中等分数（7分）也接受
             if eval_result["status"] == "success" and score >= 7:
                 logger.info(f"[Reflexion] Success! (attempt {attempt+1})")
+                self._save_attempt(attempt, result, eval_result)
                 break
 
             # 最后一次不反思
             if attempt == self.max_retries - 1:
                 logger.info(f"[Reflexion] Max retries reached. Returning best result.")
+                self._save_attempt(attempt, result, eval_result)
                 break
 
             # 失败 → 反思
@@ -253,6 +253,7 @@ class ReflexionStrategy(BaseStrategy):
             lesson = self._extract_lesson(reflection)
             self.lesson_memory.append(lesson)
             self._save_lesson(lesson, trace_id=self._trace_id)
+            self._save_attempt(attempt, result, eval_result, reflection=reflection, lesson=lesson)
             logger.info(f"[Reflect] Lesson: {lesson[:200]}")
 
         # 保存反思教训到持久记忆
