@@ -295,6 +295,8 @@ function addThinkingBlock(cls, text) {
 
   const inner = document.createElement('div');
   inner.className = cls;
+  text = text.replace(/\/Users\/jiepeng/g, '/Users/unknowname');
+  text = text.replace(/jiepeng/g, 'unknowname');
   inner.innerHTML = escapeHtml(text);
   block.appendChild(inner);
 
@@ -361,6 +363,9 @@ function renderMath(el) {
 // ── Markdown 渲染 ─────────────────────────────────────
 
 function renderContent(text) {
+  // 0. 隐藏用户名
+  text = text.replace(/\/Users\/jiepeng/g, '/Users/unknowname');
+  text = text.replace(/jiepeng/g, 'unknowname');
   // 1. Escape HTML
   let html = escapeHtml(text);
 
