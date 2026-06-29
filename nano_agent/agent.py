@@ -381,28 +381,29 @@ class Agent:
     # ── 核心循环 (O-O-D-A) ──────────────────────────────
 
     def _agent_loop(self, messages: list, exclude_tools: Optional[list] = None,
-                    stream_final: bool = False) -> tuple[str, list]:
+                    stream_final: bool = False,
+                    system_prompt: Optional[str] = None) -> tuple[str, list]:
         """
         Agent 核心循环：O-O-D-A
 
         Observe (工具返回) → Orient (解读) → Decide (LLM) → Act (执行工具)
 
-        stream_final: 为 True 时，最终文本回答用流式生成边 emit text 事件，
-                      让前端逐步显示而非等全部生成完。
+        stream_final: 为 True 时，最终文本回答用流式生成边 emit text 事件。
+        system_prompt: 覆盖默认 prompt。ReAct 等策略可通过此参数注入专属 prompt。
         """
         schemas = self.tools.get_schemas()
         if exclude_tools:
             schemas = [s for s in schemas if s["function"]["name"] not in exclude_tools]
 
-        # system_prompt 在循环内不变，构建一次复用
-        system_prompt = self._system_prompt()
+        # system_prompt — 允许策略覆盖
+        prompt = system_prompt or self._system_prompt()
 
         for _ in range(self.config.max_iterations):
             # ── Decide: LLM 决策 ──
             response = self.llm.chat(
                 messages=messages,
                 tools=schemas,
-                system=system_prompt,
+                system=prompt,
                 model=self._model_override,
             )
 
