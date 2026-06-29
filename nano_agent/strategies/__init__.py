@@ -11,6 +11,7 @@ from .plan_execute import PlanExecuteStrategy
 from .react import ReActStrategy
 from .reflexion import ReflexionStrategy
 from .tree_of_thought import TreeOfThoughtStrategy
+from .meta import MetaStrategy
 
 # ── 策略注册表 ────────────────────────────────────────
 # key = 策略名称, value = 策略类
@@ -21,6 +22,7 @@ STRATEGY_REGISTRY: dict[str, type] = {
     "plan-execute": PlanExecuteStrategy,
     "reflexion": ReflexionStrategy,
     "tree-of-thought": TreeOfThoughtStrategy,
+    "meta": MetaStrategy,
 }
 
 __all__ = [
