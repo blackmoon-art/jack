@@ -9,6 +9,7 @@ Default 策略 — 标准 agent loop，带流式快速路径。
 适合日常简单任务。
 """
 
+import json
 import logging
 from typing import Optional
 
@@ -76,6 +77,20 @@ class DefaultStrategy(BaseStrategy):
                     "arguments": tool_params,
                     "id": "routed_visual",
                 }
+                # 必须先追加 assistant tool_calls 消息，否则 tool result 消息
+                # 缺少配对的 assistant 调用，OpenAI/DeepSeek API 会报错
+                messages.append({
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [{
+                        "id": "routed_visual",
+                        "type": "function",
+                        "function": {
+                            "name": tool_name,
+                            "arguments": json.dumps(tool_params, ensure_ascii=False),
+                        },
+                    }],
+                })
                 self.execute_tool(tool_call, messages)
                 return agent_loop_fn(messages)[0]
 
@@ -208,6 +223,10 @@ class DefaultStrategy(BaseStrategy):
                         _draw_done[0] = True
                         break
             return None  # 继续循环
+
+        # 将 Phase 1 的 LLM 回复加入消息，避免连续两个 user 消息
+        if full_text and full_text.strip():
+            messages.append({"role": "assistant", "content": full_text})
 
         messages.append({"role": "user", "content": override})
         result, msgs = agent_loop_fn(messages, step_callback=_visual_step)
