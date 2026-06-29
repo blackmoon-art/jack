@@ -262,6 +262,85 @@ class Agent:
             f"[Orient] implication={orientation.get('implication', '')[:200]}"
         )
 
+    def _execute_tools_parallel_inline(
+        self,
+        tool_calls: list[dict],
+        messages: list[dict],
+        tool_callback: Optional[Callable] = None,
+    ):
+        """并行执行多个工具，追加结果到 messages，执行批量 Orient。
+
+        这是 BaseStrategy.execute_tools_parallel 的 Agent 端实现，
+        避免对 BaseStrategy 的不必要依赖。
+        """
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        results: dict[int, dict] = {}
+
+        def _run_one(idx: int, tc: dict):
+            try:
+                tmp_msgs: list = []
+                info = self.execute_tool(tc, tmp_msgs, enable_orient=False)
+                if tmp_msgs:
+                    info["_tool_msg"] = tmp_msgs[-1]
+            except Exception as e:
+                logger.warning(f"Parallel tool '{tc.get('name', '?')}' failed: {e}")
+                info = {
+                    "name": tc.get("name", "?"),
+                    "result": f"Error: {e}",
+                    "content": f"Error: {e}",
+                    "success": False,
+                }
+            results[idx] = info
+
+        with ThreadPoolExecutor(max_workers=len(tool_calls)) as executor:
+            futures = [
+                executor.submit(_run_one, i, tc)
+                for i, tc in enumerate(tool_calls)
+            ]
+            for f in as_completed(futures):
+                f.result()
+
+        # 按顺序合并 tool messages 到主 messages list
+        for i in sorted(results.keys()):
+            info = results[i]
+            tc = tool_calls[i]
+            if "_tool_msg" in info:
+                messages.append(info["_tool_msg"])
+            else:
+                content = str(info.get("content") or info.get("result", ""))
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": tc.get("id", ""),
+                    "content": content,
+                })
+            if tool_callback:
+                tool_callback(
+                    info["name"],
+                    tc.get("arguments", {}),
+                    info["result"],
+                    info["success"],
+                )
+
+        # 批量 Orient：合并所有工具结果做一次 Orient
+        if self._current_orient_fn:
+            combined = "\n---\n".join(
+                f"[{results[i]['name']}] {results[i]['result'][:500]}"
+                for i in sorted(results.keys())
+            )
+            enriched = self._enrich_with_orient(combined)
+            if enriched != combined:
+                orient_part = (
+                    enriched[len(combined):].strip()
+                    if enriched.startswith(combined)
+                    else enriched
+                )
+                if orient_part:
+                    messages.append({
+                        "role": "user",
+                        "content": f"[Orient Summary] {orient_part}",
+                    })
+
     # ── 核心循环 (O-O-D-A) ──────────────────────────────
 
     def _agent_loop(self, messages: list, exclude_tools: Optional[list] = None,
@@ -329,8 +408,8 @@ class Agent:
                     tool_callback(info["name"], tc.get("arguments", {}),
                                   info["result"], info["success"])
             else:
-                # 并行执行工具（委托给 BaseStrategy.execute_tools_parallel）
-                self.execute_tools_parallel(
+                # 并行执行工具（内联实现，避免依赖 BaseStrategy）
+                self._execute_tools_parallel_inline(
                     response["tool_calls"], messages,
                     tool_callback=tool_callback)
 
@@ -375,12 +454,12 @@ class Agent:
 
     # ── 消息构建 ────────────────────────────────────────
 
-    _builtin_rules_cache: Optional[str] = None
-
     def _load_builtin_rules(self) -> str:
         """加载内置规则文件（rules/system_rules.md）。缓存避免重复读盘。"""
-        if self._builtin_rules_cache is not None:
-            return self._builtin_rules_cache
+        cache_attr = '_builtin_rules_cache_inst'
+        cache_val = getattr(self, cache_attr, None)
+        if cache_val is not None:
+            return cache_val
         # 搜索项目根目录下的 rules/system_rules.md
         candidates = [
             Path(__file__).parent.parent / "rules" / "system_rules.md",  # 项目根/rules/
@@ -389,12 +468,12 @@ class Agent:
         for p in candidates:
             if p.is_file():
                 try:
-                    self._builtin_rules_cache = p.read_text(encoding="utf-8").strip()
-                    return self._builtin_rules_cache
+                    setattr(self, cache_attr, p.read_text(encoding="utf-8").strip())
+                    return getattr(self, cache_attr)
                 except OSError:
                     pass
-        self._builtin_rules_cache = ""
-        return self._builtin_rules_cache
+        setattr(self, cache_attr, "")
+        return getattr(self, cache_attr)
 
     def _system_prompt(self) -> str:
         # Cache: rules 和 persistent 各自有缓存，这里缓存拼接结果避免重复构建

@@ -3,6 +3,7 @@
 Sleeping fox — Web UI (FastAPI + SSE Streaming)
 """
 
+import atexit
 import json
 import logging
 import os
@@ -36,6 +37,8 @@ DB_PATH = Path(__file__).parent / "sessions.db"
 
 
 _db_local = threading.local()
+_db_all_conns: list[sqlite3.Connection] = []
+_db_lock = threading.Lock()
 
 
 def _get_db() -> sqlite3.Connection:
@@ -45,7 +48,21 @@ def _get_db() -> sqlite3.Connection:
         conn = sqlite3.connect(str(DB_PATH), check_same_thread=False)
         conn.row_factory = sqlite3.Row
         _db_local.conn = conn
+        with _db_lock:
+            _db_all_conns.append(conn)
     return conn
+
+
+@atexit.register
+def _close_all_db():
+    """进程退出时关闭所有线程本地连接，避免资源泄漏。"""
+    with _db_lock:
+        for c in _db_all_conns:
+            try:
+                c.close()
+            except Exception:
+                pass
+        _db_all_conns.clear()
 
 
 def _init_db():
