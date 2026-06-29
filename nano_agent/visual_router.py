@@ -33,7 +33,7 @@ _EXACT_ROUTES: list[tuple[str, str, dict]] = [
     ("回归|拟合|regression|线性回归|最小二乘",
      "generate_chart", {"chart_type": "regression"}),
     # 函数图
-    ("函数图|画函数|函数图像|function plot|画.*y\s*=|画.*f\(x\)",
+    (r"函数图|画函数|函数图像|function plot|画.*y\s*=|画.*f\(x\)",
      "generate_chart", {"chart_type": "function"}),
     # 几何证明
     ("证明.*定理|几何证明|勾股|pythagoras|相似三角形|全等三角形",
