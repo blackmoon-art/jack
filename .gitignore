@@ -32,3 +32,5 @@ web/reflexion_trace.db
 web/session_*/
 reflexion_trace.db
 reflexion_trace.db
+*.db-shm
+*.db-wal
