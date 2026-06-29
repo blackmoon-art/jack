@@ -172,12 +172,19 @@ class Circuit:
                 return c.lower(), "", c
 
             def _draw_branch(branch_parts, start, d):
-                """绘制一条分支（串行），返回末端元件。"""
+                """绘制一条分支（串行），返回末端元件。异常不中断其他分支。"""
                 cur = start
                 for pt in branch_parts:
                     if isinstance(pt, str):
-                        n, v, lbl = _parse_comp(pt)
-                        cur = _place_component(n, v, lbl, cur, d)
+                        try:
+                            n, v, lbl = _parse_comp(pt)
+                            cur = _place_component(n, v, lbl, cur, d)
+                        except Exception as e:
+                            logger.warning(f"Circuit: failed to place '{pt}' in branch: {e}")
+                            # 画一个占位标签，不中断
+                            fallback = elm.Element().label(f"${pt}$").right().at(cur.end if cur else (0, 0))
+                            d.add(fallback)
+                            cur = fallback
                 return cur
 
             last = None
@@ -186,36 +193,56 @@ class Circuit:
                     n, v, lbl = _parse_comp(part_data)
                     last = _place_component(n, v, lbl, last, d)
                 elif part_type == "parallel":
-                    # 并联分支: 从 last.end 分叉，画完各分支后回到主路径
+                    # 并联分支: 从 split_point 分叉，各分支终点汇合到 join_point
                     branches = part_data
                     if not last:
                         last = elm.Line()
                         d.add(last)
                     split_point = last.end
+                    d.add(elm.Dot().at(split_point))  # 分叉点标记
+
                     branch_ends = []
+                    all_branch_endpoints = []  # 收集所有分支末端坐标
                     for bi, branch_str in enumerate(branches):
                         branch_comps = [c.strip() for c in branch_str.split("->") if c.strip()]
-                        # 第一个分支走主路径，其余往上/下分叉
                         if bi == 0:
-                            br_last = _draw_branch(branch_comps, last, d)
+                            # 第一分支：从 split_point 向右画主路径
+                            first_line = elm.Line().right().at(split_point)
+                            d.add(first_line)
+                            br_last = _draw_branch(branch_comps[:-1], first_line, d) if len(branch_comps) > 1 else first_line
+                            # 最后一个组件单独放置
+                            if branch_comps:
+                                n, v, lbl = _parse_comp(branch_comps[-1])
+                                br_last = _place_component(n, v, lbl, br_last, d)
                             branch_ends.append(br_last.end)
                             last = br_last
                         else:
-                            # 分叉点跳线
-                            d.add(elm.Line().at(split_point).down(0.5 * bi))
+                            # 其他分支：从 split_point 向上或向下偏移
+                            offset = 0.6 * bi
+                            d.add(elm.Line().at(split_point).up(offset))
                             d.add(elm.Dot())
-                            # 绘制分支
-                            br_last = elm.Line()
-                            d.add(br_last)
-                            br_last = _draw_branch(branch_comps, None, d)
+                            br_start = elm.Line().right()
+                            d.add(br_start)
+                            br_last = _draw_branch(branch_comps, br_start, d)
                             branch_ends.append(br_last.end)
-                            # 回到主路径
-                            d.add(elm.Line().up(0.5 * bi))
+                            # 汇合线：画回水平线
+                            d.add(elm.Line().down(offset))
                             d.add(elm.Dot())
-                    # 所有分支终点汇聚到一个公共点（简化为最后一个分支的末端）
+
+                    # 汇聚点：取所有分支终点中最右的点，用连线连接
                     if len(branch_ends) > 1:
-                        # 用跳线连接各分支终点
-                        d.add(elm.Line().at(branch_ends[0]))
+                        max_x = max(pt[0] for pt in branch_ends)
+                        main_y = branch_ends[0][1]
+                        join_point = (max_x + 0.5, main_y)
+                        # 将各非主分支的终点连到汇聚点
+                        for bi, end_pt in enumerate(branch_ends):
+                            if bi > 0:
+                                d.add(elm.Line().at(end_pt).to(join_point))
+                                d.add(elm.Dot().at(join_point))
+                        # 汇聚点向右延续，作为下游入口
+                        last_line = elm.Line().right().at(join_point)
+                        d.add(last_line)
+                        last = last_line
 
             ts = datetime.now().strftime("%Y%m%d_%H%M%S")
             filename = f"circuit_{ts}.png"
