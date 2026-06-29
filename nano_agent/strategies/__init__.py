@@ -28,6 +28,6 @@ STRATEGY_REGISTRY: dict[str, type] = {
 __all__ = [
     "BaseStrategy",
     "DefaultStrategy", "ReActStrategy", "PlanExecuteStrategy",
-    "ReflexionStrategy", "TreeOfThoughtStrategy",
+    "ReflexionStrategy", "TreeOfThoughtStrategy", "MetaStrategy",
     "STRATEGY_REGISTRY",
 ]

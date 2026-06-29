@@ -23,7 +23,6 @@ import json
 import logging
 import threading
 from pathlib import Path
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Callable, Optional
 
 from .config import Config
@@ -339,7 +338,14 @@ class Agent:
         logger.warning(f"Max iterations ({self.config.max_iterations}) reached, "
                         f"forcing stop. Last tool: "
                         f"{response.get('tool_calls', [{}])[0].get('name', 'N/A') if response.get('tool_calls') else 'N/A'}")
-        return "I am tired... 😴 Let me rest a bit. Could you try again or rephrase?", messages
+        partial = response["text"][:500].strip() if response and response.get("text") else ""
+        hint = (
+            f"Reached max iterations ({self.config.max_iterations}). "
+            "Try simplifying the task or breaking it into smaller steps."
+        )
+        if partial:
+            return f"{partial}\n\n⚠️ {hint}", messages
+        return hint, messages
 
     # ── Orient 阶段 ─────────────────────────────────────
 

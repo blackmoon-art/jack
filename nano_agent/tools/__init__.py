@@ -20,9 +20,6 @@ from .shell import Shell
 from .search import Search
 from .fetch import Fetch
 from .weather import Weather
-from .stock_quote import StockQuote
-from .stock_chart import StockChart
-from .stock_market import StockMarket
 from .stock_unified import StockUnified
 from .ppt import PPT
 from .chart import Chart

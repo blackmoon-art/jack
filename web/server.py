@@ -35,10 +35,16 @@ app = FastAPI(title="Sleeping fox")
 DB_PATH = Path(__file__).parent / "sessions.db"
 
 
+_db_local = threading.local()
+
+
 def _get_db() -> sqlite3.Connection:
-    """获取 SQLite 连接（每次调用创建新连接，线程安全）。"""
-    conn = sqlite3.connect(str(DB_PATH))
-    conn.row_factory = sqlite3.Row
+    """获取线程本地 SQLite 连接（复用，避免频繁 open/close）。"""
+    conn = getattr(_db_local, "conn", None)
+    if conn is None:
+        conn = sqlite3.connect(str(DB_PATH), check_same_thread=False)
+        conn.row_factory = sqlite3.Row
+        _db_local.conn = conn
     return conn
 
 
@@ -84,12 +90,12 @@ def db_save_message(session_id: str, role: str, content: str):
 def db_load_history(session_id: str) -> list[dict]:
     """从 SQLite 加载会话历史。"""
     try:
-        with _get_db() as conn:
-            rows = conn.execute(
-                "SELECT role, content FROM session_history WHERE session_id = ? ORDER BY id",
-                (session_id,),
-            ).fetchall()
-            return [{"role": r["role"], "content": r["content"]} for r in rows]
+        conn = _get_db()
+        rows = conn.execute(
+            "SELECT role, content FROM session_history WHERE session_id = ? ORDER BY id",
+            (session_id,),
+        ).fetchall()
+        return [{"role": r["role"], "content": r["content"]} for r in rows]
     except Exception as e:
         logger.warning(f"Failed to load session history: {e}")
         return []
@@ -98,12 +104,12 @@ def db_load_history(session_id: str) -> list[dict]:
 def db_clear_session(session_id: str):
     """清除会话历史。"""
     try:
-        with _get_db() as conn:
-            conn.execute(
-                "DELETE FROM session_history WHERE session_id = ?",
-                (session_id,),
-            )
-            conn.commit()
+        conn = _get_db()
+        conn.execute(
+            "DELETE FROM session_history WHERE session_id = ?",
+            (session_id,),
+        )
+        conn.commit()
     except Exception as e:
         logger.warning(f"Failed to clear session: {e}")
 

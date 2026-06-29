@@ -226,13 +226,13 @@ class Search:
 
             if title_m:
                 href = title_m.group(1)
-                title = re.sub(r'<[^>]+>', '', title_m.group(2)).strip().replace("&#x27;", "'").replace("&amp;", "&").replace("&quot;", '"').replace("&lt;", "<").replace("&gt;", ">")
+                title = self._clean_html(title_m.group(2))
                 if not title or len(title) < 3 or href in seen:
                     continue
                 seen.add(href)
                 snippet = ""
                 if snippet_m:
-                    snippet = " — " + re.sub(r'<[^>]+>', '', snippet_m.group(1)).strip()[:200]
+                    snippet = " — " + self._clean_html(snippet_m.group(1))[:200]
                 results.append(f"{len(results)+1}. {title}\n   {href}{snippet}")
         return results
 

@@ -15,31 +15,12 @@ from typing import Optional
 from ..config import Config
 from ..llm import LLM
 from ..tools import ToolRegistry
+from ..visual_router import route_visual, is_visual_request, get_all_visual_keywords
 from .base import BaseStrategy
 
 logger = logging.getLogger("nano_agent.strategies.default")
 
-# ── 画图检测关键词（单一来源）──────────────────────────────
-# 注意：避免单字 '画'（匹配 '动画','漫画','画面'）和 '图'（匹配 '图书馆'）
-# 英文也用词组避免子串匹配（'draw' → 'drawer', 'graph' → 'paragraph'）
-# auto_keywords 也引用这份列表，消除重复维护
-_DRAW_KW = ('画图', '画一', '画个', '画只', '画张', '绘图', '作图', '图表', '生成图',
-            '画流程', '画个流', '画一个', '画一幅',
-            'draw a', 'draw an', 'draw it', 'drawing',
-            'chart', 'diagram', 'graph', 'plot ',
-            '画架', '画饼', '画曲', '画折', '画柱', '画散',
-            '画架构', '画结构', '画系统', '画组件')
-_EDIT_KW = ('重画', '重新画', '改图', '换图', '修改图', '调整图',
-            '换成图', '改成图')
-_ADD_KW  = ('加个图', '添加图', '再画')
-_QA_KW   = ('天气', '新闻', '计算', '翻译', '搜索', '查', '什么是', '怎么',
-            '为什么', 'who', 'what', 'when', 'why', 'how', '解释',
-            'hello', 'hi', 'hey', '你好', '谢谢', '再见', '帮助')
-
-# 所有视觉关键词合并，供 _should_force_visual 和 auto_keywords 复用
-_VISUAL_KW = _DRAW_KW + _EDIT_KW + _ADD_KW
-
-# 视觉工具名称前缀 — 用于动态匹配工具是否属于「画图类」
+# ── 视觉工具名称前缀 — 用于动态匹配工具是否属于「画图类」────────
 _VISUAL_TOOL_PREFIXES = (
     "mermaid", "generate_", "chart", "draw", "circuit", "diagram", "ai_image",
     "stock_chart",
@@ -52,8 +33,8 @@ class DefaultStrategy(BaseStrategy):
     uses_orient = False
     default_params = {}
     auto_keywords = (
-        # 画图关键词直接复用 _VISUAL_KW，不再重复维护
-        *_VISUAL_KW,
+        # 画图关键词：单一来源，从 visual_router 导入
+        *get_all_visual_keywords(),
         # QA / 日常关键词
         '天气', '气温', '温度', '汇率', '股价', '行情', '大盘', '指数',
         '新闻', '热搜', '今天', '查询', '查一下', '搜索', '搜一下',
@@ -68,16 +49,31 @@ class DefaultStrategy(BaseStrategy):
         """
         执行默认策略：
 
+        0. 视觉路由：关键词命中 → 直接构造 tool_call，跳过 LLM 选择
         1. 流式 LLM 调用（带 tools）
         2. 纯文本 → 边生成边推送，检查是否需要画图
         3. LLM 要调工具 → 中断流式，切到 agent_loop 继续
         """
         logger.info(f"[Default] Task: {task}")
         messages = self.build_messages(task, include_memory=True)
-        system_prompt = self._get_system_prompt()
-        schemas = self.tools.get_schemas()
+
+        # ── Phase 0: 视觉工具智能路由 ──
+        route = route_visual(task)
+        if route:
+            tool_name, tool_params = route
+            logger.info(f"[Router] Hit: {task[:40]} -> {tool_name}({tool_params})")
+            self.emit("text", {"text": "🎨 正在生成图表..."})
+            tool_call = {
+                "name": tool_name,
+                "arguments": tool_params,
+                "id": "routed_visual",
+            }
+            self.execute_tool(tool_call, messages)
+            return agent_loop_fn(messages)[0]
 
         # ── Phase 1: 流式调用 LLM ──
+        system_prompt = self._get_system_prompt()
+        schemas = self.tools.get_schemas()
         full_text, tool_calls = self._stream_to_first_decision(
             messages, system_prompt, schemas
         )
@@ -140,29 +136,20 @@ class DefaultStrategy(BaseStrategy):
     def _should_force_visual(task: str, memory=None) -> bool:
         """检测任务是否需要视觉输出（画图/图表）。
 
-        优化：仅当前任务含视觉关键词时才触发，
-        不再因上一轮的视觉请求误判当前非视觉任务。
+        委托给 visual_router.is_visual_request 做关键词判断，
+        额外处理“编辑类任务 + 上一轮视觉”的上下文场景。
         """
-        task_lower = task.lower()
-        is_visual = any(k in task_lower for k in _VISUAL_KW)
-
-        if is_visual:
+        if is_visual_request(task):
             return True
 
-        # 仅在当前任务含“修改/编辑/调整”等词汇且上一轮是视觉任务时，
-        # 才认为这是对已有图表的后续编辑
+        # 编辑类任务：当前轮含编辑词 + 上一轮是视觉任务
+        task_lower = task.lower()
         edit_keywords = ("修改", "编辑", "调整", "重画", "改", "update", "edit", "modify", "redo", "rerun")
-        is_edit = any(k in task_lower for k in edit_keywords)
-
-        if is_edit and memory:
+        if any(k in task_lower for k in edit_keywords) and memory:
             msgs = memory.get_window_messages()
             for m in reversed(msgs):
                 if m["role"] == "user":
-                    prev_visual = any(
-                        k in m["content"].lower()
-                        for k in _VISUAL_KW
-                    )
-                    if prev_visual:
+                    if is_visual_request(m["content"]):
                         return True
                     break
 
