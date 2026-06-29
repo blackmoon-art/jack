@@ -200,6 +200,16 @@ def route_visual(task: str) -> Optional[tuple[str, dict]]:
     return None
 
 
+def _ascii_word_match(kw: str, text: str) -> bool:
+    """Match ASCII keyword, requiring no ASCII letter adjacent.
+
+    Better than \\b for CJK+English mixed text: 'ppt' matches in
+    '做个ppt' but 'pie' won't match inside 'empire'.
+    """
+    pattern = rf"(?<![a-zA-Z]){re.escape(kw)}(?![a-zA-Z])"
+    return re.search(pattern, text) is not None
+
+
 def _exact_match(task_lower: str) -> Optional[tuple[str, dict]]:
     """Layer 1: 精确关键词匹配。英文词加单词边界防子串误匹配。"""
     # waveform 不应匹配时序图请求——即使含 "clock/pulse/timing"
@@ -209,9 +219,10 @@ def _exact_match(task_lower: str) -> Optional[tuple[str, dict]]:
             kw = kw.strip()
             if not kw:
                 continue
-            # 纯 ASCII 关键词：用 \b 单词边界防 "pie"→"empire","bar"→"barber"
+            # 纯 ASCII 关键词：前后不能紧邻 ASCII 字母（防 "pie"→"empire", "bar"→"barber"）
+            # 不用 \b 因为中文字符也是 \w，\b 在 "个ppt" 之间不匹配
             if kw.isascii():
-                if re.search(rf"\b{re.escape(kw)}\b", task_lower):
+                if _ascii_word_match(kw, task_lower):
                     # waveform 排除时序图请求
                     if tool_name == "generate_chart" and params.get("chart_type") == "waveform":
                         if _SEQ_KW.search(task_lower):

@@ -100,40 +100,94 @@ class AdvancedCharts:
 
     @staticmethod
     def draw_function(ax, data_sets, label_sets, is_dark=True):
-        """数学函数绘图 — data[0][0] 是 Python 表达式，例: x**2, sin(x)。"""
-        expr = data_sets[0][0] if data_sets and data_sets[0] else "x"
+        """数学函数绘图 — 支持多函数叠加。
 
-        err = _check_forbidden(expr)
-        if err:
-            raise ValueError(err)
+        data 格式 (经 _parse_multi 拆分后):
+          [['x**2']]               → 单函数
+          [['sin(x)'],['cos(x)']]  → 双函数叠加
+          [['sin(x)'],['-3','3']]  → 函数 + 范围
+        """
+        fg = "#e0e0e0" if is_dark else "#333"
+        colors = ["#7c3aed", "#3b82f6", "#10b981", "f59e0b", "#ef4444"]
 
+        if not data_sets or not data_sets[0]:
+            ax.text(0.5, 0.5, "No function expression provided", transform=ax.transAxes,
+                    ha="center", color=fg)
+            return
+
+        # 收集所有表达式（非数值的 data_set 视为表达式）
+        exprs = []
         x_range = (-5, 5)
-        if len(data_sets) > 1 and data_sets[1]:
-            x_range = (float(data_sets[1][0]) if data_sets[1] else -5,
-                       float(data_sets[1][1]) if len(data_sets[1]) > 1 else 5)
+        for ds in data_sets:
+            if not ds:
+                continue
+            item = ds[0]
+            # 尝试判断是表达式还是数值范围
+            try:
+                float(item)
+                # 纯数字 = 范围参数，不是表达式
+                if len(ds) >= 2:
+                    try:
+                        x_range = (float(ds[0]), float(ds[1]))
+                    except ValueError:
+                        pass
+                continue
+            except ValueError:
+                pass
+            # 去掉可能的前缀
+            expr = item.strip().strip("`'\"")
+            err = _check_forbidden(expr)
+            if err:
+                raise ValueError(err)
+            # 自动补全 np. 前缀 → 裸函数名
+            for fn in ("sin", "cos", "tan", "exp", "log", "sqrt", "abs"):
+                expr = expr.replace(f"np.{fn}", fn)
+            exprs.append(expr)
+            # 如果后面跟着数值，那是范围
+            if len(ds) >= 3:
+                try:
+                    x_range = (float(ds[1]), float(ds[2]))
+                except ValueError:
+                    pass
+
+        if not exprs:
+            exprs = ["x"]
+
         x = np.linspace(x_range[0], x_range[1], 500)
 
-        # 安全沙箱：只暴露纯数值函数，不暴露 np 模块（防属性链逃逸）
+        # 安全沙箱：只暴露纯数值函数，不暴露 np 模块
         safe_globals = {"__builtins__": {}}
         ns = {"x": x, "sin": np.sin, "cos": np.cos, "tan": np.tan,
               "exp": np.exp, "log": np.log, "sqrt": np.sqrt, "abs": np.abs,
               "pi": np.pi, "e": np.e}
 
-        fg = "#e0e0e0" if is_dark else "#333"
+        has_error = False
+        for i, expr in enumerate(exprs):
+            try:
+                y = eval(expr, safe_globals, ns)
+            except Exception as e:
+                logger.warning(f"Function eval failed for '{expr}': {e}")
+                if not has_error:
+                    ax.text(0.5, 0.5, f"Error: cannot evaluate '{expr}'\n{e}",
+                            transform=ax.transAxes, ha="center", color=fg, fontsize=10)
+                    has_error = True
+                continue
 
-        try:
-            y = eval(expr, safe_globals, ns)
-        except Exception as e:
-            logger.warning(f"Function eval failed for '{expr}': {e}")
-            ax.text(0.5, 0.5, f"Error: cannot evaluate '{expr}'\n{e}",
-                    transform=ax.transAxes, ha="center", color=fg, fontsize=10)
-            return
+            color = colors[i % len(colors)]
+            label = f"y = {expr}" if len(exprs) > 1 else None
+            ax.plot(x, y, color=color, linewidth=2, label=label)
 
-        ax.plot(x, y, color="#7c3aed", linewidth=2)
         ax.axhline(y=0, color=fg, linewidth=0.5, alpha=0.5)
         ax.axvline(x=0, color=fg, linewidth=0.5, alpha=0.5)
 
-        is_trig = any(fn in expr.lower() for fn in ('sin', 'cos', 'tan'))
+        # 多函数时显示图例
+        if len(exprs) > 1:
+            ax.legend(facecolor="#222" if is_dark else "#f0f0f0",
+                      edgecolor="#444" if is_dark else "#ccc", labelcolor=fg)
+
+        # 三角函数检测：用所有表达式的合并文本判断
+        all_expr = " ".join(exprs).lower()
+        is_trig = any(fn in all_expr for fn in ('sin', 'cos', 'tan'))
         if is_trig:
             pi = np.pi
             x_min, x_max = x_range
@@ -158,7 +212,8 @@ class AdvancedCharts:
             ax.set_xticks(ticks)
             ax.set_xticklabels(labels, color=fg, fontsize=9)
 
-        ax.set_title(f"y = {expr}", color=fg, fontsize=14, fontweight="bold")
+        title_expr = exprs[0] if len(exprs) == 1 else f"{len(exprs)} functions"
+        ax.set_title(f"y = {title_expr}", color=fg, fontsize=14, fontweight="bold")
         ax.set_xlabel("x", color=fg)
         ax.set_ylabel("y", color=fg)
 
@@ -433,38 +488,50 @@ class AdvancedCharts:
 
     @staticmethod
     def _parse_trajectory(data_sets, label_sets) -> list:
-        """解析梯度下降轨迹点序列。支持 'x,y;x,y' 字符串和数值对格式。"""
+        """解析梯度下降轨迹点序列。
+
+        输入格式（_parse_multi 拆分后）：
+          [['0','5'], ['1','3'], ...]   — 每组一对坐标
+          [['0,5;1,3;2,1']]             — 整体字符串含 ; (原始格式)
+          [[0, 5, 1, 3, ...]]           — 数值列表
+        """
         pts = []
+
+        def _try_pair(a, b):
+            try:
+                return (float(a), float(b))
+            except (ValueError, TypeError):
+                return None
+
         for ds in (data_sets or []):
             for item in ds:
                 if isinstance(item, str) and ";" in item:
+                    # 整体字符串格式: "x,y;x,y;..."
                     for pair in item.split(";"):
                         parts = pair.strip().split(",")
                         if len(parts) >= 2:
-                            try:
-                                pts.append((float(parts[0]), float(parts[1])))
-                            except ValueError:
-                                continue
-                elif isinstance(item, (int, float)):
-                    pass  # 数值格式在循环外处理
-            # 数值对: [x1,y1,x2,y2,...]
-            nums = [float(x) for x in ds if isinstance(x, (int, float))]
-            for i in range(0, len(nums) - 1, 2):
-                pts.append((nums[i], nums[i + 1]))
-        # labels 中的轨迹点
+                            p = _try_pair(parts[0], parts[1])
+                            if p:
+                                pts.append(p)
+            # 每组一对坐标: ['0','5'] 或 ['0', '5', 'extra']
+            if len(ds) >= 2:
+                p = _try_pair(ds[0], ds[1])
+                if p:
+                    pts.append(p)
+        # labels 中的轨迹点（同格式）
         for group in (label_sets or []):
             for item in group:
                 if isinstance(item, str) and ";" in item:
                     for pair in item.split(";"):
                         parts = pair.strip().split(",")
                         if len(parts) >= 2:
-                            try:
-                                pts.append((float(parts[0]), float(parts[1])))
-                            except ValueError:
-                                continue
-            nums = [float(x) for x in group if isinstance(x, (int, float))]
-            for i in range(0, len(nums) - 1, 2):
-                pts.append((nums[i], nums[i + 1]))
+                            p = _try_pair(parts[0], parts[1])
+                            if p:
+                                pts.append(p)
+            if len(group) >= 2:
+                p = _try_pair(group[0], group[1])
+                if p:
+                    pts.append(p)
         return pts
 
     @classmethod
@@ -528,7 +595,12 @@ class AdvancedCharts:
             x_min, x_max = -5.0, 5.0
             y_min, y_max = -5.0, 5.0
             for ds in data_sets[1:]:
-                nums = [float(x) for x in ds if isinstance(x, (int, float))]
+                nums = []
+                for x in ds:
+                    try:
+                        nums.append(float(x))
+                    except (ValueError, TypeError):
+                        pass
                 if len(nums) >= 4:
                     x_min, x_max, y_min, y_max = nums[:4]
                 elif len(nums) >= 2:

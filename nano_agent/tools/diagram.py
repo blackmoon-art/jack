@@ -234,6 +234,12 @@ class Diagram:
         if not code:
             return "Error: Mermaid code is required"
 
+        # 剥离 markdown 围栏 (```mermaid ... ``` 或 ``` ... ```)
+        import re as _re0
+        fence = _re0.match(r'^```+\s*(?:mermaid)?\s*\n(.*?)\n```+\s*$', code, _re0.DOTALL)
+        if fence:
+            code = fence.group(1).strip()
+
         # 状态图 → PlantUML 渲染（布局远优于 Mermaid）
         import re as _re2
         if _re2.match(r'stateDiagram', code, _re2.IGNORECASE):
