@@ -202,6 +202,8 @@ def route_visual(task: str) -> Optional[tuple[str, dict]]:
 
 def _exact_match(task_lower: str) -> Optional[tuple[str, dict]]:
     """Layer 1: 精确关键词匹配。英文词加单词边界防子串误匹配。"""
+    # waveform 不应匹配时序图请求——即使含 "clock/pulse/timing"
+    _SEQ_KW = re.compile(r"时序|sequence|交互|interaction|消息|message")
     for keywords, tool_name, params in _EXACT_ROUTES:
         for kw in keywords.split("|"):
             kw = kw.strip()
@@ -210,9 +212,17 @@ def _exact_match(task_lower: str) -> Optional[tuple[str, dict]]:
             # 纯 ASCII 关键词：用 \b 单词边界防 "pie"→"empire","bar"→"barber"
             if kw.isascii():
                 if re.search(rf"\b{re.escape(kw)}\b", task_lower):
+                    # waveform 排除时序图请求
+                    if tool_name == "generate_chart" and params.get("chart_type") == "waveform":
+                        if _SEQ_KW.search(task_lower):
+                            continue
                     return tool_name, dict(params)
             else:
                 if kw.lower() in task_lower:
+                    # waveform 排除时序图请求
+                    if tool_name == "generate_chart" and params.get("chart_type") == "waveform":
+                        if _SEQ_KW.search(task_lower):
+                            continue
                     return tool_name, dict(params)
     return None
 
