@@ -178,7 +178,7 @@ class AIImage:
         r = subprocess.run(
             ["curl", "-sS", "--connect-timeout", "15", "--max-time", "60",
              "-X", "POST",
-             "https://api.stability.ai/v2beta/stable-image/generate/sd3",
+             "https://api.stability.ai/v2/stable-image/generate/core",
              "-H", f"Authorization: Bearer {api_key}",
              "-H", "Content-Type: application/json",
              "-H", "Accept: image/png",

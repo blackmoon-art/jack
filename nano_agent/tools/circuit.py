@@ -14,12 +14,15 @@ class Circuit:
          "For: circuit schematics, electronic diagrams, wiring layouts. "
          "Components: battery, resistor, capacitor, inductor, diode, LED, transistor, "
          "switch(spst), ground, antenna, opamp, IC labels, wire connections. "
-         "Describe the circuit from left to right, listing each component and its connections.\n"
-         "Example: 'battery(9V) -> switch -> resistor(100Ω) -> LED -> ground'",
+         "Use '->' for series connections. For parallel branches use square brackets:\n"
+         "  '[branch1, branch2, ...]' — branches split from and rejoin at the same nodes.\n"
+         "Example series: 'battery(9V) -> switch -> resistor(100Ω) -> LED -> ground'\n"
+         "Example parallel: 'battery(5V) -> [resistor(1kΩ) -> LED, capacitor(10μF)] -> ground'",
          "draw_circuit",
          {"description": {"type": "string",
-                          "description": "Circuit description: list components left to right with values in (). "
-                                         "Example: 'battery(5V) -> resistor(1kΩ) -> capacitor(10μF) -> ground'"},
+                          "description": "Circuit: series with '->' between components. "
+                                         "Parallel branches with '[branch1, branch2]'. "
+                                         "Example: 'battery(5V) -> [R1(1k) -> LED1, R2(470) -> LED2] -> ground'"},
           "title": {"type": "string", "description": "Circuit title (optional)"}},
          ["description"]),
     ]
@@ -43,8 +46,58 @@ class Circuit:
             if title:
                 d.config(fontsize=14)
 
-            # 解析组件
-            parts = [p.strip() for p in description.split("->") if p.strip()]
+            # 解析组件（支持并联语法 [branch1, branch2]）
+            import re as _re_circuit
+            parts = []
+            remaining = description.strip()
+            while remaining:
+                remaining = remaining.strip()
+                if remaining.startswith("["):
+                    # 并联分支: [a -> b, c -> d]
+                    depth = 0
+                    end = -1
+                    for idx, ch in enumerate(remaining):
+                        if ch == "[":
+                            depth += 1
+                        elif ch == "]":
+                            depth -= 1
+                            if depth == 0:
+                                end = idx
+                                break
+                    if end < 0:
+                        return "Error: unmatched '[' in circuit description"
+                    bracket_content = remaining[1:end]
+                    # 按逗号拆分各分支（只在顶层，不在嵌套括号内拆分）
+                    branches = []
+                    depth2 = 0
+                    current_branch = ""
+                    for ch in bracket_content + ",":
+                        if ch == "[" or ch == "(":
+                            depth2 += 1
+                        elif ch == "]" or ch == ")":
+                            depth2 -= 1
+                        if ch == "," and depth2 == 0:
+                            branches.append(current_branch.strip())
+                            current_branch = ""
+                        else:
+                            current_branch += ch
+                    if current_branch.strip():
+                        branches.append(current_branch.strip())
+                    parts.append(("parallel", branches))
+                    remaining = remaining[end+1:]
+                    if remaining.startswith("->"):
+                        remaining = remaining[2:]
+                elif "->" in remaining:
+                    idx = remaining.index("->")
+                    part = remaining[:idx].strip()
+                    if part:
+                        parts.append(("series", part))
+                    remaining = remaining[idx+2:]
+                else:
+                    part = remaining.strip()
+                    if part:
+                        parts.append(("series", part))
+                    break
             if not parts:
                 return "Error: no components in circuit description"
 
@@ -80,64 +133,89 @@ class Circuit:
                 "dot": (elm.Dot, {}),
             }
 
-            last = None
-            for i, part in enumerate(parts):
-                # 解析: "resistor(100Ω)" 或 "resistor" 或 "battery(5V)"
-                name = part.split("(")[0].strip().lower() if "(" in part else part.strip().lower()
-                value = ""
-                if "(" in part and ")" in part:
-                    value = part[part.index("(")+1:part.index(")")].strip()
-
+            def _place_component(name: str, value: str, label_text: str, last, d):
+                """放置单个元件，返回新的 last。"""
                 comp_cls, kwargs = comp_map.get(name, (None, {}))
                 if comp_cls is None:
-                    logger.warning(f"Unknown component: {name}, using label")
-                    # 未知组件用标签
-                    label = f"${part}$"
                     if last is None:
-                        last = elm.Line().label(label)
+                        el = elm.Line().label(f"${label_text}$")
                     else:
-                        last = elm.Line().label(label).at(last.end)
-                    continue
+                        el = elm.Line().label(f"${label_text}$").right().at(last.end)
+                    d.add(el)
+                    return el
 
                 kwargs = dict(kwargs)
-                label_parts = []
                 if value:
-                    label_parts.append(value)
-                if name.upper() != value.upper() and name not in ("line", "wire", "dot"):
-                    pass  # already labeled by value
-
-                if label_parts:
-                    kwargs["label"] = " ".join(label_parts)
-
+                    kwargs["label"] = value
                 try:
                     if last is None:
-                        # 第一个组件
-                        if name == "ground" or name == "gnd":
-                            elem = comp_cls(**kwargs)
-                            d.add(elem)
-                            last = elem
-                        else:
-                            elem = comp_cls(**kwargs)
-                            d.add(elem)
-                            last = elem
+                        el = comp_cls(**kwargs)
+                    elif name in ("ground", "gnd"):
+                        el = comp_cls(**kwargs).at(last.end)
                     else:
-                        # 根据类型决定放置方式
-                        if name == "ground" or name == "gnd":
-                            elem = comp_cls(**kwargs).at(last.end)
-                            d.add(elem)
-                        else:
-                            elem = comp_cls(**kwargs).right().at(last.end)
-                            d.add(elem)
-                            last = elem
+                        el = comp_cls(**kwargs).right().at(last.end)
+                    d.add(el)
+                    return el
                 except Exception as e:
-                    logger.warning(f"Failed to add component {name}: {e}")
-                    # fallback: draw a box with the component name
-                    try:
-                        elem = elm.Element().label(f"${part}$").right().at(last.end if last else (0, 0))
-                        d.add(elem)
-                        last = elem
-                    except Exception:
-                        continue
+                    logger.warning(f"Failed to add {name}: {e}")
+                    el = elm.Element().label(f"${label_text}$").right().at(last.end if last else (0, 0))
+                    d.add(el)
+                    return el
+
+            def _parse_comp(comp_str: str) -> tuple:
+                """解析 'resistor(100Ω)' → ('resistor', '100Ω', 'resistor(100Ω)')"""
+                c = comp_str.strip()
+                if "(" in c and ")" in c:
+                    n = c.split("(")[0].strip().lower()
+                    v = c[c.index("(")+1:c.index(")")].strip()
+                    return n, v, c
+                return c.lower(), "", c
+
+            def _draw_branch(branch_parts, start, d):
+                """绘制一条分支（串行），返回末端元件。"""
+                cur = start
+                for pt in branch_parts:
+                    if isinstance(pt, str):
+                        n, v, lbl = _parse_comp(pt)
+                        cur = _place_component(n, v, lbl, cur, d)
+                return cur
+
+            last = None
+            for part_type, part_data in parts:
+                if part_type == "series":
+                    n, v, lbl = _parse_comp(part_data)
+                    last = _place_component(n, v, lbl, last, d)
+                elif part_type == "parallel":
+                    # 并联分支: 从 last.end 分叉，画完各分支后回到主路径
+                    branches = part_data
+                    if not last:
+                        last = elm.Line()
+                        d.add(last)
+                    split_point = last.end
+                    branch_ends = []
+                    for bi, branch_str in enumerate(branches):
+                        branch_comps = [c.strip() for c in branch_str.split("->") if c.strip()]
+                        # 第一个分支走主路径，其余往上/下分叉
+                        if bi == 0:
+                            br_last = _draw_branch(branch_comps, last, d)
+                            branch_ends.append(br_last.end)
+                            last = br_last
+                        else:
+                            # 分叉点跳线
+                            d.add(elm.Line().at(split_point).down(0.5 * bi))
+                            d.add(elm.Dot())
+                            # 绘制分支
+                            br_last = elm.Line()
+                            d.add(br_last)
+                            br_last = _draw_branch(branch_comps, None, d)
+                            branch_ends.append(br_last.end)
+                            # 回到主路径
+                            d.add(elm.Line().up(0.5 * bi))
+                            d.add(elm.Dot())
+                    # 所有分支终点汇聚到一个公共点（简化为最后一个分支的末端）
+                    if len(branch_ends) > 1:
+                        # 用跳线连接各分支终点
+                        d.add(elm.Line().at(branch_ends[0]))
 
             ts = datetime.now().strftime("%Y%m%d_%H%M%S")
             filename = f"circuit_{ts}.png"

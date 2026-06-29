@@ -186,8 +186,8 @@ class Chart:
         return groups
 
     def _cleanup(self, max_files: int = 50):
-        """保留最近 max_files 个 PNG，1 小时内的文件不删。"""
-        files = sorted(self.charts_dir.glob("*.png"), key=lambda f: f.stat().st_mtime)
+        """保留最近 max_files 个 chart_*.png，1 小时内的不删。只清理图表文件，不误删其他工具的 PNG。"""
+        files = sorted(self.charts_dir.glob("chart_*.png"), key=lambda f: f.stat().st_mtime)
         now = datetime.now().timestamp()
         grace = 3600
         for f in files[:-max_files]:

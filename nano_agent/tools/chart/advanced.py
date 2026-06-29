@@ -8,14 +8,25 @@ import numpy as np
 logger = logging.getLogger("nano_agent.tools.chart.advanced")
 
 
-# 安全求值用的禁止模式列表
-_FORBIDDEN_FN_PATTERNS = (
-    "__", "import", "exec", "eval", "compile", "open",
+# ── eval 安全沙箱 ───────────────────────────────────────
+# 禁止模式：任何包含这些字符串的表达式都会被拒绝
+# 与 _SafeEval2D._FORBIDDEN_PATTERNS 保持一致，单一数据源
+_FORBIDDEN = (
+    "__", "import ", "exec", "eval", "compile", "open(",
     "getattr", "setattr", "globals", "locals", "vars",
     "dir(", "type(", "breakpoint", "input(", "class",
     "subclass", "mro", "builtin", "system", "popen",
     "os.", "sys.", "subprocess", "__import__",
+    "pdb", "code", "inspect", "ctypes", "signal",
 )
+
+def _check_forbidden(expr: str) -> str:
+    """检查表达式是否包含禁止模式。通过返回空字符串，否则返回错误信息。"""
+    expr_lower = expr.lower()
+    for kw in _FORBIDDEN:
+        if kw in expr_lower:
+            return f"Forbidden pattern '{kw}' in expression"
+    return ""
 
 
 class AdvancedCharts:
@@ -92,21 +103,18 @@ class AdvancedCharts:
         """数学函数绘图 — data[0][0] 是 Python 表达式，例: x**2, sin(x)。"""
         expr = data_sets[0][0] if data_sets and data_sets[0] else "x"
 
-        _FORBIDDEN = ('__', 'import ', 'exec', 'eval', 'compile', 'open(',
-                      'getattr', 'setattr', 'globals', 'locals', 'vars',
-                      'dir(', 'type(', 'breakpoint', 'input(', 'class ',
-                      'subclass', 'mro', 'builtin', 'system', 'popen',
-                      'os.', 'sys.', 'subprocess', '__import__')
-        expr_lower = expr.lower()
-        for kw in _FORBIDDEN:
-            if kw in expr_lower:
-                raise ValueError(f"Forbidden pattern '{kw}' in expression")
+        err = _check_forbidden(expr)
+        if err:
+            raise ValueError(err)
 
         x_range = (-5, 5)
         if len(data_sets) > 1 and data_sets[1]:
             x_range = (float(data_sets[1][0]) if data_sets[1] else -5,
                        float(data_sets[1][1]) if len(data_sets[1]) > 1 else 5)
         x = np.linspace(x_range[0], x_range[1], 500)
+
+        # 安全沙箱：只暴露纯数值函数和 np 数组，禁止属性链逃逸
+        safe_globals = {"__builtins__": {}}
         ns = {"x": x, "np": np, "sin": np.sin, "cos": np.cos, "tan": np.tan,
               "exp": np.exp, "log": np.log, "sqrt": np.sqrt, "abs": np.abs,
               "pi": np.pi, "e": np.e}
@@ -114,7 +122,7 @@ class AdvancedCharts:
         fg = "#e0e0e0" if is_dark else "#333"
 
         try:
-            y = eval(expr, {"__builtins__": {}}, ns)
+            y = eval(expr, safe_globals, ns)
         except Exception as e:
             logger.warning(f"Function eval failed for '{expr}': {e}")
             ax.text(0.5, 0.5, f"Error: cannot evaluate '{expr}'\n{e}",
@@ -423,22 +431,13 @@ class AdvancedCharts:
         "abs": np.abs, "pi": np.pi, "e": np.e,
     }
 
-    _FORBIDDEN_PATTERNS = (
-        "__", "import", "exec", "eval", "compile", "open",
-        "getattr", "setattr", "globals", "locals", "vars",
-        "dir(", "type(", "breakpoint", "input(", "class",
-        "subclass", "mro", "builtin", "system", "popen",
-        "os.", "sys.", "subprocess", "__import__",
-    )
-
     @classmethod
     def _safe_eval_2d(cls, expr: str, X: np.ndarray, Y: np.ndarray) -> np.ndarray | None:
         """安全求值 2D 数学表达式 Z = f(X, Y)。失败返回 None。"""
-        expr_lower = expr.lower()
-        for pat in cls._FORBIDDEN_PATTERNS:
-            if pat in expr_lower:
-                logger.warning(f"Forbidden pattern '{pat}' in contour expression")
-                return None
+        err = _check_forbidden(expr)
+        if err:
+            logger.warning(err)
+            return None
         ns = {"X": X, "Y": Y, "x": X, "y": Y, "np": np, **cls._SAFE_FUNCTIONS}
         try:
             Z = eval(expr, {"__builtins__": {}}, ns)
@@ -486,7 +485,10 @@ class AdvancedCharts:
 
         # 判断数据模式
         first_item = data_sets[0][0] if data_sets and data_sets[0] else ""
-        is_expr_mode = any(c.isalpha() and c not in "XxYyEe" for c in first_item) and ";" not in first_item
+        # 表达式检测：包含数学运算符或非坐标字母 → 表达式模式
+        has_math_ops = any(op in first_item for op in ("**", "*", "+", "-", "/", "^"))
+        has_non_coord_letters = any(c.isalpha() and c not in "XxYyEe" for c in first_item)
+        is_expr_mode = (has_math_ops or has_non_coord_letters) and ";" not in first_item
 
         # 尝试提取目标函数表达式
         expr = None

@@ -84,15 +84,41 @@ class BasicCharts:
     @staticmethod
     def draw_scatter(ax, data_sets, label_sets, is_dark=True):
         x_vals, data_sets, label_sets = BasicCharts._extract_xy(data_sets, label_sets)
-        colors = ["#7c3aed", "#3b82f6", "#10b981"]
-        if len(data_sets) < 2:
+        colors = ["#7c3aed", "#3b82f6", "#10b981", "#f59e0b", "#ef4444", "#ec4899"]
+        shapes = ["o", "s", "^", "D", "v", "p"]
+        # 多系列散点：自动分配不同颜色和形状
+        n_series = len(data_sets)
+        if n_series == 1:
+            # 单系列：X=0,1,2... 或用户指定的 X
             vals = [float(x) for x in data_sets[0]]
             x = x_vals if x_vals and len(x_vals) == len(vals) else range(len(vals))
-            ax.scatter(x, vals, color=colors[0], s=60, alpha=0.8)
+            label = label_sets[0][0] if label_sets and label_sets[0] else None
+            ax.scatter(x, vals, color=colors[0], s=60, alpha=0.8, label=label)
+        elif x_vals is not None:
+            # X 由 labels="x" 或第一组数据指定，其余各系列共用同一个 X
+            for i, ds in enumerate(data_sets):
+                ys = [float(y) for y in ds]
+                if len(x_vals) != len(ys):
+                    continue
+                label = label_sets[i][0] if i < len(label_sets) and label_sets[i] else None
+                ax.scatter(x_vals, ys, color=colors[i % len(colors)],
+                          marker=shapes[i % len(shapes)], s=60, alpha=0.8, label=label)
         else:
-            xs = x_vals if x_vals else [float(x) for x in data_sets[0]]
-            ys = [float(x) for x in data_sets[1]]
-            ax.scatter(xs, ys, color=colors[0], s=60, alpha=0.8)
+            # 双列模式：第一组=X，其余=Y（自动 X=0,1,2... 或两列配对）
+            xs = [float(x) for x in data_sets[0]]
+            for i in range(1, n_series):
+                ys = [float(y) for y in data_sets[i]]
+                if len(xs) != len(ys):
+                    continue
+                label = label_sets[i-1][0] if i-1 < len(label_sets) and label_sets[i-1] else None
+                ax.scatter(xs, ys, color=colors[(i-1) % len(colors)],
+                          marker=shapes[(i-1) % len(shapes)], s=60, alpha=0.8, label=label)
+        # 图例
+        handles, labels_ = ax.get_legend_handles_labels()
+        if handles:
+            lc = "#222" if is_dark else "#f0f0f0"
+            ax.legend(facecolor=lc, edgecolor="#444" if is_dark else "#ccc",
+                     labelcolor="#ccc" if is_dark else "#333")
 
     @staticmethod
     def draw_pie(ax, data_sets, label_sets, is_dark=True):
