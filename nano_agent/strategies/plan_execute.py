@@ -51,8 +51,8 @@ class PlanExecuteStrategy(BaseStrategy):
             return [str(s) for s in steps] if isinstance(steps, list) and steps else [task]
         return [task]
 
-    def evaluate_step(self, task: str, step: str, result: str) -> str:
-        """评估单步执行是否成功。"""
+    def evaluate_step(self, task: str, step: str, result: str) -> dict:
+        """评估单步执行是否成功。返回结构化结果。"""
         messages = [{
             "role": "user",
             "content": (
@@ -60,13 +60,14 @@ class PlanExecuteStrategy(BaseStrategy):
                 f"Original task: {task}\n"
                 f"Step: {step}\n"
                 f"Result: {result[:2000]}\n\n"
-                f"Answer ONLY one word: 'success', 'partial', or 'failed'. "
-                f"If 'partial' or 'failed', briefly explain why in a second sentence."
+                f"Respond with ONLY a JSON object:\n"
+                f'{{"status": "success"|"partial"|"failed", "reason": "brief explanation"}}'
             ),
         }]
-        response = self.llm.chat(messages=messages, tools=[], system="",
-                                  model=self._model_override)
-        return response["text"].strip()
+        data = self._chat_json(messages)
+        if data and isinstance(data, dict) and "status" in data:
+            return data
+        return {"status": "success", "reason": "fallback"}
 
     def revise_plan(self, task: str, remaining_steps: list[str], failure_reason: str) -> list[str]:
         """当某步失败时，修订剩余计划。"""
@@ -112,7 +113,8 @@ class PlanExecuteStrategy(BaseStrategy):
         # 简单任务短路：1 步直接执行
         if len(steps) == 1:
             logger.info("[Plan] Single step — executing directly")
-            result, _ = agent_loop_fn([{"role": "user", "content": task}])
+            messages = self.build_messages(task, include_memory=True)
+            result, _ = agent_loop_fn(messages)
             return result
 
         # Phase 2: Execute with context passing
@@ -128,7 +130,8 @@ class PlanExecuteStrategy(BaseStrategy):
             for i, (s, r) in enumerate(zip(steps[:step_idx], results)):
                 context_parts.append(f"Step {i+1} ({s}): {r[:500]}")
             context_parts.append(f"\nNow execute Step {step_idx+1}: {step}")
-            step_msg = [{"role": "user", "content": "\n".join(context_parts)}]
+            step_msg = self.build_messages("\n".join(context_parts), include_memory=(step_idx == 0))
+            # 只有第一步带记忆，后续步骤已通过 context_parts 传递上下文
 
             step_result, step_messages = agent_loop_fn(step_msg)
             results.append(step_result)
@@ -146,20 +149,22 @@ class PlanExecuteStrategy(BaseStrategy):
 
                 if needs_eval:
                     eval_result = self.evaluate_step(task, step, step_result)
-                    logger.info(f"[Evaluate] {eval_result}")
+                    status = eval_result.get("status", "success")
+                    reason = eval_result.get("reason", "")
+                    logger.info(f"[Evaluate] {status}: {reason}")
 
-                    if eval_result.lower().startswith("failed"):
+                    if status == "failed":
                         remaining = steps[step_idx + 1:]
                         logger.info(f"[Revise] Replanning {len(remaining)} remaining steps...")
-                        revised = self.revise_plan(task, remaining, eval_result)
+                        revised = self.revise_plan(task, remaining, reason)
                         if not revised:
                             logger.info("[Revise] Task impossible, stopping.")
                             break
                         steps = steps[:step_idx + 1] + revised
                         logger.info(f"[Revise] Updated plan ({len(steps)} steps)")
-                    elif eval_result.lower().startswith("partial"):
+                    elif status == "partial":
                         remaining = steps[step_idx + 1:]
-                        revised = self.revise_plan(task, remaining, eval_result)
+                        revised = self.revise_plan(task, remaining, reason)
                         if revised:
                             steps = steps[:step_idx + 1] + revised
                             logger.info(f"[Revise] Adjusted ({len(steps)} steps)")
