@@ -3,7 +3,7 @@
 """
 
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace as _dc_replace
 from pathlib import Path
 from typing import Optional
 
@@ -58,16 +58,16 @@ class Config:
     # ── 记忆 ──
     memory_window: int = int(os.getenv("AGENT_MEMORY_WINDOW", "10"))
     memory_file: Optional[str] = field(
-        default_factory=lambda: os.getenv("AGENT_MEMORY_FILE", "agent_memory.md")
+        default_factory=lambda: os.getenv("AGENT_MEMORY_FILE") or None
     )
     reflection_file: Optional[str] = field(
-        default_factory=lambda: os.getenv("AGENT_REFLECTION_FILE", "reflection_traces.md")
+        default_factory=lambda: os.getenv("AGENT_REFLECTION_FILE") or None
     )
     long_term_db: Optional[str] = field(
-        default_factory=lambda: os.getenv("AGENT_LONG_TERM_DB", "long_term_memory.db")
+        default_factory=lambda: os.getenv("AGENT_LONG_TERM_DB") or None
     )
     reflexion_db: Optional[str] = field(
-        default_factory=lambda: os.getenv("AGENT_REFLEXION_DB", "reflexion_trace.db")
+        default_factory=lambda: os.getenv("AGENT_REFLEXION_DB") or None
     )
 
     # ── 策略参数 ──
@@ -78,6 +78,11 @@ class Config:
 
     # ── Orient 触发阈值 ──
     orient_min_chars: int = int(os.getenv("AGENT_ORIENT_MIN_CHARS", "200"))
+
+    # ── 截断 / 限制 ──
+    bash_output_limit: int = int(os.getenv("AGENT_BASH_OUTPUT_LIMIT", "50000"))
+    memory_max_lines: int = int(os.getenv("AGENT_MEMORY_MAX_LINES", "200"))
+    fetch_max_chars: int = int(os.getenv("AGENT_FETCH_MAX_CHARS", "8000"))
 
     # ── 自定义规则 / 技能 ──
     rules_dir: Optional[str] = field(
@@ -125,3 +130,10 @@ class Config:
     @property
     def is_anthropic(self) -> bool:
         return self.provider in ("anthropic", "claude")
+
+    def with_overrides(self, **changes) -> "Config":
+        """返回修改了指定字段的新 Config 实例（原始不变）。
+
+        per-session 隔离用: session_config = config.with_overrides(work_dir=session_dir)
+        """
+        return _dc_replace(self, **changes)

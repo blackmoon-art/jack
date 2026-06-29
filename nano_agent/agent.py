@@ -21,6 +21,7 @@ O-O-D-A 阶段:
 
 import json
 import logging
+from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Callable, Optional
 
@@ -46,10 +47,18 @@ class Agent:
         self.tools = ToolRegistry(self.config.work_dir, self.config.bash_timeout,
                                    brave_api_key=self.config.brave_api_key or "",
                                    charts_dir=self.config.charts_dir,
-                                   public_mode=self.config.public_mode)
-        self.memory = Memory(self.config.memory_window, self.config.memory_file,
-                              self.config.reflection_file, self.config.long_term_db,
-                              self.config.reflexion_db)
+                                   public_mode=self.config.public_mode,
+                                   bash_output_limit=self.config.bash_output_limit,
+                                   fetch_max_chars=self.config.fetch_max_chars)
+        # 记忆路径：默认放在 work_dir 下，避免 CWD 差异导致多份文件
+        _wd = Path(self.config.work_dir)
+        mem_file = self.config.memory_file or str(_wd / "agent_memory.md")
+        refl_file = self.config.reflection_file or str(_wd / "reflection_traces.md")
+        lt_db = self.config.long_term_db or str(_wd / "long_term_memory.db")
+        rx_db = self.config.reflexion_db or str(_wd / "reflexion_trace.db")
+        self.memory = Memory(self.config.memory_window, mem_file,
+                              refl_file, lt_db, rx_db,
+                              max_lines=self.config.memory_max_lines)
         self.orient_engine = Orient(self.config, self.llm)
         self._strategy_instance = None
         self._last_orientation: Optional[dict] = None  # 最近一次 Orient 结果
@@ -289,9 +298,14 @@ class Agent:
                 defaults[key] = config_val
         return defaults
 
-    def execute_tool(self, tc: dict, messages: list, orient_fn=None):
+    def execute_tool(self, tc: dict, messages: list, orient_fn=None,
+                     enable_orient: bool = True):
         """执行单个工具调用并追加结果到 messages。
-        同时被基类策略使用——基类的同名方法委托到这里，避免两套实现。"""
+
+        orient_fn:       Orient 函数（覆盖 self._current_orient_fn）
+        enable_orient:   是否执行 Orient。策略可按需关闭（如 plan 阶段）。
+                         默认 True 保持向后兼容。
+        """
         name = tc["name"]
         args = tc.get("arguments", {})
         # 兼容 LLM 返回 JSON 字符串参数
@@ -309,18 +323,19 @@ class Agent:
         self._emit("tool_result", {"name": name, "result": result_text, "success": is_success})
         logger.debug(f"[Tool Result] {result_text[:200]}")
 
-        # Orient
-        _fn = orient_fn or self._current_orient_fn
+        # Orient — 可通过 enable_orient 关闭
         content = result_text
-        if _fn:
-            orientation = _fn(result_text)
-            if orientation:
-                self._emit("orient", orientation)
-                content = (
-                    f"{result_text}\n\n"
-                    f"[Orient] interpretation={orientation.get('interpretation', '')[:200]}\n"
-                    f"[Orient] implication={orientation.get('implication', '')[:200]}"
-                )
+        if enable_orient:
+            _fn = orient_fn or self._current_orient_fn
+            if _fn:
+                orientation = _fn(result_text)
+                if orientation:
+                    self._emit("orient", orientation)
+                    content = (
+                        f"{result_text}\n\n"
+                        f"[Orient] interpretation={orientation.get('interpretation', '')[:200]}\n"
+                        f"[Orient] implication={orientation.get('implication', '')[:200]}"
+                    )
 
         messages.append({
             "role": "tool",
@@ -393,13 +408,23 @@ class Agent:
                                   info["result"], info["success"])
             else:
                 # 并行执行：记录结果后在 tool_callback 中回调
+                # 注意：并行执行时 Orient 在 execute_tool 内完成，
+                # 但 execute_tool 会往传入的 messages list 追加 tool message。
+                # 并行场景下不能传主 messages（线程不安全），传临时 list 收集后手动合并。
                 results: dict[int, dict] = {}
                 def _run_one(idx: int, tc: dict):
                     try:
-                        results[idx] = self.execute_tool(tc, [], orient_fn=self._current_orient_fn)
+                        # 用临时 list 收集 execute_tool 追加的 tool message
+                        tmp_msgs: list = []
+                        info = self.execute_tool(tc, tmp_msgs, orient_fn=self._current_orient_fn)
+                        # 提取 execute_tool 追加的 tool message（含 Orient 富化后的 content）
+                        if tmp_msgs:
+                            info["_tool_msg"] = tmp_msgs[-1]
                     except Exception as e:
                         logger.warning(f"Parallel tool '{tc.get('name', '?')}' failed: {e}")
-                        results[idx] = {"name": tc.get("name", "?"), "result": f"Error: {e}", "success": False}
+                        info = {"name": tc.get("name", "?"), "result": f"Error: {e}",
+                                "content": f"Error: {e}", "success": False}
+                    results[idx] = info
 
                 with ThreadPoolExecutor(max_workers=len(response["tool_calls"])) as executor:
                     futures = [executor.submit(_run_one, i, tc)
@@ -410,13 +435,16 @@ class Agent:
                 for i in sorted(results.keys()):
                     info = results[i]
                     tc = response["tool_calls"][i]
-                    # 优先用 content（含 Orient 富化），回退到 raw result
-                    content = str(info.get("content") or info.get("result", ""))
-                    messages.append({
-                        "role": "tool",
-                        "tool_call_id": tc.get("id", ""),
-                        "content": content,
-                    })
+                    # 优先用 execute_tool 生成的 tool message（含 Orient 富化）
+                    if "_tool_msg" in info:
+                        messages.append(info["_tool_msg"])
+                    else:
+                        content = str(info.get("content") or info.get("result", ""))
+                        messages.append({
+                            "role": "tool",
+                            "tool_call_id": tc.get("id", ""),
+                            "content": content,
+                        })
                     if tool_callback:
                         tool_callback(info["name"], tc.get("arguments", {}),
                                       info["result"], info["success"])

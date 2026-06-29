@@ -28,6 +28,12 @@ _QA_KW   = ('天气', '新闻', '计算', '翻译', '搜索', '查', '什么是'
             'hello', 'hi', 'hey', '你好', '谢谢', '再见', '帮助')
 
 
+_DRAW_TOOL_NAMES = (
+    "mermaid_chart", "generate_chart", "draw_circuit",
+    "drawio_diagram", "stock_chart", "ai_image",
+)
+
+
 class DefaultStrategy(BaseStrategy):
     """默认推理策略 — 优先流式，必要时切 agent_loop，智能画图检测。"""
 
@@ -154,12 +160,27 @@ class DefaultStrategy(BaseStrategy):
 
         override = (
             "Call a drawing tool NOW. Context:\n{ctx}\n"
-            "User said: '{task}'. You MUST call one of: mermaid_chart, "
-            "generate_chart, draw_circuit."
+            "User said: '{task}'. You MUST call one of: generate_chart (data/function/geometry), "
+            "mermaid_chart (diagrams/flowcharts), stock_chart (stocks), "
+            "draw_circuit (electronics), ai_image (photos/art), drawio_diagram (complex diagrams)."
         ).format(ctx=ctx.strip(), task=task[:200])
 
+        # step_callback: 画图工具调用后下一次 LLM 响应时终止循环，防止画两次
+        _draw_done = [False]
+
+        def _visual_step(text: str, tool_calls: list) -> str | None:
+            if _draw_done[0]:
+                return text  # 已经画过了，终止循环
+            if tool_calls:
+                for tc in tool_calls:
+                    name = tc.get("function", {}).get("name", "")
+                    if name in _DRAW_TOOL_NAMES:
+                        _draw_done[0] = True
+                        break
+            return None  # 继续循环
+
         messages.append({"role": "user", "content": override})
-        result, msgs = agent_loop_fn(messages)
+        result, msgs = agent_loop_fn(messages, step_callback=_visual_step)
 
         # LLM 还是没调工具 → 代码兜底
         had_tool = any(
@@ -176,23 +197,36 @@ class DefaultStrategy(BaseStrategy):
                     theme="dark",
                 )
                 return result + "\n\n" + img
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(f"Code-draw fallback failed: {e}")
 
         return result
 
     def _execute_tools_parallel(self, tool_calls: list, messages: list):
-        """并行执行多个独立的工具调用。"""
+        """并行执行多个独立的工具调用。
+
+        与 Agent._agent_loop 中的并行逻辑一致：
+        每个工具用临时 list 收集 execute_tool 追加的 tool message（含完整 content），
+        执行完毕后按顺序合并到主 messages list。
+        """
         from concurrent.futures import ThreadPoolExecutor, as_completed
 
         results: dict[int, dict] = {}
 
         def _run_one(idx: int, tc: dict):
             try:
-                results[idx] = self.execute_tool(tc, [])
+                tmp_msgs: list = []
+                info = self.execute_tool(tc, tmp_msgs)
+                # 提取 execute_tool 追加的 tool message（含 Orient 富化后的 content）
+                if tmp_msgs:
+                    info["_tool_msg"] = tmp_msgs[-1]
             except Exception as e:
                 logger.warning(f"Parallel tool '{tc.get('name', '?')}' failed: {e}")
-                results[idx] = {"name": tc.get("name", "?"), "result": f"Error: {e}", "success": False}
+                info = {"name": tc.get("name", "?"),
+                        "result": f"Error: {e}",
+                        "content": f"Error: {e}",
+                        "success": False}
+            results[idx] = info
 
         with ThreadPoolExecutor(max_workers=len(tool_calls)) as executor:
             futures = [executor.submit(_run_one, i, tc) for i, tc in enumerate(tool_calls)]
@@ -202,10 +236,13 @@ class DefaultStrategy(BaseStrategy):
         for i in sorted(results.keys()):
             info = results[i]
             tc = tool_calls[i]
-            # 优先用 content（含 Orient 富化），回退到 raw result
-            content = str(info.get("content") or info.get("result", ""))
-            messages.append({
-                "role": "tool",
-                "tool_call_id": tc.get("id", ""),
-                "content": content,
-            })
+            # 优先用 execute_tool 生成的完整 tool message
+            if "_tool_msg" in info:
+                messages.append(info["_tool_msg"])
+            else:
+                content = str(info.get("content") or info.get("result", ""))
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": tc.get("id", ""),
+                    "content": content,
+                })

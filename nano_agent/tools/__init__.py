@@ -62,7 +62,9 @@ class ToolRegistry:
 
     def __init__(self, work_dir: str, bash_timeout: int = 120,
                  brave_api_key: str = "", charts_dir: str = "",
-                 public_mode: bool = False):
+                 public_mode: bool = False,
+                 bash_output_limit: int = 50000,
+                 fetch_max_chars: int = 8000):
         self.sandbox = PathSandbox(work_dir)
         self.bash_timeout = bash_timeout
         self.work_dir = work_dir
@@ -71,9 +73,10 @@ class ToolRegistry:
 
         # 实例化子模块
         self._file_ops = FileOps(self.sandbox, work_dir, public_mode=public_mode)
-        self._shell = Shell(work_dir, bash_timeout, public_mode=public_mode)
+        self._shell = Shell(work_dir, bash_timeout, public_mode=public_mode,
+                            output_limit=bash_output_limit)
         self._search = Search(brave_api_key=brave_api_key)
-        self._fetch = Fetch()
+        self._fetch = Fetch(max_chars=fetch_max_chars)
         self._weather = Weather()
         self._stock_quote = StockQuote(work_dir, charts_dir=charts_dir)
         self._stock_chart = StockChart(work_dir, charts_dir=charts_dir)
@@ -165,52 +168,3 @@ class ToolRegistry:
         except Exception as e:
             return Observation(tool_name=name, result=f"Error: {type(e).__name__}: {e}",
                                success=False, args=arguments)
-
-    # ── 测试兼容委托（旧测试直接调 registry.write_file() 等）──
-    # TODO: 迁移测试到用 execute() 后可删除
-
-    _DELEGATES = {
-        "bash": "_shell",
-        "read_file": ("_file_ops", "read"),
-        "write_file": ("_file_ops", "write"),
-        "edit_file": ("_file_ops", "edit"),
-        "glob_files": ("_file_ops", "glob"),
-        "grep_files": ("_file_ops", "grep"),
-        "web_search": "_search",
-        "fetch_url": "_fetch",
-        "search_and_fetch": "_search",
-        "calculate": "_shell",
-        "get_weather": "_weather",
-        "stock_info": "_stock_quote",
-        "stock_history": "_stock_quote",
-        "stock_chart": "_stock_chart",
-        "stock_indicators": "_stock_quote",
-        "stock_market": "_stock_market",
-        "stock_market_us": "_stock_market",
-        "create_ppt": "_ppt",
-        "mermaid_chart": "_diagram",
-        "drawio_diagram": "_diagram",
-        "ai_image": "_ai_image",
-        "draw_circuit": "_circuit",
-        "generate_chart": "_chart",
-        "_search_brave": ("_search", "_search_brave"),
-        "_search_duckduckgo": ("_search", "_search_duckduckgo"),
-        "_search_bing": ("_search", "_search_bing"),
-        "_search_searxng": ("_search", "_search_searxng"),
-        "_search_wikipedia": ("_search", "_search_wikipedia"),
-        "_clean_html": ("_search", "_clean_html"),
-        "_parse_stock_symbol": ("_stock_quote", "_parse_stock_symbol"),
-        "_format_history": ("_stock_quote", "_format_history"),
-    }
-
-    def __getattr__(self, name: str):
-        """委托旧方法名到子模块。"""
-        delegate = self._DELEGATES.get(name)
-        if delegate is None:
-            raise AttributeError(f"'ToolRegistry' object has no attribute '{name}'")
-        if isinstance(delegate, tuple):
-            mod_name, method_name = delegate
-            return getattr(getattr(self, mod_name), method_name)
-        else:
-            mod_name = delegate
-            return getattr(getattr(self, mod_name), name)

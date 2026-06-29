@@ -164,10 +164,11 @@ class TestPlanExecuteStrategy(unittest.TestCase):
         self.assertEqual(steps, ["task"])
 
     def test_evaluate_step_returns_status(self):
-        llm = _make_llm([_text_response("success")])
+        llm = _make_llm([_text_response(json.dumps({"status": "success", "reason": "ok"}))])
         s = PlanExecuteStrategy(self.config, llm, self.tools)
         result = s.evaluate_step("task", "step", "step output")
-        self.assertIn("success", result.lower())
+        self.assertIsInstance(result, dict)
+        self.assertEqual(result["status"], "success")
 
     def test_revise_plan_returns_new_steps(self):
         llm = _make_llm([_plan_json(["fixed step x", "fixed step y"])])

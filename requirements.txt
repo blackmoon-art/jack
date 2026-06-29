@@ -13,7 +13,10 @@ akshare>=1.10.0        # A 股历史数据
 yfinance>=0.2.0        # 美股/港股历史数据
 
 # ── 图表工具（可选）──────────────────────────────────
-matplotlib>=3.7.0      # 股票走势图
+matplotlib>=3.7.0      # Chart, stock chart 图表渲染
+numpy>=1.24.0          # Chart 数值计算
+scipy>=1.10.0          # Chart 平滑曲线插值
+schemdraw>=0.19        # Circuit 电路图渲染
 
 # ── Anthropic 后端（可选）────────────────────────────
 # anthropic>=0.40.0

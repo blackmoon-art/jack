@@ -109,10 +109,12 @@ class BaseStrategy:
         return messages
 
     def execute_tool(self, tool_call: dict, messages: list[dict],
-                      orient_fn: Optional[Callable] = None) -> dict:
+                      orient_fn: Optional[Callable] = None,
+                      enable_orient: bool = True) -> dict:
         """委托给 Agent 的统一实现，确保行为一致。"""
         if self._execute_tool:
-            return self._execute_tool(tool_call, messages, orient_fn=orient_fn)
+            return self._execute_tool(tool_call, messages, orient_fn=orient_fn,
+                                     enable_orient=enable_orient)
         # 兜底：依赖注入未完成（直接 new 策略绕过 Agent 时触发）
         logger.warning("_execute_tool not injected — using fallback. "
                        "Create strategy via Agent.run() or pass StrategyContext.")
@@ -132,7 +134,7 @@ class BaseStrategy:
         self.emit("tool_result", {"name": name, "result": result_text, "success": is_success})
         _orient = orient_fn or self._orient_fn
         content = result_text
-        if _orient:
+        if enable_orient and _orient:
             orientation = _orient(result_text)
             if orientation:
                 self.emit("orient", orientation)
@@ -178,4 +180,7 @@ class BaseStrategy:
                     logger.warning(
                         f"JSON parse failed after {max_retries+1} attempts. "
                         f"Response: {text[:200]}")
+                    self.emit("text", {
+                        "text": f"⚠️ LLM 返回格式解析失败，使用降级策略。"
+                    })
         return None

@@ -16,8 +16,8 @@ class Fetch:
          ["url"]),
     ]
 
-    def __init__(self, work_dir: str = ""):
-        pass
+    def __init__(self, work_dir: str = "", max_chars: int = 8000):
+        self.max_chars = max_chars
 
     # ── 公开接口 ──────────────────────────────────────
 
@@ -61,4 +61,4 @@ class Fetch:
         text = re.sub(r"&nbsp;", " ", text)
         text = re.sub(r"&[a-z]+;", " ", text)
         text = re.sub(r"\s+", " ", text).strip()
-        return text[:8000] if text else "(页面无文本内容)"
+        return text[:self.max_chars] if text else "(页面无文本内容)"

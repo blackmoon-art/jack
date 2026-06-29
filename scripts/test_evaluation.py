@@ -10,7 +10,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import unittest
 from unittest.mock import patch, MagicMock
 
-from nano_agent.evaluation import Benchmark, TaskCase, TaskResult, EvalReport
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from scripts.evaluation import Benchmark, TaskCase, TaskResult, EvalReport
 from nano_agent.config import Config
 
 
@@ -150,7 +154,7 @@ class TestBenchmark(unittest.TestCase):
 class TestBenchmarkRun(unittest.TestCase):
     """测试 Benchmark.run() 使用 mock Agent。"""
 
-    @patch("nano_agent.evaluation.Agent")
+    @patch("scripts.evaluation.Agent")
     def test_run_single_strategy(self, MockAgent):
         # 配置 mock agent
         mock_instance = MockAgent.return_value
@@ -170,7 +174,7 @@ class TestBenchmarkRun(unittest.TestCase):
         # 56877 在 response 中 → 通过
         self.assertTrue(reports[0].results[0].success)
 
-    @patch("nano_agent.evaluation.Agent")
+    @patch("scripts.evaluation.Agent")
     def test_run_multiple_strategies(self, MockAgent):
         mock_instance = MockAgent.return_value
         mock_instance.run.return_value = "56877"
@@ -186,7 +190,7 @@ class TestBenchmarkRun(unittest.TestCase):
         )
         self.assertEqual(len(reports), 2)
 
-    @patch("nano_agent.evaluation.Agent")
+    @patch("scripts.evaluation.Agent")
     def test_run_with_error(self, MockAgent):
         mock_instance = MockAgent.return_value
         mock_instance.run.side_effect = Exception("API error")

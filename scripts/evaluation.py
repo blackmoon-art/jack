@@ -26,8 +26,8 @@ from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Optional
 
-from .config import Config
-from .agent import Agent
+from nano_agent.config import Config
+from nano_agent.agent import Agent
 
 logger = logging.getLogger("nano_agent.evaluation")
 

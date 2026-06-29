@@ -43,10 +43,12 @@ class Shell:
          ["expression"]),
     ]
 
-    def __init__(self, work_dir: str, bash_timeout: int = 120, public_mode: bool = False):
+    def __init__(self, work_dir: str, bash_timeout: int = 120, public_mode: bool = False,
+                 output_limit: int = 50000):
         self.work_dir = work_dir
         self.bash_timeout = bash_timeout
         self.public_mode = public_mode
+        self.output_limit = output_limit
         self._safe_prefixes = _PUBLIC_SAFE_COMMANDS_TUPLE if public_mode else _SAFE_COMMAND_PREFIXES_TUPLE
         # 自动检测 venv，把 .venv/bin 加到 PATH
         self._env = os.environ.copy()
@@ -107,10 +109,56 @@ class Shell:
                 args={"command": command},
             )
 
+        # 危险内部命令黑名单：即使白名单命令也阻止危险的二级执行
+        _DANGEROUS_INNER = (
+            # 代码执行 — 可绕过沙箱
+            "python -c", "python3 -c", "python -C", "python3 -C",
+            "node -e", "perl -e", "ruby -e",
+            # 提权
+            "sudo", "su ", "doas ",
+            # 管道执行 / 远程脚本执行
+            "curl |", "curl|", "wget |", "wget|",
+            "| bash", "|sh", "| zsh", "| python", "|python",
+            "> /dev/tcp", "> /dev/udp",
+            # 反弹 shell 模式
+            "/dev/tcp/", "/dev/udp/",
+            # 包安装（可能引入恶意包）
+            "pip install", "pip3 install", "pip3.12 install",
+            "npm install", "npm i ", "npx ",
+            "cargo install",
+            # crontab 篡改
+            "crontab",
+            # 写入系统路径
+            "> /etc/", "> /var/", "> /sys/", "> /proc/",
+            ">> /etc/", ">> /var/", ">> /sys/", ">> /proc/",
+        )
+        cmd_lower = command.lower()
+        for danger in _DANGEROUS_INNER:
+            if danger in cmd_lower:
+                return Observation.error(
+                    "bash",
+                    f"Blocked: dangerous pattern '{danger.strip()}' detected in command",
+                    args={"command": command},
+                )
+
         # 路径沙箱：禁止访问工作目录外部
         path_error = self._check_path_sandbox(command)
         if path_error:
             return Observation.error("bash", path_error, args={"command": command})
+
+        # 禁止写入工作目录外的文件（curl -o /tmp/x 等）
+        _write_outside = (
+            "-o /tmp/", "-o /var/", "-o /etc/", "-o /Users/", "-o /home/",
+            "--output /tmp/", "--output /var/", "--output /etc/",
+            "--output /Users/", "--output /home/",
+        )
+        for pattern in _write_outside:
+            if pattern in command:
+                return Observation.error(
+                    "bash",
+                    f"Blocked: writing to path outside workspace ('{pattern})",
+                    args={"command": command},
+                )
 
         try:
             r = subprocess.run(
@@ -123,7 +171,7 @@ class Shell:
                 env=self._env,
             )
             out = (r.stdout + r.stderr).strip()
-            text = out[:50000] if out else "(no output)"
+            text = out[:self.output_limit] if out else "(no output)"
             return Observation(
                 tool_name="bash",
                 result=text,
@@ -131,7 +179,7 @@ class Shell:
                 args={"command": command},
                 metadata={
                     "exit_code": r.returncode,
-                    "truncated": len(out) > 50000,
+                    "truncated": len(out) > self.output_limit,
                     "output_length": len(out),
                 },
             )

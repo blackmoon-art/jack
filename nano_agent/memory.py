@@ -368,7 +368,8 @@ class Memory:
     def __init__(self, window_size: int = 10, file_path: Optional[str] = None,
                  reflection_path: Optional[str] = None,
                  long_term_db: Optional[str] = None,
-                 reflexion_db: Optional[str] = None):
+                 reflexion_db: Optional[str] = None,
+                 max_lines: int = 200):
         """
         Args:
             window_size:    会话窗口保留的对话轮数
@@ -376,13 +377,19 @@ class Memory:
             reflection_path: 反思记忆文件路径 (None 则禁用)
             long_term_db:   长期记忆 SQLite 路径 (None 则禁用)
             reflexion_db:   Reflexion 轨迹 SQLite 路径 (None 则禁用)
+            max_lines:      持久/反思记忆文件最大行数
         """
         self.window_size = window_size
         self.file_path = file_path
         self.reflection_path = reflection_path
+        self.max_lines = max_lines
         self._messages: list[dict] = []  # [{"role": str, "content": str}]
         self._long_term = LongTermMemory(long_term_db) if long_term_db else None
         self._reflexion_trace = ReflexionTrace(reflexion_db) if reflexion_db else None
+
+        # Persistent memory cache: avoid re-reading file on every agent_loop iteration
+        self._persistent_cache: Optional[str] = None
+        self._persistent_dirty: bool = True
 
     # ── 1. Working Memory (窗口) ────────────────────────
 
@@ -411,13 +418,18 @@ class Memory:
     # ── 2. Persistent Memory (文件) ─────────────────────
 
     def load_persistent(self) -> str:
-        """从文件加载持久记忆（最近 200 行）。"""
-        if not self.file_path or not os.path.exists(self.file_path):
+        """从文件加载持久记忆（最近 N 行）。带缓存，避免每轮读磁盘。"""
+        if not self.file_path:
             return ""
+        if not self._persistent_dirty and self._persistent_cache is not None:
+            return self._persistent_cache
         try:
             content = Path(self.file_path).read_text(encoding="utf-8")
             lines = content.split("\n")
-            return "\n".join(lines[-200:]) if len(lines) > 200 else content
+            result = "\n".join(lines[-self.max_lines:]) if len(lines) > self.max_lines else content
+            self._persistent_cache = result
+            self._persistent_dirty = False
+            return result
         except Exception as e:
             logger.warning(f"Failed to load persistent memory: {e}")
             return ""
@@ -428,7 +440,8 @@ class Memory:
         # 写入文件持久记忆
         if self.file_path:
             entry = f"\n## {timestamp}\n**Task:** {task}\n**Result:** {result[:500]}\n"
-            self._append_with_rotation(self.file_path, entry, max_lines=200)
+            self._append_with_rotation(self.file_path, entry, max_lines=self.max_lines)
+            self._persistent_dirty = True  # invalidate cache
         # 写入长期记忆（全文检索）
         if self._long_term:
             self._long_term.add(task, result)
@@ -436,13 +449,13 @@ class Memory:
     # ── 3. Reflection Memory (文件) ─────────────────────
 
     def load_reflections(self) -> str:
-        """加载反思记忆（最近 200 行）。供策略注入上下文。"""
+        """加载反思记忆（最近 N 行）。供策略注入上下文。"""
         if not self.reflection_path or not os.path.exists(self.reflection_path):
             return ""
         try:
             content = Path(self.reflection_path).read_text(encoding="utf-8")
             lines = content.split("\n")
-            return "\n".join(lines[-200:]) if len(lines) > 200 else content
+            return "\n".join(lines[-self.max_lines:]) if len(lines) > self.max_lines else content
         except Exception as e:
             logger.warning(f"Failed to load reflection memory: {e}")
             return ""
@@ -459,7 +472,7 @@ class Memory:
             f"**Score:** {eval_result.get('score', 'N/A')}\n"
             f"**Reflection:** {reflection[:500]}\n"
         )
-        self._append_with_rotation(self.reflection_path, entry, max_lines=200)
+        self._append_with_rotation(self.reflection_path, entry, max_lines=self.max_lines)
 
     # ── 4. Long-term Memory (SQLite FTS5) ───────────────
 

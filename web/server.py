@@ -53,7 +53,8 @@ def _db_execute_with_retry(conn, sql, params=(), max_retries=3):
 
 def _init_db():
     """初始化数据库表，启用 WAL 模式提升并发性能。"""
-    with _get_db() as conn:
+    conn = _get_db()
+    try:
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("""
             CREATE TABLE IF NOT EXISTS session_history (
@@ -68,6 +69,9 @@ def _init_db():
             CREATE INDEX IF NOT EXISTS idx_session_id
             ON session_history(session_id)
         """)
+        conn.commit()
+    finally:
+        conn.close()
 
 
 _init_db()
@@ -168,6 +172,27 @@ def check_daily_limit(session_id: str) -> str:
 STATIC_DIR = Path(__file__).parent / "static"
 
 
+def _cleanup_session_files(session_id: str):
+    """清理 session 的磁盘数据：工作目录 + DB 历史。
+    在 _sessions_lock 内调用（调用者已持锁）。
+    """
+    import shutil
+    # 1. 删除 session 工作目录
+    base_work_dir = Config().work_dir
+    session_dir = os.path.join(base_work_dir, f"session_{session_id}")
+    if os.path.isdir(session_dir):
+        try:
+            shutil.rmtree(session_dir)
+            logger.info(f"Cleaned session dir: {session_dir}")
+        except Exception as e:
+            logger.warning(f"Failed to clean session dir {session_dir}: {e}")
+    # 2. 删除 DB 历史
+    try:
+        db_clear_session(session_id)
+    except Exception as e:
+        logger.warning(f"Failed to clean session DB history {session_id}: {e}")
+
+
 def _evict_sessions():
     """淘汰过期或超量的 session（需在 _sessions_lock 内调用）。"""
     now = _time.time()
@@ -177,6 +202,7 @@ def _evict_sessions():
         if now - s.get("last_access", 0) > _SESSION_TTL_SECONDS
     ]
     for sid in expired:
+        _cleanup_session_files(sid)
         del sessions[sid]
         logger.info(f"Evicted expired session {sid}")
     # 2. 如果还超量，按 LRU 淘汰
@@ -185,35 +211,57 @@ def _evict_sessions():
             sessions.items(), key=lambda x: x[1].get("last_access", 0)
         )
         for sid, _ in sorted_sessions[:len(sessions) - _MAX_SESSIONS]:
+            _cleanup_session_files(sid)
             del sessions[sid]
             logger.info(f"Evicted LRU session {sid}")
 
 
 def get_or_create_session(session_id: Optional[str] = None) -> str:
-    """获取或创建会话。新 session 或内存中不存在时从 DB 恢复历史。线程安全。"""
+    """获取或创建会话。新 session 或内存中不存在时从 DB 恢复历史。线程安全。
+
+    Agent 构建在锁外完成（涉及 DB 初始化、工具注册，耗时不可控），
+    锁内只做 dict 读写，避免阻塞并发请求。
+    """
+    # Fast path: session 已存在，锁内更新时间戳即可
     with _sessions_lock:
         if session_id and session_id in sessions:
             sessions[session_id]["last_access"] = _time.time()
             return session_id
-        # 淘汰后再创建
+
+    # 确定新 session ID
+    new_id = session_id or uuid.uuid4().hex[:12]
+
+    # Check-then-create: 可能其他线程已经创建了同一个 session
+    with _sessions_lock:
+        if new_id in sessions:
+            sessions[new_id]["last_access"] = _time.time()
+            return new_id
         _evict_sessions()
-        new_id = session_id or uuid.uuid4().hex[:12]
-        if new_id not in sessions:
-            history = db_load_history(new_id)
-            config = Config()
-            # 会话级 work_dir 隔离：每个用户在 workspace 下有自己的子目录
-            import os as _os
-            session_dir = _os.path.join(config.work_dir, f"session_{new_id}")
-            _os.makedirs(session_dir, exist_ok=True)
-            config.work_dir = session_dir
-            sessions[new_id] = {
-                "agent": Agent(config),
-                "history": history,
-                "last_access": _time.time(),
-            }
-            if history:
-                logger.info(f"Restored session {new_id}: {len(history)} messages from DB")
-        return new_id
+
+    # ── 锁外构建 Agent（耗时操作）──
+    history = db_load_history(new_id)
+    base_config = Config()
+    import os as _os
+    session_dir = _os.path.join(base_config.work_dir, f"session_{new_id}")
+    _os.makedirs(session_dir, exist_ok=True)
+    # 用 with_overrides 创建隔离配置，不修改原始 Config
+    session_config = base_config.with_overrides(work_dir=session_dir)
+    agent = Agent(session_config)
+
+    # ── 锁内写入 dict ──
+    with _sessions_lock:
+        # Double-check: 可能其他线程已经创建了
+        if new_id in sessions:
+            sessions[new_id]["last_access"] = _time.time()
+            return new_id
+        sessions[new_id] = {
+            "agent": agent,
+            "history": history,
+            "last_access": _time.time(),
+        }
+        if history:
+            logger.info(f"Restored session {new_id}: {len(history)} messages from DB")
+    return new_id
 
 
 # ── SSE 流式响应 ──────────────────────────────────────
@@ -237,6 +285,7 @@ def agent_stream(task: str, strategy: str, session_id: str,
 
     # 在后台线程运行 agent
     last_item = None
+    cancelled = {"value": False}  # mutable flag for thread
 
     def run():
         nonlocal last_item
@@ -244,40 +293,52 @@ def agent_stream(task: str, strategy: str, session_id: str,
             agent.run(task, strategy=strategy, on_event=on_event,
                       model_override=model_override)
         except Exception as e:
-            logger.exception(f"Agent run failed: {e}")
-            last_item = {"event": "error", "data": {"text": str(e)}}
-            queue.put(last_item)
+            if not cancelled["value"]:
+                logger.exception(f"Agent run failed: {e}")
+                last_item = {"event": "error", "data": {"text": str(e)}}
+                queue.put(last_item)
 
-    thread = Thread(target=run)
+    thread = Thread(target=run, daemon=True)
     thread.start()
 
-    # 流式发送事件（带心跳，防止浏览器超时断开）
-    last_heartbeat = _time.time()
-    while True:
-        try:
-            item = queue.get(timeout=3)  # 3 秒超时，没事件就发心跳
-            last_item = item
-            last_heartbeat = _time.time()
-            if item is None:
-                break
-            event_type = item["event"]
-            data = item["data"]
-            yield f"event: {event_type}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
-            if event_type in ("done", "error"):
-                break
-        except Empty:  # queue.Empty → 超时了，LLM 还在想
-            if _time.time() - last_heartbeat > 2.5:
-                yield ": heartbeat\n\n"  # SSE 注释，浏览器忽略但保持连接
+    try:
+        # 流式发送事件（带心跳，防止浏览器超时断开）
+        last_heartbeat = _time.time()
+        while True:
+            try:
+                item = queue.get(timeout=3)
+                last_item = item
                 last_heartbeat = _time.time()
+                if item is None:
+                    break
+                event_type = item["event"]
+                data = item["data"]
+                yield f"event: {event_type}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+                if event_type in ("done", "error"):
+                    break
+            except Empty:
+                if _time.time() - last_heartbeat > 2.5:
+                    yield ": heartbeat\n\n"
+                    last_heartbeat = _time.time()
+    except GeneratorExit:
+        # 客户端断开连接
+        cancelled["value"] = True
+        logger.info(f"Client disconnected from session {session_id}")
+    finally:
+        # 确保线程结束，避免泄露
+        thread.join(timeout=5)
+        if thread.is_alive():
+            logger.warning(f"Agent thread still alive for session {session_id} after disconnect")
 
-    thread.join()
-    # 记录历史（内存 + SQLite）
-    sessions[session_id]["history"].append({"role": "user", "content": task})
-    db_save_message(session_id, "user", task)
-    if last_item and last_item.get("event") == "done":
-        reply = last_item["data"]["text"]
-        sessions[session_id]["history"].append({"role": "assistant", "content": reply})
-        db_save_message(session_id, "assistant", reply)
+        # 记录历史（内存 + SQLite）— 仅在有结果时
+        if last_item and last_item.get("event") == "done":
+            reply = last_item["data"]["text"]
+            with _sessions_lock:
+                if session_id in sessions:
+                    sessions[session_id]["history"].append({"role": "user", "content": task})
+                    sessions[session_id]["history"].append({"role": "assistant", "content": reply})
+            db_save_message(session_id, "user", task)
+            db_save_message(session_id, "assistant", reply)
 
 
 # ── API 路由 ──────────────────────────────────────────
@@ -330,11 +391,24 @@ async def get_history(session_id: str):
 
 @app.delete("/api/sessions/{session_id}")
 async def clear_session(session_id: str):
-    """Clear session memory."""
+    """Clear session memory, history, and working directory."""
+    import shutil
+
     with _sessions_lock:
         if session_id in sessions:
             sessions[session_id]["agent"].clear_memory()
             sessions[session_id]["history"] = []
+            work_dir = Path(sessions[session_id]["agent"].config.work_dir)
+        else:
+            work_dir = None
+
+    # 清理磁盘：session 工作目录 + DB 历史
+    if work_dir and work_dir.is_dir():
+        try:
+            shutil.rmtree(work_dir)
+            logger.info(f"Cleaned session dir: {work_dir}")
+        except Exception as e:
+            logger.warning(f"Failed to clean session dir {work_dir}: {e}")
     db_clear_session(session_id)
     return {"ok": True}
 

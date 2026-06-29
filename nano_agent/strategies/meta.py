@@ -154,6 +154,7 @@ class MetaStrategy(BaseStrategy):
         best_result = ""
         best_score = -1
         current_strategy = strategy_name
+        last_eval = {"status": "unknown", "score": 0, "issues": [], "suggestion": ""}
 
         for attempt in range(self.max_retries):
             logger.info(f"[Meta Attempt {attempt+1}/{self.max_retries}] strategy={current_strategy}")

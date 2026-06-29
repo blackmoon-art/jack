@@ -268,10 +268,12 @@ class Chart:
         colors = ["#7c3aed", "#3b82f6", "#10b981", "#f59e0b", "#ef4444", "#ec4899", "#14b8a6"]
         vals = [float(x) for x in data_sets[0]]
         labels = label_sets[0] if label_sets else None
+        text_color = "#e0e0e0" if is_dark else "#333"
+        bg = "#1a1a2e" if is_dark else "#ffffff"
         ax.pie(vals, labels=labels, colors=colors[:len(vals)],
-               autopct="%1.1f%%", textprops={"color": "#e0e0e0", "fontsize": 11},
+               autopct="%1.1f%%", textprops={"color": text_color, "fontsize": 11},
                startangle=90)
-        ax.set_facecolor("#1a1a2e")
+        ax.set_facecolor(bg)
 
     def _draw_histogram(self, ax, data_sets, label_sets, is_dark=True):
         colors = ["#7c3aed", "#3b82f6"]
@@ -377,15 +379,56 @@ class Chart:
         ns = {"x": x, "np": np, "sin": np.sin, "cos": np.cos, "tan": np.tan,
               "exp": np.exp, "log": np.log, "sqrt": np.sqrt, "abs": np.abs,
               "pi": np.pi, "e": np.e}
+
+        fg = "#e0e0e0" if is_dark else "#333"
+
         try:
             y = eval(expr, {"__builtins__": {}}, ns)
-        except Exception:
-            ns["x"] = np.linspace(x_range[0], x_range[1], 500)
-            y = eval(expr, {"__builtins__": {}}, ns)
-        fg = "#e0e0e0" if is_dark else "#333"
+        except Exception as e:
+            logger.warning(f"Function eval failed for '{expr}': {e}")
+            ax.text(0.5, 0.5, f"Error: cannot evaluate '{expr}'\n{e}",
+                    transform=ax.transAxes, ha="center", color=fg, fontsize=10)
+            return
+
         ax.plot(x, y, color="#7c3aed", linewidth=2)
         ax.axhline(y=0, color=fg, linewidth=0.5, alpha=0.5)
         ax.axvline(x=0, color=fg, linewidth=0.5, alpha=0.5)
+
+        # 三角函数：x 轴用 π 刻度
+        is_trig = any(fn in expr_lower for fn in ('sin', 'cos', 'tan'))
+        if is_trig:
+            pi = np.pi
+            # 在 x 范围内生成 π/2 的刻度点
+            x_min, x_max = x_range
+            ticks = []
+            labels = []
+            n_start = int(np.floor(x_min / (pi / 2)))
+            n_end = int(np.ceil(x_max / (pi / 2)))
+            for n in range(n_start, n_end + 1):
+                val = n * pi / 2
+                if x_min <= val <= x_max:
+                    ticks.append(val)
+                    # 简化标签: 0, π/2, π, 3π/2, 2π, -π/2, -π ...
+                    num, den = n, 2
+                    if n == 0:
+                        labels.append("0")
+                    elif n == 1:
+                        labels.append("π/2")
+                    elif n == -1:
+                        labels.append("-π/2")
+                    elif n % 2 == 0:
+                        half = n // 2
+                        if half == 1:
+                            labels.append("π")
+                        elif half == -1:
+                            labels.append("-π")
+                        else:
+                            labels.append(f"{half}π")
+                    else:
+                        labels.append(f"{n}π/2")
+            ax.set_xticks(ticks)
+            ax.set_xticklabels(labels, color=fg, fontsize=9)
+
         ax.set_title(f"y = {expr}", color=fg, fontsize=14, fontweight="bold")
         ax.set_xlabel("x", color=fg)
         ax.set_ylabel("y", color=fg)
@@ -634,18 +677,47 @@ class Chart:
         import numpy as np
         fg = "#e0e0e0" if is_dark else "#333"
 
-        # 解析数据点
+        # 解析数据点：三种格式
+        #   "x1,y1;x2,y2;x3,y3" — (x,y) 对（_parse_multi 已拆为每组2元素）
+        #   "x1,x2,x3;y1,y2,y3" — x 系列;y 系列（正好2组等长）
+        #   "y1,y2,y3" 或 "y1;y2;y3" — 纯 y 值, 自动 x=0,1,2...
         pts = []
-        for ds in data_sets:
-            for item in ds:
-                parts = item.split(",")
-                if len(parts) >= 2:
-                    pts.append((float(parts[0]), float(parts[1])))
+        # 过滤空组，避免 IndexError
+        groups = [ds for ds in data_sets if ds]
+        if not groups:
+            ax.text(0.5, 0.5, "Need ≥2 data points for regression", transform=ax.transAxes,
+                    ha="center", color=fg)
+            return
 
-        # 如果只有一组逗号数值，当作 y 值，自动生成 x=0,1,2...
-        if not pts and data_sets and data_sets[0]:
-            ys = [float(x) for x in data_sets[0]]
-            pts = [(i, y) for i, y in enumerate(ys)]
+        # 格式检测
+        all_pairs = all(len(ds) == 2 for ds in groups)
+        two_series = len(groups) == 2 and not all_pairs
+
+        if all_pairs:
+            # (x,y) 对格式
+            for ds in groups:
+                try:
+                    pts.append((float(ds[0]), float(ds[1])))
+                except ValueError:
+                    continue
+        elif two_series and len(groups[0]) == len(groups[1]):
+            # x 系列;y 系列 — 按索引配对
+            for x_val, y_val in zip(groups[0], groups[1]):
+                try:
+                    pts.append((float(x_val), float(y_val)))
+                except ValueError:
+                    continue
+        else:
+            # 纯 y 值 — 压平所有值，自动生成 x=0,1,2...
+            all_vals = []
+            for ds in groups:
+                for item in ds:
+                    try:
+                        all_vals.append(float(item))
+                    except ValueError:
+                        continue
+            if all_vals:
+                pts = [(i, y) for i, y in enumerate(all_vals)]
 
         if len(pts) < 2:
             ax.text(0.5, 0.5, "Need ≥2 data points for regression", transform=ax.transAxes,
@@ -657,7 +729,12 @@ class Chart:
 
         # 最小二乘: y = a + bx
         n = len(xs)
-        b = (n * (xs * ys).sum() - xs.sum() * ys.sum()) / (n * (xs * xs).sum() - xs.sum() ** 2)
+        denom = n * (xs * xs).sum() - xs.sum() ** 2
+        if denom == 0:
+            ax.text(0.5, 0.5, "Cannot fit regression: all x values identical", transform=ax.transAxes,
+                    ha="center", color=fg)
+            return
+        b = (n * (xs * ys).sum() - xs.sum() * ys.sum()) / denom
         a = (ys.sum() - b * xs.sum()) / n
 
         # R²
@@ -686,10 +763,13 @@ class Chart:
     # ── 清理 ──
 
     def _cleanup(self, max_files: int = 50):
-        """保留最近 max_files 个图表文件。"""
+        """保留最近 max_files 个 PNG，1 小时内的文件不删（保护其他工具的图）。"""
         files = sorted(self.charts_dir.glob("*.png"), key=lambda f: f.stat().st_mtime)
+        now = datetime.now().timestamp()
+        grace = 3600  # 1 小时保护期
         for f in files[:-max_files]:
-            try:
-                f.unlink()
-            except OSError:
-                pass
+            if now - f.stat().st_mtime > grace:
+                try:
+                    f.unlink()
+                except OSError:
+                    pass
