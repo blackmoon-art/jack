@@ -418,36 +418,88 @@ LLM 看到 `"Error: Timeout"` 会自己调整策略，而不是整个 Agent Loop
 
 短结果 (<200字符) 跳过 Orient 以节省 token。
 
-### 决策 6：Memory 三层门面设计
+### 决策 6：Memory 四层门面设计
 
 ```
 窗口记忆: 保留最近N轮对话(FIFO淘汰)，进程内，会话结束即丢 → 当前上下文连贯
 持久记忆: 追加写入 agent_memory.md，跨会话保留，自动轮转(上限200行) → 长期知识累积
 反思记忆: 追加写入 reflection_traces.md，跨会话保留，自动轮转 → Reflexion 教训复用
+长期记忆: SQLite FTS5 全文检索，跨会话语义匹配 → 精确召回历史经验
 ```
+
+### 决策 7：策略执行路径统一 vs 热路径特化
+
+这是一个典型的**"干净架构 vs 实用性能"**的权衡。
+
+**旧设计（2026-06-23 之前）：** Agent 对 default 策略走特殊路径 `_run_stream_default`——
+Agent 亲自执行流式调用、画图关键词检测、LLM override 兜底，100 行逻辑全在 agent.py，
+而 `DefaultStrategy.run()` 只有 4 行空壳。其他 4 个策略走 `_run_strategy` 统一路径。
+
+这么做的原因是 default 占了 90%+ 调用量，流式快速路径让纯知识问答秒出首 token，
+是一个合理的热路径优化。
+
+**新设计（2026-06-29）：** 删除 `_run_stream_default`，所有策略无差别走 `_run_strategy`。
+
+```
+旧: Agent.run()
+    ├─ if strategy == "default" → _run_stream_default()  ← Agent 亲自下场
+    └─ else → _run_strategy()                             ← 策略自己跑
+
+新: Agent.run()
+    └─ _run_strategy()  ← 所有策略统一，Agent 只做编排
+```
+
+**为什么改？**
+
+旧方式的代价随功能增长而累积：
+
+1. **逻辑分裂**：default 的行为分散在两个文件——流式在 agent.py，策略定义在 default.py
+2. **认知负担**：加新功能（token 统计、错误追踪）要在 Agent 和策略类两处实现
+3. **对称性缺失**：Agent 对 4 个策略说"你自己跑"，对 default 说"你别动我帮你跑"
+
+新方式牺牲了热路径优化的便利（DefaultStrategy 从 34 行涨到 155 行，本质是搬家不是删代码），
+换来的是：**所有策略的完整逻辑都在各自的 `run()` 里，Agent 只是工具箱管理员，不知道也不关心每种策略内部怎么跑。**
+
+**定性：** 以这个项目的体量（~3000 行），统一路径的收益大于热路径特化的性能收益。
+旧方式的 100 行 Agent 代码 + 4 行策略空壳是最坏的中间状态——
+要么回到旧方式但明确注释为热路径优化，要么往前走让所有策略公平对待。
+选择往前走，因为 5 个策略已经足够多，架构的一致性优先级高于单个策略的微优化。
 
 ### 一次请求的完整流转
 
 ```
 Agent.run(task, strategy)
 ├─ Memory.get_window_messages()    ← 加载会话历史
-├─ _system_prompt()                ← 规则 + 持久记忆 + 上次Orient结论 (循环前构建一次)
+├─ _system_prompt()                ← 规则 + 持久记忆 (循环前构建一次)
 │
-├─ 策略路由
-│   └─ _agent_loop(messages)       ← 核心 O-O-D-A 循环
+├─ 策略路由 (统一走 _run_strategy)
+│   └─ StrategyContext(config, llm, tools, memory,
+│       │              emit, execute_tool, agent_loop,
+│       │              orient_fn, system_prompt_fn)
 │       │
-│       ┌────────────────────────────────────────┐
-│       │  Decide: LLM.chat(messages, tools)     │
-│       │    → tool_calls: [...]                 │
-│       │                                        │
-│       │  Act:    tools.execute(name, args)     │
-│       │    → raw_result                        │
-│       │                                        │
-│       │  Orient: orient_engine.orient(result)  │
-│       │    → 结构化解读注入 messages             │
-│       │                                        │
-│       │  Loop:  回到 Decide                    │
-│       └────────────────────────────────────────┘
+│       └─ strategy_cls(context=ctx).run(task, agent_loop_fn)
+│           │
+│           ├─ DefaultStrategy      ← 流式→切agent_loop / 画图检测
+│           ├─ ReActStrategy        ← step_callback提取Thought + Final Answer
+│           ├─ PlanExecuteStrategy  ← 规划→执行→评估→重规划
+│           ├─ ReflexionStrategy    ← 自评→反思→重试 (启用Orient)
+│           └─ TreeOfThoughtStrategy ← 多候选→打分→回溯
+│           │
+│           └─ agent_loop_fn(messages, system_prompt=...,
+│                            step_callback=..., tool_callback=...)
+│               │
+│               ┌────────────────────────────────────────┐
+│               │  Decide: LLM.chat(messages, tools)     │
+│               │    → step_callback(text, tool_calls)   │  ← 策略可拦截
+│               │                                        │
+│               │  Act:    tools.execute(name, args)     │
+│               │    → tool_callback(name, result, ok)   │  ← 策略可观察
+│               │                                        │
+│               │  Orient: orient_engine.orient(result)  │
+│               │    → 结构化解读注入 messages             │
+│               │                                        │
+│               │  Loop:  回到 Decide                    │
+│               └────────────────────────────────────────┘
 │
 ├─ Memory.save_context(task, result)         ← 存会话记忆
 ├─ Memory.save_persistent(task, result)      ← 存持久记忆

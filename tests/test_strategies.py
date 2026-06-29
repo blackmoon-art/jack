@@ -78,6 +78,43 @@ def _simple_loop(result_text="done"):
     return fn
 
 
+def _fake_agent_loop(llm, tools, max_steps=10):
+    """返回一个模拟 agent_loop_fn，用于 ReAct 测试。
+    行为与 Agent._agent_loop 一致：调 LLM → step_callback → 执行工具 → tool_callback → 循环。"""
+    def fn(messages, system_prompt="", step_callback=None, tool_callback=None,
+           exclude_tools=None, **kwargs):
+        schemas = tools.get_schemas()
+        for _ in range(max_steps):
+            response = llm.chat(messages=messages, tools=schemas, system=system_prompt)
+            text = response["text"]
+            tool_calls = response["tool_calls"]
+
+            if step_callback:
+                early = step_callback(text, tool_calls)
+                if early is not None:
+                    messages.append({"role": "assistant", "content": text})
+                    return early, messages
+
+            if not tool_calls:
+                messages.append({"role": "assistant", "content": text})
+                return text, messages
+
+            assistant_msg = {"role": "assistant", "content": text,
+                             "tool_calls": [llm.format_tool_call_for_message(tc)
+                                            for tc in tool_calls]}
+            messages.append(assistant_msg)
+            for tc in tool_calls:
+                obs = tools.execute(tc["name"], tc.get("arguments", {}))
+                result_text = str(obs)
+                messages.append({"role": "tool", "tool_call_id": tc.get("id", ""),
+                                 "content": result_text})
+                if tool_callback:
+                    tool_callback(tc["name"], tc.get("arguments", {}),
+                                  result_text, obs.success)
+        return "Max steps reached", messages
+    return fn
+
+
 def _make_config():
     cfg = Config()
     cfg.provider = "openai"
@@ -394,7 +431,7 @@ class TestReActStrategy(unittest.TestCase):
         ]
         mock_llm.format_tool_call_for_message = MockLLM.format_tool_call_for_message
         s = ReActStrategy(self.config, mock_llm, self.tools, max_steps=5)
-        result = s.run("what files?", None)
+        result = s.run("what files?", _fake_agent_loop(mock_llm, self.tools))
         self.assertIn("agent.py", result)
 
     def test_run_final_answer_no_tools(self):
@@ -406,17 +443,16 @@ class TestReActStrategy(unittest.TestCase):
             "stop_reason": "stop",
         }
         s = ReActStrategy(self.config, mock_llm, self.tools, max_steps=5)
-        self.assertEqual(s.run("hi", None), "Hello!")
+        self.assertEqual(s.run("hi", _fake_agent_loop(mock_llm, self.tools)), "Hello!")
 
     def test_thought_trail_recorded(self):
-        mock_llm = MagicMock()
-        mock_llm.chat.return_value = {
+        mock_llm = MockLLM([{
             "text": "Thought: done\nFinal Answer: done.",
             "tool_calls": [],
             "stop_reason": "stop",
-        }
+        }])
         s = ReActStrategy(self.config, mock_llm, self.tools, max_steps=5)
-        s.run("task", None)
+        s.run("task", _fake_agent_loop(mock_llm, self.tools))
         trail = s.get_thought_trail()
         self.assertEqual(len(trail), 1)
         self.assertEqual(trail[0]["thought"], "done")
@@ -432,14 +468,13 @@ class TestReActStrategy(unittest.TestCase):
         }
         mock_llm.format_tool_call_for_message = MockLLM.format_tool_call_for_message
         s = ReActStrategy(self.config, mock_llm, self.tools, max_steps=3)
-        result = s.run("task", None)
+        result = s.run("task", _fake_agent_loop(mock_llm, self.tools, max_steps=3))
         self.assertIn("Max steps", result)
         self.assertEqual(len(s.get_thought_trail()), 3)
 
     def test_action_and_observation_recorded(self):
         """Tool call and result recorded in thought_trail."""
-        mock_llm = MagicMock()
-        mock_llm.chat.side_effect = [
+        mock_llm = MockLLM([
             {
                 "text": "Thought: list dir",
                 "tool_calls": [{"id": "t1", "name": "bash",
@@ -451,15 +486,13 @@ class TestReActStrategy(unittest.TestCase):
                 "tool_calls": [],
                 "stop_reason": "stop",
             },
-        ]
-        mock_llm.format_tool_call_for_message = MockLLM.format_tool_call_for_message
+        ])
         s = ReActStrategy(self.config, mock_llm, self.tools, max_steps=5)
-        s.run("pwd?", None)
+        s.run("pwd?", _fake_agent_loop(mock_llm, self.tools))
         trail = s.get_thought_trail()
         self.assertEqual(len(trail), 2)
-        self.assertIn("action", trail[0])
-        self.assertEqual(trail[0]["action"]["name"], "bash")
-        self.assertIn("observation", trail[0])
+        self.assertIn("actions", trail[0])
+        self.assertEqual(trail[0]["actions"][0]["name"], "bash")
 
 
 if __name__ == "__main__":

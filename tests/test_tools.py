@@ -67,7 +67,7 @@ class TestToolRegistry(unittest.TestCase):
 
     def test_bash_dangerous_command_blocked(self):
         result = self.registry.bash("sudo rm -rf /")
-        self.assertIn("not in the allowed list", result)
+        self.assertIn("not allowed", result)
 
     def test_bash_shell_injection_blocked(self):
         result = self.registry.bash('echo ok; cat /etc/passwd')

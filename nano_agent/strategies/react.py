@@ -102,10 +102,10 @@ Final Answer: The current directory contains 2 files: agent.py and README.md."""
 
     def run(self, task: str, agent_loop_fn) -> str:
         """
-        执行 ReAct 循环（FC 版本）。
+        执行 ReAct 循环（回调注入模式）。
 
-        工具调用使用 native Function Calling（可靠），
-        Thought 从 LLM content 提取（可见）。
+        通过 agent_loop_fn（Agent._agent_loop）驱动核心循环，
+        用 step_callback / tool_callback 注入 Thought 提取和 Final Answer 检测。
         """
         logger.info(f"{'='*60}")
         logger.info(f"[ReAct] Task: {task}")
@@ -113,75 +113,46 @@ Final Answer: The current directory contains 2 files: agent.py and README.md."""
 
         messages = self.build_messages(task, include_memory=True)
         self.thought_trail = []
-        final_answer = ""
-        tool_schemas = self.tools.get_schemas()
 
-        for step in range(1, self.max_steps + 1):
-            logger.info(f"{'─'*40}")
-            logger.info(f"[ReAct Step {step}]")
-
-            # 调用 LLM（传入 tools，使用 FC；system 通过 system 参数传递，兼容所有 provider）
-            response = self.llm.chat(
-                messages=messages,
-                tools=tool_schemas,
-                system=self._react_system_prompt(),
-                model=self._model_override,
-            )
-            llm_text = response["text"]
-            tool_calls = response["tool_calls"]
-
-            # 提取 Thought
-            thought = self._extract_thought(llm_text)
-            trail_entry: dict = {"step": step, "thought": thought}
+        def on_step(text: str, tool_calls: list) -> str | None:
+            """每次 LLM 响应后：提取 Thought，检测 Final Answer。"""
+            step_num = len(self.thought_trail) + 1
+            thought = self._extract_thought(text)
+            trail_entry: dict = {"step": step_num, "thought": thought}
             self.thought_trail.append(trail_entry)
 
             logger.info(f"💭 Thought: {thought[:300]}")
             self.emit("text", {"text": f"💭 {thought}"})
 
-            # 检查 Final Answer
-            final = self._extract_final_answer(llm_text)
-            if final and not tool_calls:
-                final_answer = final
-                logger.info(f"✅ Final Answer: {final_answer[:300]}")
-                messages.append({"role": "assistant", "content": llm_text})
-                break
+            final = self._extract_final_answer(text)
+            if final:
+                logger.info(f"✅ Final Answer: {final[:300]}")
+                return final
+            return None
 
-            # 有 Final Answer 也有 tool_calls → 优先 Final Answer
-            if final and tool_calls:
-                final_answer = final
-                logger.info(f"✅ Final Answer: {final_answer[:300]}")
-                messages.append({"role": "assistant", "content": llm_text})
-                break
+        def on_tool(name: str, args: dict, result: str, success: bool):
+            """每次工具执行后：记录 action 和 observation（支持多工具步骤）。"""
+            if self.thought_trail:
+                entry = self.thought_trail[-1]
+                actions = entry.setdefault("actions", [])
+                actions.append({"name": name, "args": args, "result": result[:500]})
 
-            # 有工具调用 → 执行
-            if tool_calls:
-                # 追加 assistant 消息（含 tool_calls）
-                assistant_msg: dict = {"role": "assistant", "content": llm_text}
-                assistant_msg["tool_calls"] = [
-                    self.llm.format_tool_call_for_message(tc)
-                    for tc in tool_calls
-                ]
-                messages.append(assistant_msg)
+        logger.info(f"{'─'*40}")
+        result, _ = agent_loop_fn(
+            messages,
+            system_prompt=self._react_system_prompt(),
+            step_callback=on_step,
+            tool_callback=on_tool,
+        )
 
-                for tc in tool_calls:
-                    info = self.execute_tool(tc, messages)
-                    trail_entry["action"] = {"name": info["name"], "args": tc.get("arguments", {})}
-                    trail_entry["observation"] = info["result"][:500]
-
-            else:
-                # 无工具调用也无 Final Answer — 作为纯文本回复
-                final_answer = llm_text
-                messages.append({"role": "assistant", "content": llm_text})
-                break
-
-        if not final_answer:
-            final_answer = "Max steps reached without final answer."
-            logger.warning(final_answer)
+        if not result:
+            result = "Max steps reached without final answer."
+            logger.warning(result)
 
         logger.info(f"[ReAct] Complete: {len(self.thought_trail)} steps, "
-              f"{len([t for t in self.thought_trail if 'action' in t])} actions taken.")
+              f"{len([t for t in self.thought_trail if 'actions' in t])} actions taken.")
 
-        return final_answer
+        return result
 
     def get_thought_trail(self) -> list[dict]:
         return list(self.thought_trail)

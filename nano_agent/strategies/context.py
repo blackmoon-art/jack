@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Callable, Optional
+from collections.abc import Callable
+from typing import Any, Optional
 
 
 @dataclass
@@ -36,3 +37,7 @@ class StrategyContext:
     # ── 请求级覆盖 ──
     model_override: Optional[str] = None
     """请求级模型覆盖（线程安全）"""
+
+    # ── Prompt 构建 ──
+    system_prompt_fn: Optional[Callable[[], str]] = None
+    """构建 system prompt 的函数（委托到 Agent._system_prompt）"""

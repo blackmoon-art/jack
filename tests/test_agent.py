@@ -119,7 +119,7 @@ class TestAgentLoop(unittest.TestCase):
         agent = self._make_agent(mock_llm)
         result = agent.run("loop")
 
-        self.assertIn("Max iterations", result)
+        self.assertIn("tired", result)  # 达到最大迭代后返回终止提示
         self.assertEqual(mock_llm.chat.call_count, self.config.max_iterations)
 
     def test_memory_preserves_context(self):

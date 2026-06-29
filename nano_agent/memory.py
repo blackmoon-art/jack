@@ -21,6 +21,18 @@ from typing import Any, Optional
 
 logger = logging.getLogger("nano_agent.memory")
 
+# ── 文件轮转锁：防止多线程并发写导致数据丢失 ──
+_rotate_locks: dict[str, threading.Lock] = {}
+_rotate_locks_guard = threading.Lock()
+
+
+def _get_rotate_lock(file_path: str) -> threading.Lock:
+    """获取文件对应的轮转锁（惰性创建，线程安全）。"""
+    with _rotate_locks_guard:
+        if file_path not in _rotate_locks:
+            _rotate_locks[file_path] = threading.Lock()
+        return _rotate_locks[file_path]
+
 
 class LongTermMemory:
     """
@@ -471,19 +483,26 @@ class Memory:
 
     @staticmethod
     def _append_with_rotation(file_path: str, entry: str, max_lines: int = 200):
-        """追加内容到文件，超过 max_lines 时截断保留最近条目。"""
+        """追加内容到文件，超过 max_lines 时截断保留最近条目。
+
+        线程安全：使用文件级锁确保 append + read + truncate 原子执行，
+        防止并发写入导致数据丢失。
+        """
         try:
             path = Path(file_path)
             path.parent.mkdir(parents=True, exist_ok=True)
-            with open(path, "a", encoding="utf-8") as f:
-                f.write(entry)
-            content = path.read_text(encoding="utf-8")
-            lines = content.split("\n")
-            if len(lines) > max_lines:
-                truncated = "\n".join(lines[-max_lines:])
-                path.write_text(truncated, encoding="utf-8")
-                logger.info(f"{path.name} truncated to {max_lines} lines "
-                            f"(was {len(lines)} lines)")
+            lock = _get_rotate_lock(file_path)
+            with lock:
+                # 原子区：追加 → 读取 → 截断
+                with open(path, "a", encoding="utf-8") as f:
+                    f.write(entry)
+                content = path.read_text(encoding="utf-8")
+                lines = content.split("\n")
+                if len(lines) > max_lines:
+                    truncated = "\n".join(lines[-max_lines:])
+                    path.write_text(truncated, encoding="utf-8")
+                    logger.info(f"{path.name} truncated to {max_lines} lines "
+                                f"(was {len(lines)} lines)")
         except Exception as e:
             logger.warning(f"Failed to write {file_path}: {e}")
 

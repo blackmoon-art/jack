@@ -53,6 +53,7 @@ class BaseStrategy:
             self._agent_loop = ctx.agent_loop
             self._orient_fn = ctx.orient_fn
             self._model_override = ctx.model_override
+            self._system_prompt_fn = ctx.system_prompt_fn  # Agent._system_prompt
         else:
             # 旧式: 向后兼容
             self.config = config
@@ -64,6 +65,7 @@ class BaseStrategy:
             self._agent_loop = None
             self._orient_fn: Optional[Callable] = None
             self._model_override: Optional[str] = None
+            self._system_prompt_fn: Optional[Callable[[], str]] = None
 
     def emit(self, event_type: str, data: dict):
         """发送事件给回调（如果已设置）。静默失败。"""
