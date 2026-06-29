@@ -122,9 +122,8 @@ class BaseStrategy:
         name = tool_call["name"]
         args = tool_call.get("arguments", {})
         if isinstance(args, str):
-            import json as _json
-            try: args = _json.loads(args)
-            except _json.JSONDecodeError: args = {}
+            try: args = json.loads(args)
+            except json.JSONDecodeError: args = {}
         logger.info(f"[Tool:fallback] {name}({json.dumps(args, ensure_ascii=False)[:200]})")
         self.emit("tool_call", {"name": name, "args": args})
         observation = self.tools.execute(name, args)

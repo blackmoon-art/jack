@@ -19,18 +19,30 @@ from .base import BaseStrategy
 
 logger = logging.getLogger("nano_agent.strategies.default")
 
-# ── 画图检测关键词 ──────────────────────────────────────
-_DRAW_KW = ('画', '图', 'draw', '生成', '作图', '绘图', 'chart', 'diagram', 'graph')
-_EDIT_KW = ('改', '换', '修改', '调整', '重画', '重新', '换成', '改成')
-_ADD_KW  = ('加', '添加', '再加', '加上', '补充', '增加')
+# ── 画图检测关键词（单一来源）──────────────────────────────
+# 注意：避免单字 '画'（匹配 '动画','漫画','画面'）和 '图'（匹配 '图书馆'）
+# 英文也用词组避免子串匹配（'draw' → 'drawer', 'graph' → 'paragraph'）
+# auto_keywords 也引用这份列表，消除重复维护
+_DRAW_KW = ('画图', '画一', '画个', '画只', '画张', '绘图', '作图', '图表', '生成图',
+            '画流程', '画个流', '画一个', '画一幅',
+            'draw a', 'draw an', 'draw it', 'drawing',
+            'chart', 'diagram', 'graph', 'plot ',
+            '画架', '画饼', '画曲', '画折', '画柱', '画散',
+            '画架构', '画结构', '画系统', '画组件')
+_EDIT_KW = ('重画', '重新画', '改图', '换图', '修改图', '调整图',
+            '换成图', '改成图')
+_ADD_KW  = ('加个图', '添加图', '再画')
 _QA_KW   = ('天气', '新闻', '计算', '翻译', '搜索', '查', '什么是', '怎么',
             '为什么', 'who', 'what', 'when', 'why', 'how', '解释',
             'hello', 'hi', 'hey', '你好', '谢谢', '再见', '帮助')
 
+# 所有视觉关键词合并，供 _should_force_visual 和 auto_keywords 复用
+_VISUAL_KW = _DRAW_KW + _EDIT_KW + _ADD_KW
 
-_DRAW_TOOL_NAMES = (
-    "mermaid_chart", "generate_chart", "draw_circuit",
-    "drawio_diagram", "stock_chart", "ai_image",
+# 视觉工具名称前缀 — 用于动态匹配工具是否属于「画图类」
+_VISUAL_TOOL_PREFIXES = (
+    "mermaid", "generate_", "chart", "draw", "circuit", "diagram", "ai_image",
+    "stock_chart",
 )
 
 
@@ -39,13 +51,17 @@ class DefaultStrategy(BaseStrategy):
 
     uses_orient = False
     default_params = {}
-    auto_keywords = ('天气', '气温', '温度', '汇率', '股价', '行情', '大盘', '指数',
-                     '新闻', '热搜', '今天', '查询', '查一下', '搜索', '搜一下',
-                     '多少', '几度', '几点', '什么时候', '是什么', '什么是',
-                     '计算', '换算', '翻译', '帮我', '告诉我',
-                     '如何', '怎么', '为什么', '怎样', '攻略', '技巧', '教程',
-                     '入门', '推荐', '建议', '画', '生成图', '画图', '绘图',
-                     '作图', '生成', '画一只', '画个')
+    auto_keywords = (
+        # 画图关键词直接复用 _VISUAL_KW，不再重复维护
+        *_VISUAL_KW,
+        # QA / 日常关键词
+        '天气', '气温', '温度', '汇率', '股价', '行情', '大盘', '指数',
+        '新闻', '热搜', '今天', '查询', '查一下', '搜索', '搜一下',
+        '多少', '几度', '几点', '什么时候', '是什么', '什么是',
+        '计算', '换算', '翻译', '帮我', '告诉我',
+        '如何', '怎么', '为什么', '怎样', '攻略', '技巧', '教程',
+        '入门', '推荐', '建议',
+    )
     auto_priority = 0  # 最低优先级，兜底
 
     def run(self, task: str, agent_loop_fn) -> str:
@@ -124,10 +140,8 @@ class DefaultStrategy(BaseStrategy):
     def _should_force_visual(task: str, memory=None) -> bool:
         """检测任务是否需要视觉输出（画图/图表）。"""
         task_lower = task.lower()
-        is_draw = any(k in task_lower for k in _DRAW_KW)
-        is_edit = any(k in task_lower for k in _EDIT_KW)
-        is_add  = any(k in task_lower for k in _ADD_KW)
-        is_qa   = any(k in task_lower for k in _QA_KW)
+        is_visual = any(k in task_lower for k in _VISUAL_KW)
+        is_qa     = any(k in task_lower for k in _QA_KW)
 
         # 上下文：上一轮用户是否主动要求了视觉内容
         prev_visual = False
@@ -137,17 +151,29 @@ class DefaultStrategy(BaseStrategy):
                 if m["role"] == "user":
                     prev_visual = any(
                         k in m["content"].lower()
-                        for k in _DRAW_KW + _EDIT_KW + _ADD_KW
+                        for k in _VISUAL_KW
                     )
                     break
 
-        return is_draw or is_edit or is_add or (not is_qa and prev_visual)
+        return is_visual or (not is_qa and prev_visual)
+
+    def _get_visual_tool_names(self) -> set[str]:
+        """动态从 ToolRegistry 获取视觉工具名，不再硬编码。"""
+        names = set()
+        for name in self.tools._tools:
+            if name.startswith(_VISUAL_TOOL_PREFIXES):
+                names.add(name)
+        return names
 
     def _force_visual(self, task: str, full_text: str, messages: list,
                       agent_loop_fn) -> str:
         """强制让 LLM 调用绘图工具。包含代码兜底。"""
         logger.info(f"VISUAL: '{task[:50]}'")
         self.emit("text", {"text": "🔧 正在生成图片..."})
+
+        # 动态获取当前可用的视觉工具
+        visual_tools = self._get_visual_tool_names()
+        tool_hint = ", ".join(sorted(visual_tools)) if visual_tools else "generate_chart, mermaid_chart"
 
         # 构建上下文
         ctx = ""
@@ -160,10 +186,8 @@ class DefaultStrategy(BaseStrategy):
 
         override = (
             "Call a drawing tool NOW. Context:\n{ctx}\n"
-            "User said: '{task}'. You MUST call one of: generate_chart (data/function/geometry), "
-            "mermaid_chart (diagrams/flowcharts), stock_chart (stocks), "
-            "draw_circuit (electronics), ai_image (photos/art), drawio_diagram (complex diagrams)."
-        ).format(ctx=ctx.strip(), task=task[:200])
+            "User said: '{task}'. You MUST call one of: {tools}."
+        ).format(ctx=ctx.strip(), task=task[:200], tools=tool_hint)
 
         # step_callback: 画图工具调用后下一次 LLM 响应时终止循环，防止画两次
         _draw_done = [False]
@@ -173,8 +197,8 @@ class DefaultStrategy(BaseStrategy):
                 return text  # 已经画过了，终止循环
             if tool_calls:
                 for tc in tool_calls:
-                    name = tc.get("function", {}).get("name", "")
-                    if name in _DRAW_TOOL_NAMES:
+                    name = tc.get("name", "")
+                    if name in visual_tools:
                         _draw_done[0] = True
                         break
             return None  # 继续循环
@@ -182,24 +206,12 @@ class DefaultStrategy(BaseStrategy):
         messages.append({"role": "user", "content": override})
         result, msgs = agent_loop_fn(messages, step_callback=_visual_step)
 
-        # LLM 还是没调工具 → 代码兜底
-        had_tool = any(
-            m.get("role") == "assistant" and m.get("tool_calls")
-            for m in msgs[-4:]
-        )
-        if not had_tool:
-            try:
-                from nano_agent.tools.diagram import Diagram
-                d = Diagram(work_dir=self.config.work_dir,
-                            charts_dir=self.config.charts_dir)
-                img = d.mermaid_chart(
-                    f"flowchart LR\n  A[{task[:40]}]-->B[Result]",
-                    theme="dark",
-                )
-                return result + "\n\n" + img
-            except Exception as e:
-                logger.warning(f"Code-draw fallback failed: {e}")
-
+        # 兜底：agent_loop 可能因 max_iterations 或空响应返回空字符串
+        if not result or not result.strip():
+            result = (
+                "抱歉，图片生成未能完成。请尝试更具体的描述，"
+                "或直接指定图表类型（如折线图、饼图、流程图等）。"
+            )
         return result
 
     def _execute_tools_parallel(self, tool_calls: list, messages: list):

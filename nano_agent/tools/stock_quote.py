@@ -8,7 +8,7 @@
 技术指标委托 stock_indicators.StockIndicators。
 """
 
-import json as _json
+import json
 import urllib.parse
 import urllib.request
 from datetime import datetime, timedelta
@@ -98,7 +98,7 @@ class StockQuote:
                 "Accept": "application/json",
             })
             with urllib.request.urlopen(req, timeout=10) as resp:
-                data = _json.loads(resp.read().decode("utf-8"))
+                data = json.loads(resp.read().decode("utf-8"))
 
             result = data.get("chart", {}).get("result", [])
             if not result:
@@ -359,7 +359,7 @@ class StockQuote:
             "Referer": "https://gu.qq.com/",
         })
         with urllib.request.urlopen(req, timeout=10) as resp:
-            data = _json.loads(resp.read().decode('utf-8'))
+            data = json.loads(resp.read().decode('utf-8'))
 
         code_data = data.get('data', {}).get(code, {})
         raw_klines = code_data.get('qfqday', code_data.get('day', []))

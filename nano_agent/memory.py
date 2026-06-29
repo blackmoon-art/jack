@@ -498,17 +498,36 @@ class Memory:
     def _append_with_rotation(file_path: str, entry: str, max_lines: int = 200):
         """追加内容到文件，超过 max_lines 时截断保留最近条目。
 
+        性能优化：先用文件大小估算行数，只在可能超限时才读取+截断。
+        避免每次写入都读取整个文件（对于 Reflexion 多次重试场景尤为重要）。
+
         线程安全：使用文件级锁确保 append + read + truncate 原子执行，
         防止并发写入导致数据丢失。
         """
+        import os
+
         try:
             path = Path(file_path)
             path.parent.mkdir(parents=True, exist_ok=True)
             lock = _get_rotate_lock(file_path)
+
+            # 快速路径：先 append，再检查是否需要截断
             with lock:
-                # 原子区：追加 → 读取 → 截断
+                # 追加写入
                 with open(path, "a", encoding="utf-8") as f:
                     f.write(entry)
+
+                # 快速估算：用文件大小 / 平均行宽 估算行数
+                # 避免每次都读取整个文件
+                file_size = path.stat().st_size
+                # 估算平均行宽（含换行符），取保守值
+                avg_line_bytes = 80
+                estimated_lines = file_size // avg_line_bytes
+
+                if estimated_lines <= max_lines:
+                    return  # 快速路径：估算没超限，不需要截断
+
+                # 慢路径：估算超限，读取实际内容截断
                 content = path.read_text(encoding="utf-8")
                 lines = content.split("\n")
                 if len(lines) > max_lines:

@@ -2,6 +2,7 @@
 LLM 客户端抽象 — 统一 Anthropic / OpenAI / DeepSeek / OpenRouter 接口。
 """
 
+import json
 import logging
 import time
 from typing import Any
@@ -26,6 +27,43 @@ def _create_openai_client(cfg: Config):
     from openai import OpenAI
 
     return OpenAI(api_key=cfg.openai_api_key, base_url=cfg.openai_base_url)
+
+
+# ── 工具函数（模块级，不依赖 LLM 实例）──────────────────
+
+def clean_json_response(text: str) -> str:
+    """清理 LLM 返回的 JSON 文本：去 markdown 代码块包裹。"""
+    text = text.strip()
+    if '```' in text:
+        start = text.find('```')
+        if start >= 0:
+            after_start = text.index('```', start) + 3
+            newline_pos = text.find('\n', after_start)
+            if newline_pos >= 0 and newline_pos - after_start < 20:
+                after_start = newline_pos + 1
+            end = text.rfind('```')
+            if end > after_start:
+                text = text[after_start:end]
+    return text.strip()
+
+
+def format_tool_call_for_message(tc: dict) -> dict:
+    """
+    将内部 tool_call 格式转为 OpenAI 兼容的 message 格式。
+    内部: {"id": str, "name": str, "arguments": dict}
+    输出: {"id": str, "type": "function", "function": {"name": str, "arguments": str}}
+    """
+    args = tc.get("arguments", {})
+    if isinstance(args, dict):
+        args = json.dumps(args, ensure_ascii=False)
+    return {
+        "id": tc.get("id", ""),
+        "type": "function",
+        "function": {
+            "name": tc.get("name", ""),
+            "arguments": args if isinstance(args, str) else str(args),
+        },
+    }
 
 
 class LLM:
@@ -82,51 +120,17 @@ class LLM:
                 self._client = _create_openai_client(self.config)
         return self._client
 
-    # ── 公开 API ──────────────────────────────────────────
+    # ── 向后兼容：类方法委托到模块级工具函数 ─────────────
 
     @staticmethod
     def clean_json_response(text: str) -> str:
-        """清理 LLM 返回的 JSON 文本：去 markdown 代码块包裹。"""
-        text = text.strip()
-        # 处理 ```json ... ``` 或 ``` ... ``` 包裹
-        # 支持代码块不在开头的情况（如 "Here is the JSON:\n```json\n...\n```"）
-        if '```' in text:
-            # 找到第一个 ``` 开头
-            start = text.find('```')
-            if start >= 0:
-                # 跳过 ``` 和可选的语言标记
-                after_start = text.index('```', start) + 3
-                # 跳过语言标记（如 json）
-                newline_pos = text.find('\n', after_start)
-                if newline_pos >= 0 and newline_pos - after_start < 20:
-                    # 看起来像语言标记
-                    after_start = newline_pos + 1
-                # 找结尾 ```
-                end = text.rfind('```')
-                if end > after_start:
-                    text = text[after_start:end]
-        return text.strip()
+        """委托到模块级 clean_json_response。"""
+        return clean_json_response(text)
 
     @staticmethod
     def format_tool_call_for_message(tc: dict) -> dict:
-        """
-        将内部 tool_call 格式转为 OpenAI 兼容的 message 格式。
-
-        内部: {"id": str, "name": str, "arguments": dict}
-        输出: {"id": str, "type": "function", "function": {"name": str, "arguments": str}}
-        """
-        import json as _json
-        args = tc.get("arguments", {})
-        if isinstance(args, dict):
-            args = _json.dumps(args, ensure_ascii=False)
-        return {
-            "id": tc.get("id", ""),
-            "type": "function",
-            "function": {
-                "name": tc.get("name", ""),
-                "arguments": args if isinstance(args, str) else str(args),
-            },
-        }
+        """委托到模块级 format_tool_call_for_message。"""
+        return format_tool_call_for_message(tc)
 
     def chat(self, messages: list, tools: list, system: str = "",
              model: str | None = None) -> dict:
@@ -190,9 +194,8 @@ class LLM:
                     name = fn.get("name", "")
                     args_str = fn.get("arguments", "{}")
                     try:
-                        import json as _json
-                        args = _json.loads(args_str) if isinstance(args_str, str) else args_str
-                    except _json.JSONDecodeError:
+                        args = json.loads(args_str) if isinstance(args_str, str) else args_str
+                    except json.JSONDecodeError:
                         args = {}
                     blocks.append({
                         "type": "tool_use",
@@ -279,11 +282,9 @@ class LLM:
         tool_calls = []
         if msg.tool_calls:
             for tc in msg.tool_calls:
-                import json as _json
-
                 try:
-                    args = _json.loads(tc.function.arguments)
-                except _json.JSONDecodeError:
+                    args = json.loads(tc.function.arguments)
+                except json.JSONDecodeError:
                     args = {}
                 tool_calls.append({
                     "id": tc.id,
@@ -357,13 +358,12 @@ class LLM:
 
         # 如果有 tool_calls，yield 信号
         if tool_calls_map:
-            import json as _json
             parsed_calls = []
             for idx in sorted(tool_calls_map.keys()):
                 tc = tool_calls_map[idx]
                 try:
-                    args = _json.loads(tc["arguments"]) if tc["arguments"] else {}
-                except _json.JSONDecodeError:
+                    args = json.loads(tc["arguments"]) if tc["arguments"] else {}
+                except json.JSONDecodeError:
                     args = {}
                 parsed_calls.append({"id": tc["id"], "name": tc["name"], "arguments": args})
             yield {"type": "tool_calls", "tool_calls": parsed_calls}
@@ -394,12 +394,11 @@ class LLM:
                         tool_use_blocks[-1]["arguments"] += event.delta.partial_json
 
         if tool_use_blocks:
-            import json as _json
             parsed = []
             for tb in tool_use_blocks:
                 try:
-                    args = _json.loads(tb["arguments"]) if tb["arguments"] else {}
-                except _json.JSONDecodeError:
+                    args = json.loads(tb["arguments"]) if tb["arguments"] else {}
+                except json.JSONDecodeError:
                     args = {}
                 parsed.append({"id": tb["id"], "name": tb["name"], "arguments": args})
             yield {"type": "tool_calls", "tool_calls": parsed}

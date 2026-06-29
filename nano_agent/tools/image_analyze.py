@@ -1,12 +1,18 @@
 """图片分析工具 — 调用 Vision API 分析图片。支持 OpenAI / Anthropic / Google Gemini。"""
 
 import base64
+import json
 import logging
 import os
 import shutil
+import threading
 from pathlib import Path
 
 logger = logging.getLogger("nano_agent.tools.image_analyze")
+
+# 模型缓存：避免每次分析都重新加载 15GB 模型
+_vision_cache: dict = {}  # model_path → {"model": ..., "processor": ...}
+_vision_cache_lock = threading.Lock()
 
 
 class ImageAnalyzer:
@@ -27,18 +33,29 @@ class ImageAnalyzer:
         """检测可用的 Vision 提供商。
 
         优先级:
-          1. Ollama 本地视觉模型 (免费，离线，支持中文: minicpm-v / llava)
-          2. VISION_API_KEY + VISION_BASE_URL (OpenAI 兼容)
-          3. ANTHROPIC_API_KEY (Claude, 原生 vision)
-          4. Tesseract 本地 OCR (免费，离线，只提取文字)
+          1. MiniCPM-V 本地模型 (免费，离线，最强中文)
+          2. Ollama 本地视觉模型 (免费，离线)
+          3. Google Gemini (免费，1500次/天)
+          4. VISION_API_KEY + VISION_BASE_URL (OpenAI 兼容)
+          5. ANTHROPIC_API_KEY (Claude, 原生 vision)
+          6. Tesseract 本地 OCR (免费，离线，只提取文字)
 
-        Returns: (provider: "openai"|"anthropic"|"tesseract", api_key, base_url, model)
+        Returns: (provider, api_key, base_url, model)
         """
-        # 确保 .env 已加载（直接 os.getenv 取不到 .env 里的值）
         from ..config import _ensure_dotenv
         _ensure_dotenv()
 
-        # 1. Ollama 本地视觉模型 (优先，速度快兼容好)
+        # 1. MiniCPM-V 本地模型 (优先，已内置，中文最强)
+        _model_dir = Path(__file__).parent.parent.parent / "web" / "models" / "MiniCPM-V-2_6"
+        if (_model_dir / "config.json").exists():
+            try:
+                import torch  # noqa: F401
+                logger.info(f"Vision provider: MiniCPM-V local (free, offline) — {_model_dir}")
+                return ("transformers", "", "", str(_model_dir))
+            except ImportError:
+                logger.warning("MiniCPM-V model found but torch not installed. Run: pip install torch transformers")
+
+        # 3. Ollama 本地视觉模型
         if shutil.which("ollama"):
             model = os.getenv("VISION_MODEL", os.getenv("OLLAMA_VISION_MODEL", "minicpm-v:8b"))
             base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1")
@@ -48,7 +65,7 @@ class ImageAnalyzer:
             else:
                 logger.warning(f"Ollama running but model '{model}' not installed. Skipping.")
 
-        # 2. Google Gemini (免费)
+        # 4. Google Gemini (免费)
         gemini_key = os.getenv("GEMINI_API_KEY", "")
         if gemini_key:
             base_url = "https://generativelanguage.googleapis.com/v1beta/openai/"
@@ -56,7 +73,7 @@ class ImageAnalyzer:
             logger.info(f"Vision provider: Google Gemini (free) — {model}")
             return ("openai", gemini_key, base_url, model)
 
-        # 2. 专用 Vision API Key
+        # 5. 专用 Vision API Key (OpenAI 兼容)
         vision_key = os.getenv("VISION_API_KEY", "")
         if vision_key:
             base_url = os.getenv("VISION_BASE_URL", "https://api.openai.com/v1")
@@ -64,7 +81,7 @@ class ImageAnalyzer:
             logger.info(f"Vision provider: OpenAI-compatible ({model})")
             return ("openai", vision_key, base_url, model)
 
-        # 3. Anthropic Claude (原生 vision)
+        # 6. Anthropic Claude (原生 vision)
         anthropic_key = os.getenv("ANTHROPIC_API_KEY", "")
         if anthropic_key:
             base_url = os.getenv("ANTHROPIC_BASE_URL") or None
@@ -72,7 +89,7 @@ class ImageAnalyzer:
             logger.info(f"Vision provider: Anthropic ({model})")
             return ("anthropic", anthropic_key, base_url, model)
 
-        # 6. Tesseract 本地 OCR (免费，离线)
+        # 7. Tesseract 本地 OCR (免费，离线)
         if shutil.which("tesseract"):
             logger.info("Vision provider: Tesseract OCR (local, offline, free)")
             return ("tesseract", "", "", "tesseract")
@@ -125,15 +142,23 @@ class ImageAnalyzer:
         )
         return response.content[0].text
 
-    def _analyze_transformers(self, image_data: bytes, mime_type: str, question: str,
-                              model_path: str) -> str:
-        """本地 transformers 模型分析图片。"""
-        try:
+    @staticmethod
+    def _load_vision_model(model_path: str) -> dict:
+        """懒加载并缓存 Vision 模型（15GB，只加载一次，线程安全）。"""
+        # 快速路径：已缓存则直接返回，无需加锁
+        if model_path in _vision_cache:
+            return _vision_cache[model_path]
+
+        with _vision_cache_lock:
+            # 双重检查：可能在等锁时被其他线程加载好了
+            if model_path in _vision_cache:
+                return _vision_cache[model_path]
+
             from transformers import AutoModel, AutoProcessor
             import torch
 
             device = "mps" if torch.backends.mps.is_available() else "cpu"
-            logger.info(f"Loading vision model from {model_path} on {device}...")
+            logger.info(f"Loading MiniCPM-V from {model_path} on {device} (first call, ~30s)...")
 
             model = AutoModel.from_pretrained(
                 model_path, trust_remote_code=True,
@@ -142,8 +167,22 @@ class ImageAnalyzer:
             model = model.to(device).eval()
             processor = AutoProcessor.from_pretrained(model_path, trust_remote_code=True, local_files_only=True)
 
+            cached = {"model": model, "processor": processor, "device": device}
+            _vision_cache[model_path] = cached
+        logger.info(f"MiniCPM-V loaded ({device}), cached for reuse")
+        return cached
+
+    def _analyze_transformers(self, image_data: bytes, mime_type: str, question: str,
+                              model_path: str) -> str:
+        """本地 MiniCPM-V 模型分析图片（模型缓存，首次加载后复用）。"""
+        try:
+            import torch
             from PIL import Image
             import io
+
+            cached = self._load_vision_model(model_path)
+            model, processor, device = cached["model"], cached["processor"], cached["device"]
+
             img = Image.open(io.BytesIO(image_data))
 
             # MiniCPM-V 要求文本中包含 <image> 标签标记图片位置
@@ -155,13 +194,13 @@ class ImageAnalyzer:
                 result = model.generate(**inputs, max_new_tokens=512)
             answer = processor.decode(result[0], skip_special_tokens=True)
 
-            logger.info(f"Vision model inference complete ({device})")
+            logger.info(f"MiniCPM-V inference done ({device})")
             return f"[Local MiniCPM-V — offline, free]\n\n{answer}"
         except ImportError as e:
-            return f"Error: transformers not installed — {e}. Run: pip install transformers accelerate torch"
+            return f"Error: dependencies not installed — {e}. Run: pip install transformers accelerate torch pillow"
         except Exception as e:
-            logger.error(f"Local model inference failed: {e}")
-            return f"Error: Local model inference failed — {e}"
+            logger.error(f"MiniCPM-V inference failed: {e}")
+            return f"Error: MiniCPM-V inference failed — {e}"
 
     def _analyze_tesseract(self, filepath, image_data: bytes, question: str) -> str:
         """Tesseract 本地 OCR：从图片提取文字。免费、离线。"""
@@ -194,11 +233,10 @@ class ImageAnalyzer:
     def _ollama_model_available(base_url: str, model: str) -> bool:
         """Check if a model is actually installed in Ollama via /api/tags."""
         import urllib.request
-        import json as _json
         try:
             tags_url = base_url.rstrip("/").removesuffix("/v1") + "/api/tags"
             with urllib.request.urlopen(tags_url, timeout=3) as resp:
-                data = _json.loads(resp.read())
+                data = json.loads(resp.read())
             installed = [m.get("name", "") for m in data.get("models", [])]
             model_base = model.split(":")[0]
             return any(name.split(":")[0] == model_base for name in installed)

@@ -64,6 +64,8 @@ class Agent:
         self._last_orientation: Optional[dict] = None  # 最近一次 Orient 结果
         self._on_event = None
         self._current_orient_fn: Optional[Callable] = None  # 当前任务的 Orient 函数（绑定原始任务）
+        self._prompt_cache: Optional[str] = None  # system prompt 缓存
+        self._prompt_cache_key: tuple = ()
 
     # ── 主入口 ──────────────────────────────────────────
 
@@ -123,96 +125,6 @@ class Agent:
                 self._on_event(event_type, data)
             except Exception as e:
                 logger.warning(f"Event callback error ({event_type}): {e}")
-
-    # ── [已废弃] default 热路径：流式快速通道 ──────────────
-    # 2026-06-29: 统一架构，所有策略走 _run_strategy。
-    # 流式逻辑已移到 DefaultStrategy.run() (strategies/default.py)。
-    # 保留此代码作为参考，如需恢复热路径优化，取消注释并恢复
-    # Agent.run() 里的 `if strategy == "default"` 分支。
-    #
-    # def _run_stream_default(self, task: str) -> str:
-    #     """Default 策略流式快速路径：带 tools 流式调用，纯知识问答即时输出，
-    #     如果 LLM 要调工具则自动切换到 agent_loop。"""
-    #     from .strategies.default import DefaultStrategy
-    #     ctx = self._make_strategy_context()
-    #     s = DefaultStrategy(context=ctx)
-    #     self._strategy_instance = s
-    #     messages = s.build_messages(task)
-    #     system_prompt = self._system_prompt()
-    #     schemas = self.tools.get_schemas()
-    #
-    #     full_text = ""
-    #     tool_calls = None
-    #     for chunk in self.llm.chat_stream(messages=messages, system=system_prompt, tools=schemas,
-    #                                         model=self._model_override):
-    #         if isinstance(chunk, dict) and chunk.get("type") == "tool_calls":
-    #             tool_calls = chunk["tool_calls"]
-    #             break
-    #         if isinstance(chunk, str):
-    #             full_text += chunk
-    #             self._emit("text", {"text": full_text})
-    #
-    #     if tool_calls:
-    #         assistant_msg = {"role": "assistant", "content": full_text, "tool_calls": [
-    #             self.llm.format_tool_call_for_message(tc) for tc in tool_calls
-    #         ]}
-    #         messages.append(assistant_msg)
-    #         if len(tool_calls) == 1:
-    #             self.execute_tool(tool_calls[0], messages, orient_fn=self._current_orient_fn)
-    #         else:
-    #             self._execute_tools_parallel(tool_calls, messages)
-    #         return self._agent_loop(messages)[0]
-    #
-    #     from .strategies.default import _DRAW_KW, _EDIT_KW, _ADD_KW, _QA_KW
-    #     is_draw = any(k in task.lower() for k in _DRAW_KW)
-    #     is_edit = any(k in task.lower() for k in _EDIT_KW)
-    #     is_add  = any(k in task.lower() for k in _ADD_KW)
-    #     is_qa   = any(k in task.lower() for k in _QA_KW)
-    #
-    #     prev_visual = False
-    #     if self.memory:
-    #         msgs = self.memory.get_window_messages()
-    #         for m in reversed(msgs):
-    #             if m["role"] == "user":
-    #                 prev_visual = any(k in m["content"].lower()
-    #                                   for k in _DRAW_KW + _EDIT_KW + _ADD_KW)
-    #                 break
-    #
-    #     needs_visual = is_draw or is_edit or is_add or (not is_qa and prev_visual)
-    #
-    #     if not tool_calls and needs_visual:
-    #         logger.info(f"VISUAL: '{task[:50]}' draw={is_draw} edit={is_edit} prev={prev_visual}")
-    #         self._emit("text", {"text": "🔧 正在生成图片..."})
-    #
-    #         ctx = ""
-    #         if self.memory:
-    #             for m in self.memory.get_window_messages()[-6:]:
-    #                 r = "用户" if m["role"] == "user" else "助手"
-    #                 txt = m["content"][:150].split("![")[0].strip()
-    #                 if txt: ctx += f"[{r}]: {txt}\n"
-    #
-    #         override = (
-    #             "Call a drawing tool NOW. Context:\n{ctx}\n"
-    #             "User said: '{task}'. You MUST call one of: mermaid_chart, generate_chart, draw_circuit."
-    #         ).format(ctx=ctx.strip(), task=task[:200])
-    #         messages.append({"role": "user", "content": override})
-    #         result, msgs = self._agent_loop(messages)
-    #
-    #         had_tool = any(m.get("role") == "assistant" and m.get("tool_calls") for m in msgs[-4:])
-    #         if not had_tool:
-    #             try:
-    #                 from nano_agent.tools.diagram import Diagram
-    #                 d = Diagram(work_dir=self.config.work_dir, charts_dir=self.config.charts_dir)
-    #                 img = d.mermaid_chart(f"flowchart LR\n  A[{task[:40]}]-->B[Result]", theme="dark")
-    #                 return result + "\n\n" + img
-    #             except Exception:
-    #                 pass
-    #         return result
-    #
-    #     if not full_text.strip():
-    #         return self._agent_loop(messages)[0]
-    #
-    #     return full_text
 
     def _make_strategy_context(self) -> StrategyContext:
         """构建策略上下文，替代猴子补丁注入。"""
@@ -304,11 +216,9 @@ class Agent:
 
         orient_fn:       Orient 函数（覆盖 self._current_orient_fn）
         enable_orient:   是否执行 Orient。策略可按需关闭（如 plan 阶段）。
-                         默认 True 保持向后兼容。
         """
         name = tc["name"]
         args = tc.get("arguments", {})
-        # 兼容 LLM 返回 JSON 字符串参数
         if isinstance(args, str):
             try:
                 args = json.loads(args)
@@ -323,19 +233,10 @@ class Agent:
         self._emit("tool_result", {"name": name, "result": result_text, "success": is_success})
         logger.debug(f"[Tool Result] {result_text[:200]}")
 
-        # Orient — 可通过 enable_orient 关闭
+        # Orient 可在上层（_agent_loop）显式执行
         content = result_text
         if enable_orient:
-            _fn = orient_fn or self._current_orient_fn
-            if _fn:
-                orientation = _fn(result_text)
-                if orientation:
-                    self._emit("orient", orientation)
-                    content = (
-                        f"{result_text}\n\n"
-                        f"[Orient] interpretation={orientation.get('interpretation', '')[:200]}\n"
-                        f"[Orient] implication={orientation.get('implication', '')[:200]}"
-                    )
+            content = self._enrich_with_orient(result_text, orient_fn)
 
         messages.append({
             "role": "tool",
@@ -343,6 +244,21 @@ class Agent:
             "content": content,
         })
         return {"name": name, "result": result_text, "content": content, "success": is_success}
+
+    def _enrich_with_orient(self, result_text: str, orient_fn=None) -> str:
+        """对工具结果执行 Orient 解读，返回富化后的内容。OODA 的 Orient 阶段。"""
+        _fn = orient_fn or self._current_orient_fn
+        if not _fn:
+            return result_text
+        orientation = _fn(result_text)
+        if not orientation:
+            return result_text
+        self._emit("orient", orientation)
+        return (
+            f"{result_text}\n\n"
+            f"[Orient] interpretation={orientation.get('interpretation', '')[:200]}\n"
+            f"[Orient] implication={orientation.get('implication', '')[:200]}"
+        )
 
     # ── 核心循环 (O-O-D-A) ──────────────────────────────
 
@@ -401,23 +317,22 @@ class Agent:
             # ── Act: 执行工具 ──
             if len(response["tool_calls"]) == 1:
                 tc = response["tool_calls"][0]
-                info = self.execute_tool(tc, messages,
-                                         orient_fn=self._current_orient_fn)
+                info = self.execute_tool(tc, messages, enable_orient=False)
+                # ── Orient: 显式解读阶段 ──
+                enriched = self._enrich_with_orient(info["result"])
+                if enriched != info["result"]:
+                    messages[-1]["content"] = enriched
+                    info["content"] = enriched
                 if tool_callback:
                     tool_callback(info["name"], tc.get("arguments", {}),
                                   info["result"], info["success"])
             else:
-                # 并行执行：记录结果后在 tool_callback 中回调
-                # 注意：并行执行时 Orient 在 execute_tool 内完成，
-                # 但 execute_tool 会往传入的 messages list 追加 tool message。
-                # 并行场景下不能传主 messages（线程不安全），传临时 list 收集后手动合并。
+                # 并行执行工具（不包含 Orient，避免线程问题）
                 results: dict[int, dict] = {}
                 def _run_one(idx: int, tc: dict):
                     try:
-                        # 用临时 list 收集 execute_tool 追加的 tool message
                         tmp_msgs: list = []
-                        info = self.execute_tool(tc, tmp_msgs, orient_fn=self._current_orient_fn)
-                        # 提取 execute_tool 追加的 tool message（含 Orient 富化后的 content）
+                        info = self.execute_tool(tc, tmp_msgs, enable_orient=False)
                         if tmp_msgs:
                             info["_tool_msg"] = tmp_msgs[-1]
                     except Exception as e:
@@ -435,7 +350,6 @@ class Agent:
                 for i in sorted(results.keys()):
                     info = results[i]
                     tc = response["tool_calls"][i]
-                    # 优先用 execute_tool 生成的 tool message（含 Orient 富化）
                     if "_tool_msg" in info:
                         messages.append(info["_tool_msg"])
                     else:
@@ -448,6 +362,20 @@ class Agent:
                     if tool_callback:
                         tool_callback(info["name"], tc.get("arguments", {}),
                                       info["result"], info["success"])
+
+                # ── Orient: 批量解读所有并行结果 ──
+                # 合并为单次调用，比逐个 Orient 更高效（1次LLM调用 vs N次），
+                # 且能让 Orient 看到全部工具结果，产生更准确的关联解读
+                if self._current_orient_fn:
+                    combined = "\n---\n".join(
+                        f"[{results[i]['name']}] {results[i]['result'][:500]}"
+                        for i in sorted(results.keys())
+                    )
+                    enriched = self._enrich_with_orient(combined)
+                    if enriched != combined:
+                        orient_part = enriched[len(combined):].strip()
+                        if orient_part:
+                            messages[-1]["content"] += f"\n\n{orient_part}"
 
         logger.warning(f"Max iterations ({self.config.max_iterations}) reached, "
                         f"forcing stop. Last tool: "
@@ -483,6 +411,13 @@ class Agent:
     # ── 消息构建 ────────────────────────────────────────
 
     def _system_prompt(self) -> str:
+        # Cache: rules 和 persistent 各自有缓存，这里缓存拼接结果避免重复构建
+        rules = self.orient_engine.load_rules()
+        persistent = self.memory.load_persistent()
+        cache_key = (hash(rules), hash(persistent))
+        if self._prompt_cache is not None and self._prompt_cache_key == cache_key:
+            return self._prompt_cache
+
         parts = [
             "You are Sleeping fox (睡狐), an AI assistant developed for this platform. "
             "You are powered by large language models and equipped with tools to help users. "
@@ -515,19 +450,14 @@ class Agent:
             "- NEVER output Chart.js/D3.js/HTML/SVG/JS code. The frontend cannot render them.",
             "- Always include the returned ![title](url) markdown in your response so users see the image.",
         ]
-        rules = self.orient_engine.load_rules()
         if rules:
             parts.append(f"\n# Rules\n{rules}")
-        persistent = self.memory.load_persistent()
         if persistent:
             parts.append(f"\n# Previous Context\n{persistent}")
-        return "\n".join(parts)
-
-    def _build_messages(self, task: str) -> list[dict]:
-        """构建消息列表。委托给 BaseStrategy.build_messages，确保与策略层一致。"""
-        from .strategies.base import BaseStrategy
-        dummy = BaseStrategy(self.config, self.llm, self.tools, memory=self.memory)
-        return dummy.build_messages(task, include_memory=True)
+        result = "\n".join(parts)
+        self._prompt_cache = result
+        self._prompt_cache_key = cache_key
+        return result
 
     # ── 便利方法 ────────────────────────────────────────
 

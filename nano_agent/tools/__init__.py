@@ -23,6 +23,7 @@ from .weather import Weather
 from .stock_quote import StockQuote
 from .stock_chart import StockChart
 from .stock_market import StockMarket
+from .stock_unified import StockUnified
 from .ppt import PPT
 from .chart import Chart
 from .diagram import Diagram
@@ -48,9 +49,7 @@ class ToolRegistry:
         "_search": Search,
         "_fetch": Fetch,
         "_weather": Weather,
-        "_stock_quote": StockQuote,
-        "_stock_chart": StockChart,
-        "_stock_market": StockMarket,
+        "_stock": StockUnified,
         "_chart": Chart,
         "_diagram": Diagram,
         "_ai_image": AIImage,
@@ -78,9 +77,7 @@ class ToolRegistry:
         self._search = Search(brave_api_key=brave_api_key)
         self._fetch = Fetch(max_chars=fetch_max_chars)
         self._weather = Weather()
-        self._stock_quote = StockQuote(work_dir, charts_dir=charts_dir)
-        self._stock_chart = StockChart(work_dir, charts_dir=charts_dir)
-        self._stock_market = StockMarket(work_dir, charts_dir=charts_dir)
+        self._stock = StockUnified(work_dir, charts_dir=charts_dir)
         self._ppt = PPT(work_dir)
         self._chart = Chart(work_dir, charts_dir=charts_dir)
         self._diagram = Diagram(work_dir, charts_dir=charts_dir)

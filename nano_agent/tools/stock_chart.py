@@ -4,7 +4,7 @@
 A 股数据走腾讯 K线 API，美股/港股走 yfinance。
 """
 
-import json as _json
+import json
 import os
 from datetime import datetime, timedelta
 from pathlib import Path

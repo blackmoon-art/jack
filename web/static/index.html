@@ -393,7 +393,11 @@ function renderContent(text) {
 
   // 4. Images: ![alt](url) → <img>
   html = html.replace(/!\[([^\]]*)\]\(([^)]+)\)/g,
-    '<img src="$2" alt="$1" />');
+    '<img src="$2" alt="$1" style="max-width:100%;border-radius:8px;margin:8px 0;" loading="lazy" />');
+
+  // 4b. Bare /charts/ URLs → <img> (LLM 有时不写 markdown 语法)
+  html = html.replace(/(^|[^"'=\(>])(\/(?:charts|static\/charts)\/[\w.-]+\.(?:png|jpg|jpeg|gif|webp|svg))/g,
+    '$1<img src="$2" style="max-width:100%;border-radius:8px;margin:8px 0;" loading="lazy" />');
 
   // 5. Links: [text](url) → <a>
   html = html.replace(/\[([^\]]+)\]\((https?:\/\/[^\s\)]+)\)/g,
@@ -538,31 +542,52 @@ async function send() {
             }
             case 'done': {
               // 最终答案 → 替换当前消息内容
-              if (data.text) {
-                let answerText = data.text;
-                // 修复 LLM 幻觉的绝对 URL → 替换为相对路径
-                answerText = answerText.replace(
-                  /!\[([^\]]*)\]\(https?:\/\/[^\s)]*\/charts\/([^\s)]+)\)/g,
-                  '![$1](/charts/$2)'
-                );
-                answerText = answerText.replace(
-                  /https?:\/\/[^\s]+\/(charts\/[^\s)]+)/g,
-                  '/$1'
-                );
+              let answerText = data.text || '';
+              // 修复 LLM 幻觉的绝对 URL → 替换为相对路径
+              answerText = answerText.replace(
+                /!\[([^\]]*)\]\(https?:\/\/[^\s)]*\/charts\/([^\s)]+)\)/g,
+                '![$1](/charts/$2)'
+              );
+              answerText = answerText.replace(
+                /https?:\/\/[^\s]+\/(charts\/[^\s)]+)/g,
+                '/$1'
+              );
 
-                const imgs = chartImages.map(u =>
-                  `<img src="${u}" style="max-width:100%;border-radius:8px;margin:8px 0;" />`
-                ).join('');
-                // 清空当前消息，显示最终答案
-                currentMsg.innerHTML = imgs + `<div class="content">${renderContent(answerText)}</div>`;
+              // 也从最终答案中提取图片 URL（LLM 可能在回复中嵌入新图片）
+              const ansImgUrls = answerText.match(/!\[[^\]]*\]\((\/charts\/[^)]+)\)/g);
+              if (ansImgUrls) ansImgUrls.forEach(m => {
+                const u = m.match(/\(\/charts\/[^)]+\)/)[0].slice(1, -1);
+                if (!chartImages.includes(u)) chartImages.push(u);
+              });
+
+              // 渲染：先显示所有收集的图片，再显示文本
+              const imgs = chartImages.map(u =>
+                `<img src="${u}" style="max-width:100%;border-radius:8px;margin:8px 0;" loading="lazy" />`
+              ).join('');
+              // 去重：如果 answerText 已包含某个图片的 markdown，不在上方重复显示
+              const answerImgUrls = (answerText.match(/\/charts\/[^)\s]+/g) || []);
+              const uniqueImgs = chartImages
+                .filter(u => !answerImgUrls.includes(u))
+                .map(u => `<img src="${u}" style="max-width:100%;border-radius:8px;margin:8px 0;" loading="lazy" />`)
+                .join('');
+
+              if (answerText || uniqueImgs) {
+                currentMsg.innerHTML = uniqueImgs + `<div class="content">${renderContent(answerText)}</div>`;
                 // 渲染数学公式
                 const contentDiv = currentMsg.querySelector('.content');
                 if (contentDiv) renderMath(contentDiv);
               } else {
-                // done 没有 text，移除空气泡
-                removeThinkingIfEmpty();
-                if (!currentMsg.querySelector('.content, .thinking-summary')) {
-                  currentMsg.remove();
+                // done 没有 text，但可能有图片
+                if (chartImages.length > 0) {
+                  const imgsHtml = chartImages.map(u =>
+                    `<img src="${u}" style="max-width:100%;border-radius:8px;margin:8px 0;" loading="lazy" />`
+                  ).join('');
+                  currentMsg.innerHTML = `<div class="content">${imgsHtml}</div>`;
+                } else {
+                  removeThinkingIfEmpty();
+                  if (!currentMsg.querySelector('.content, .thinking-summary')) {
+                    currentMsg.remove();
+                  }
                 }
               }
               currentMsg = null;

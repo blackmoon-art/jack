@@ -8,6 +8,8 @@ import logging
 import os
 import sqlite3
 import sys
+import threading
+import time as _time
 import uuid
 from pathlib import Path
 from queue import Empty, Queue
@@ -37,18 +39,6 @@ def _get_db() -> sqlite3.Connection:
     conn = sqlite3.connect(str(DB_PATH))
     conn.row_factory = sqlite3.Row
     return conn
-
-
-def _db_execute_with_retry(conn, sql, params=(), max_retries=3):
-    """执行 SQL，SQLITE_BUSY 时自动重试。"""
-    for attempt in range(max_retries):
-        try:
-            return conn.execute(sql, params)
-        except sqlite3.OperationalError as e:
-            if "database is locked" in str(e).lower() and attempt < max_retries - 1:
-                _time.sleep(0.1 * (attempt + 1))
-                continue
-            raise
 
 
 def _init_db():
@@ -117,9 +107,6 @@ def db_clear_session(session_id: str):
         logger.warning(f"Failed to clear session: {e}")
 
 
-import threading
-import time as _time
-
 # Session storage: session_id -> {"agent": Agent, "history": list, "last_access": float}
 # 线程安全：所有读写都经过 _sessions_lock
 _sessions_lock = threading.Lock()
@@ -172,14 +159,15 @@ def check_daily_limit(session_id: str) -> str:
 STATIC_DIR = Path(__file__).parent / "static"
 
 
-def _cleanup_session_files(session_id: str):
+def _cleanup_session_files(session_id: str, work_dir: str):
     """清理 session 的磁盘数据：工作目录 + DB 历史。
     在 _sessions_lock 内调用（调用者已持锁）。
+
+    work_dir 必须由调用方传入，避免重新构建 Config 读到默认值导致清错目录。
     """
     import shutil
     # 1. 删除 session 工作目录
-    base_work_dir = Config().work_dir
-    session_dir = os.path.join(base_work_dir, f"session_{session_id}")
+    session_dir = work_dir
     if os.path.isdir(session_dir):
         try:
             shutil.rmtree(session_dir)
@@ -202,7 +190,7 @@ def _evict_sessions():
         if now - s.get("last_access", 0) > _SESSION_TTL_SECONDS
     ]
     for sid in expired:
-        _cleanup_session_files(sid)
+        _cleanup_session_files(sid, sessions[sid]["agent"].config.work_dir)
         del sessions[sid]
         logger.info(f"Evicted expired session {sid}")
     # 2. 如果还超量，按 LRU 淘汰
@@ -211,7 +199,7 @@ def _evict_sessions():
             sessions.items(), key=lambda x: x[1].get("last_access", 0)
         )
         for sid, _ in sorted_sessions[:len(sessions) - _MAX_SESSIONS]:
-            _cleanup_session_files(sid)
+            _cleanup_session_files(sid, sessions[sid]["agent"].config.work_dir)
             del sessions[sid]
             logger.info(f"Evicted LRU session {sid}")
 
@@ -351,19 +339,18 @@ async def chat(request: Request):
     strategy = body.get("strategy", "default")
     session_id = body.get("session_id", "")
 
-    # 访问控制：填了正确访问码 → 管理员不限次；不填/填错 → 普通用户有限次
-    owner_code = os.getenv("WEB_ACCESS_CODE", "")
-    is_owner = False
-    if owner_code:
-        user_code = body.get("code", "")
-        if user_code == owner_code:
-            is_owner = True  # 管理员，不限次
-        # 不填或填错 → 普通用户，有限次（不拒绝）
-
     if not task:
         return {"error": "Empty message"}
 
     session_id = get_or_create_session(session_id)
+
+    # 每日限流：owner 藉免
+    owner_code = os.getenv("WEB_ACCESS_CODE", "")
+    is_owner = bool(owner_code and body.get("code", "") == owner_code)
+    if not is_owner:
+        limit_msg = check_daily_limit(session_id)
+        if limit_msg:
+            return {"error": limit_msg}
 
     # 请求级模型覆盖（不修改 session 共享状态，线程安全）
     model = body.get("model", "")

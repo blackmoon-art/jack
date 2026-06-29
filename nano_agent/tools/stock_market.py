@@ -5,7 +5,7 @@
   - 行业板块: 新浪行业板块 API
 """
 
-import json as _json
+import json
 import re
 import urllib.request
 
@@ -193,7 +193,7 @@ class StockMarket:
         m = re.search(r'=\s*(\{.*\})', raw, re.DOTALL)
         if not m:
             return []
-        data = _json.loads(m.group(1))
+        data = json.loads(m.group(1))
 
         sectors = []
         for k, v in data.items():

@@ -3,7 +3,7 @@
 使用 subprocess + curl 获取数据，绕过 Python urllib 在某些 macOS 环境下的出站连接问题。
 """
 
-import json as _json
+import json
 import subprocess
 import urllib.parse
 
@@ -32,7 +32,7 @@ def _curl_get(url: str, timeout: int = 8) -> dict | None:
         )
         if r.returncode != 0 or not r.stdout.strip():
             return None
-        return _json.loads(r.stdout)
+        return json.loads(r.stdout)
     except Exception:
         return None
 

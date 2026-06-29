@@ -5,7 +5,7 @@ Draw.io: 生成 XML 并提供 diagrams.net 编辑/查看链接。
 """
 
 import base64
-import json as _json
+import json
 import logging
 import urllib.parse
 import urllib.request
@@ -24,7 +24,9 @@ class Diagram:
         ("mermaid_chart",
          "Generate diagrams & structural drawings from Mermaid syntax (PNG). Layout is auto-optimized.\n"
          "Use for: geometric proofs, math diagrams (Pythagoras, geometry), architecture, flowcharts,\n"
-         "state machines, org charts. NOT for coordinate graphs or data plots — use generate_chart for those.\n"
+         "state machines, org charts, sequence/timing diagrams (交互时序图 → sequenceDiagram).\n"
+         "NOT for coordinate graphs or data plots — use generate_chart for those.\n"
+         "Sequence/timing (时序图): 'sequenceDiagram', shows interactions between components over time.\n"
          "Architecture: 'flowchart TB', group layers with subgraph.\n"
          "Shapes: [(DB)] database, [/API/] gateway, ([Svc]) service, [Client] client, {Auth} decision.\n"
          "Arrows: --> request, -.-> async, ==> critical. State machines: stateDiagram-v2.\n"
@@ -33,6 +35,7 @@ class Diagram:
          {"code": {"type": "string",
                    "description": (
                        "Architecture: flowchart TB + subgraph per layer. "
+                       "Sequence/timing (时序图): sequenceDiagram + participants + messages (->>,-->>). "
                        "Shapes: [(DB)]=database, [/API/]=gateway, ([Svc])=service, [Client]=client, {Auth}=decision. "
                        "Arrows: --> data, -.-> async, ==> critical. "
                        "Flowchart: short labels. State: stateDiagram-v2."
@@ -44,8 +47,10 @@ class Diagram:
          "Returns an editable diagrams.net link with perfect auto-layout. "
          "Use this for state machines with >5 states or any diagram where layout quality matters.",
          "drawio_diagram",
-         {"diagram_type": {"type": "string", "description": "Diagram type: state-machine, flowchart, architecture, uml, er (state-machine recommended for complex state diagrams)"},
-          "description": {"type": "string", "description": "Natural language description. For state machines, list all states and transitions."}},
+         {"description": {"type": "string",
+                          "description": "Diagram description using arrows for connections. "
+                          "Example: 'Idle -> Loading: start\\nLoading -> Ready: success\\nLoading -> Error: fail'"},
+          "diagram_type": {"type": "string", "description": "Diagram type: flowchart, state-machine, architecture, uml, er"}},
          ["description"]),
     ]
 
@@ -210,7 +215,8 @@ class Diagram:
             else:
                 node_count = len(re.findall(r'[A-Za-z_][A-Za-z0-9_]*\s*[\[\(\{/\\]', code_stripped))
                 direction = "LR" if node_count <= 8 else "TB"
-            code_stripped = f"flowchart {direction}\n" + code_stripped.split("\n", 1)[-1] if "\n" in code_stripped else code_stripped
+            # 在代码前面加方向声明，保留全部原始内容
+            code_stripped = f"flowchart {direction}\n" + code_stripped
 
         return {"code": code_stripped, "mermaid": mermaid_config}
 
@@ -238,7 +244,7 @@ class Diagram:
 
         # Encode for mermaid.ink (JSON → gzip → base64 URL-safe)
         try:
-            j = _json.dumps(payload)
+            j = json.dumps(payload)
             compressed = zlib.compress(j.encode(), level=9)
             encoded = base64.urlsafe_b64encode(compressed).decode().rstrip("=")
             url = f"{MERMAID_INK}/img/pako:{encoded}?type=png"
@@ -269,75 +275,83 @@ class Diagram:
 
     # ── Draw.io ──────────────────────────────────────────
 
-    def drawio_diagram(self, title: str = "Diagram",
-                       diagram_type: str = "flowchart",
-                       nodes: str = "",
-                       edges: str = "") -> str:
-        """
-        生成 Draw.io 图表 XML，返回 diagrams.net 查看/编辑链接。
+    def drawio_diagram(self, description: str = "", diagram_type: str = "flowchart") -> str:
+        """从描述生成 Draw.io 图表，返回 diagrams.net 查看/编辑链接。
 
         Args:
-            title: 图表标题
-            diagram_type: flowchart | architecture | timeline | uml
-            nodes: 节点描述，每行一个: "id:label:type:x:y:width:height"
-                   type: rectangle, ellipse, diamond, parallelogram, cylinder
-                   例: "A:Start:ellipse:200:100:120:60"
-            edges: 边描述，每行一个: "source:target:label"
-                   例: "A:B:yes"
+            description: 图表描述。用 '->' 表示连接，冒号后为标签。
+                         节点直接写名称即可，有连接的节点自动创建。
+                         例: 'Idle -> Loading: start\\nLoading -> Ready: success'
+            diagram_type: flowchart | architecture | uml | er
 
         Returns:
             diagrams.net 查看链接
         """
-        # 解析节点
-        node_list = []
-        for line in nodes.strip().split("\n"):
-            line = line.strip()
-            if not line:
-                continue
-            parts = line.split(":")
-            if len(parts) >= 2:
-                nid = parts[0].strip()
-                label = parts[1].strip()
-                ntype = parts[2].strip() if len(parts) > 2 else "rectangle"
-                x = int(parts[3]) if len(parts) > 3 and parts[3].isdigit() else 200 + len(node_list) * 160
-                y = int(parts[4]) if len(parts) > 4 and parts[4].isdigit() else 100 + (len(node_list) % 3) * 120
-                w = int(parts[5]) if len(parts) > 5 and parts[5].isdigit() else 120
-                h = int(parts[6]) if len(parts) > 6 and parts[6].isdigit() else 60
-                node_list.append((nid, label, ntype, x, y, w, h))
+        title = f"{diagram_type} diagram"
+        node_list, edge_list = self._parse_diagram_description(description)
 
-        # 解析边
-        edge_list = []
-        for line in edges.strip().split("\n"):
-            line = line.strip()
-            if not line:
-                continue
-            parts = line.split(":")
-            if len(parts) >= 2:
-                edge_list.append((parts[0].strip(), parts[1].strip(),
-                                  parts[2].strip() if len(parts) > 2 else ""))
-
-        # 生成 Draw.io XML
-        xml = self._build_drawio_xml(title, node_list, edge_list, diagram_type)
-        encoded = urllib.parse.quote(xml, safe="")
-
-        # 如果节点为空，返回空模板链接
         if not node_list:
             drawio_url = f"https://app.diagrams.net/?lightbox=1#H{title.replace(' ', '%20')}"
             return (
                 f"Draw.io link: {drawio_url}\n\n"
-                f"Provide nodes and edges to auto-build a diagram. "
-                f"Format:\n"
-                f"  nodes = 'A:Start:ellipse\\nB:Process:rectangle\\nC:End:ellipse'\n"
-                f"  edges = 'A:B:yes\\nB:C'\n\n"
-                f"Alternatively, open the link and draw manually."
+                f"Provide a description with nodes and edges. Example:\n"
+                f"  'Start -> Process: begin\\nProcess -> End: done'"
             )
 
+        xml = self._build_drawio_xml(title, node_list, edge_list, diagram_type)
+        encoded = urllib.parse.quote(xml, safe="")
         drawio_url = f"https://app.diagrams.net/?lightbox=1#R{encoded}"
         return (
             f"📊 Draw.io diagram ({len(node_list)} nodes, {len(edge_list)} edges):\n"
             f"{drawio_url}\n\n"
-            f"Click to view/edit. The diagram will auto-open with your nodes and edges."
+            f"Click to view/edit."
         )
+
+    def _parse_diagram_description(self, description: str) -> tuple[list, list]:
+        """将自然语言描述解析为节点和边。
+
+        格式:
+          A -> B          → 边 A→B
+          A -> B: label   → 带标签的边
+          A --> B         → 同 ->
+          A               → 独立节点
+        """
+        import re
+        nodes = []   # (id, label, shape, x, y, w, h)
+        edges = []   # (src_id, tgt_id, label)
+        node_map = {}  # name → id
+
+        def get_node_id(name: str) -> str:
+            name = name.strip()
+            if name in node_map:
+                return node_map[name]
+            nid = f"n{len(node_map)}"
+            cols = 4
+            row = len(node_map) // cols
+            col = len(node_map) % cols
+            x = 100 + col * 180
+            y = 100 + row * 120
+            node_map[name] = nid
+            nodes.append((nid, name, "rectangle", x, y, 120, 60))
+            return nid
+
+        for line in description.strip().split("\n"):
+            line = line.strip()
+            if not line:
+                continue
+
+            # 边: A -> B 或 A --> B，可选 : label
+            m = re.match(r'(.+?)\s*-+>\s*([^:]+?)(?:\s*:\s*(.+))?$', line)
+            if m:
+                src_id = get_node_id(m.group(1))
+                tgt_id = get_node_id(m.group(2))
+                label = m.group(3).strip() if m.group(3) else ""
+                edges.append((src_id, tgt_id, label))
+            else:
+                # 独立节点
+                get_node_id(line)
+
+        return nodes, edges
 
     def _build_drawio_xml(self, title: str, nodes: list, edges: list,
                           diagram_type: str) -> str:

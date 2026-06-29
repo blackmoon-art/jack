@@ -329,14 +329,14 @@ class ReflexionStrategy(BaseStrategy):
             trace.save_lesson(lesson, trace_id)
 
     def _save_lessons_to_file(self, task: str, all_reflections: list[str]):
-        """保存反思轨迹到文件。#5 优化：只存 LESSON 行。"""
-        from ..memory import Memory
-        mem = Memory(file_path=None, reflection_path=self.config.reflection_file)
-        for i, reflection in enumerate(all_reflections):
+        """保存反思教训到持久记忆。复用 Agent 的 Memory 实例。"""
+        if not self.memory or not self.memory.reflection_path:
+            logger.debug("[Reflexion] reflection_path not configured, skipping file save")
+            return
+        for reflection in all_reflections:
             lesson = self._extract_lesson(reflection)
-            # 存储时标记为 LESSON，方便下次精准提取
             eval_result = {"status": "retry", "score": 0}
-            mem.save_reflection(task, f"LESSON: {lesson}", eval_result)
+            self.memory.save_reflection(task, f"LESSON: {lesson}", eval_result)
 
     def get_lessons(self) -> list[str]:
         """返回所有已学习的教训。"""

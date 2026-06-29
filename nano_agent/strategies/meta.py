@@ -147,31 +147,30 @@ class MetaStrategy(BaseStrategy):
         logger.info(f"[Meta] Selected: {strategy_name} {strategy_params}")
         self.emit("text", {"text": f"📊 复杂度: {analysis['complexity']}/10 → 策略: {strategy_name}"})
 
-        # ── 构建 messages ──
-        messages = self.build_messages(task, include_memory=True)
-
         # ── ④ ⑤ 执行 + 失败重试 ──
         best_result = ""
         best_score = -1
         current_strategy = strategy_name
+        current_params = strategy_params
         last_eval = {"status": "unknown", "score": 0, "issues": [], "suggestion": ""}
 
         for attempt in range(self.max_retries):
             logger.info(f"[Meta Attempt {attempt+1}/{self.max_retries}] strategy={current_strategy}")
 
-            # 注入前序失败教训（第二次及以后）
-            if attempt > 0 and best_result:
-                messages = self.build_messages(task, include_memory=False)
-                messages.append({
-                    "role": "user",
-                    "content": (
-                        f"[Previous attempt with strategy '{current_strategy}' failed. "
-                        f"Issues: {json.dumps(last_eval.get('issues', []))}. "
-                        f"Please try a different approach.]"
-                    )
-                })
+            # 重试时注入前序失败教训
+            sub_task = task
+            if attempt > 0 and last_eval.get("issues"):
+                sub_task = (
+                    f"{task}\n\n"
+                    f"[Previous attempt scored {best_score}/10. "
+                    f"Issues: {json.dumps(last_eval.get('issues', []))}. "
+                    f"Suggestion: {last_eval.get('suggestion', '')} "
+                    f"Please try a different approach.]"
+                )
 
-            result, step_messages = agent_loop_fn(messages)
+            # 实例化并执行子策略（而非直接调 agent_loop_fn）
+            result = self._dispatch_sub_strategy(
+                current_strategy, sub_task, agent_loop_fn, **current_params)
             logger.info(f"[Meta Result] {result[:300]}...")
 
             # ── ⑤ 反馈评估 ──
@@ -195,6 +194,10 @@ class MetaStrategy(BaseStrategy):
                 old = current_strategy
                 current_strategy = self._upgrade_strategy(current_strategy, score)
                 if current_strategy != old:
+                    _, current_params = self.select_strategy({
+                        "complexity": score, "quality_critical": True,
+                        "estimated_steps": 3,
+                    })
                     logger.info(f"[Meta] Upgraded: {old} → {current_strategy}")
                     self.emit("text", {"text": f"🔄 升级策略: {old} → {current_strategy}"})
 
@@ -202,7 +205,7 @@ class MetaStrategy(BaseStrategy):
         lesson = self.extract_lesson(task, best_result, last_eval)
         if lesson and self.memory:
             try:
-                self.memory.save_reflection(lesson)
+                self.memory.save_reflection(task, lesson, last_eval)
                 logger.info(f"[Meta Lesson] {lesson[:200]}")
             except Exception:
                 pass
@@ -210,6 +213,30 @@ class MetaStrategy(BaseStrategy):
         logger.info(f"[Meta] Complete: {analysis['complexity']}/10 → {current_strategy} "
                     f"→ score {best_score}/10")
         return best_result
+
+    def _dispatch_sub_strategy(self, strategy_name: str, task: str,
+                                agent_loop_fn, **params) -> str:
+        """实例化并运行子策略，替代直接调 agent_loop_fn。"""
+        from . import STRATEGY_REGISTRY
+        from .context import StrategyContext
+
+        sub_cls = STRATEGY_REGISTRY.get(strategy_name, STRATEGY_REGISTRY["default"])
+        # 防止无限递归：Meta → Meta
+        if sub_cls is type(self):
+            sub_cls = STRATEGY_REGISTRY["default"]
+
+        ctx = StrategyContext(
+            config=self.config, llm=self.llm, tools=self.tools,
+            memory=self.memory, emit=self._emit,
+            execute_tool=self._execute_tool, agent_loop=self._agent_loop,
+            orient_fn=self._orient_fn, model_override=self._model_override,
+            system_prompt_fn=self._system_prompt_fn,
+        )
+        kwargs = dict(sub_cls.default_params)
+        kwargs.update(params)
+        kwargs["memory"] = self.memory
+        sub = sub_cls(ctx.config, ctx.llm, ctx.tools, context=ctx, **kwargs)
+        return sub.run(task, agent_loop_fn)
 
     @staticmethod
     def _upgrade_strategy(current: str, score: int) -> str:

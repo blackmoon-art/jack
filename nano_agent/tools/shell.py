@@ -83,7 +83,7 @@ class Shell:
                 # 模拟路径解析
                 test_parts = shlex.split(command)
                 for part in test_parts:
-                    if '/' in part or part.startswith('-') is False:
+                    if '/' in part or not part.startswith('-'):
                         resolved = os.path.normpath(os.path.join(self.work_dir, part))
                         if not resolved.startswith(os.path.normpath(self.work_dir)):
                             return f"Access denied: path escapes workspace ('{part}')"
