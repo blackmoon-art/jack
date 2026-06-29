@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Optional
 
 _dotenv_loaded = False
+_config_instance = None  # Config 单例缓存（延迟初始化，避免前向引用）
 
 
 def _ensure_dotenv():
@@ -133,3 +134,15 @@ class Config:
         per-session 隔离用: session_config = config.with_overrides(work_dir=session_dir)
         """
         return _dc_replace(self, **changes)
+
+
+def get_config() -> Config:
+    """返回缓存的 Config 单例。
+
+    首次调用时从环境变量构建，后续调用直接返回缓存实例。
+    避免 server.py 每次请求重复 30+ 次 os.getenv。
+    """
+    global _config_instance
+    if _config_instance is None:
+        _config_instance = Config()
+    return _config_instance

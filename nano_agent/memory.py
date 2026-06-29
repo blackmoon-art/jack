@@ -504,8 +504,6 @@ class Memory:
         线程安全：使用文件级锁确保 append + read + truncate 原子执行，
         防止并发写入导致数据丢失。
         """
-        import os
-
         try:
             path = Path(file_path)
             path.parent.mkdir(parents=True, exist_ok=True)

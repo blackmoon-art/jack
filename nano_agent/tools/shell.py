@@ -57,17 +57,21 @@ class Shell:
             self._env['PATH'] = venv_bin + os.pathsep + self._env.get('PATH', '')
             self._env['VIRTUAL_ENV'] = os.path.join(work_dir, '.venv')
 
-    # 路径沙箱：禁止访问工作目录外部的路径
+    # 路径沙箱：用 realpath 解析而非字符串匹配
     _BLOCKED_PATH_TOKENS = ('~', '../', '/Users/', '/home/', '/etc/', '/var/',
                             '/sys/', '/proc/', '/root/', '/tmp/', '/private/')
 
     def _check_path_sandbox(self, command: str) -> str | None:
-        """检查命令是否试图访问工作目录外的路径。返回错误信息或 None。"""
-        # 1. 阻止 ~ 和工作目录外的敏感路径
+        """检查命令是否试图访问工作目录外的路径。返回错误信息或 None。
+
+        改进：除了字符串黑名单，还用 os.path.realpath 对所有路径类参数
+        做实际解析，确保 resolved path 在 work_dir 内。
+        """
+        # 1. 快速字符串检查：阻止 ~ 和明显的敏感路径
         for token in self._BLOCKED_PATH_TOKENS:
             if token in command:
                 if token == '../':
-                    pass  # 由下面的 .. 逃逸检查处理
+                    pass  # 由下面的 realpath 检查处理
                 # 允许 work_dir 下的路径（如 /Users/xxx/agent_workspace/...）
                 elif self.work_dir in command:
                     continue
@@ -76,19 +80,23 @@ class Shell:
         # 2. 阻止 ~ 展开
         if '~' in command:
             return "Access denied: '~' is not allowed (workspace-only access)"
-        # 3. 阻止 .. 逃逸
-        if '..' in command:
-            # 解析后的路径必须在 work_dir 内
-            try:
-                # 模拟路径解析
-                test_parts = shlex.split(command)
-                for part in test_parts:
-                    if '/' in part or not part.startswith('-'):
-                        resolved = os.path.normpath(os.path.join(self.work_dir, part))
-                        if not resolved.startswith(os.path.normpath(self.work_dir)):
-                            return f"Access denied: path escapes workspace ('{part}')"
-            except ValueError:
-                pass
+        # 3. 阻止 symlink 逃逸：对 shlex 解析后的每个路径类参数做 realpath 检查
+        try:
+            test_parts = shlex.split(command)
+        except ValueError:
+            return None  # 语法错误由 bash() 处理
+        work_dir_real = os.path.realpath(self.work_dir)
+        for part in test_parts:
+            # 跳过选项（-x, --xxx）和命令名
+            if part.startswith('-') or '/' not in part:
+                # 仍检查 cd 命令的参数
+                if part.startswith('-') or '/' not in part:
+                    continue
+            # 对含路径的参数做 realpath 解析
+            if '/' in part or part in ('.', '..'):
+                resolved = os.path.realpath(os.path.join(work_dir_real, part))
+                if not resolved.startswith(work_dir_real + os.sep) and resolved != work_dir_real:
+                    return f"Access denied: path escapes workspace ('{part}' → {resolved})"
         return None
 
     def bash(self, command: str) -> Observation:

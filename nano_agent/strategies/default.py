@@ -138,14 +138,23 @@ class DefaultStrategy(BaseStrategy):
 
     @staticmethod
     def _should_force_visual(task: str, memory=None) -> bool:
-        """检测任务是否需要视觉输出（画图/图表）。"""
+        """检测任务是否需要视觉输出（画图/图表）。
+
+        优化：仅当前任务含视觉关键词时才触发，
+        不再因上一轮的视觉请求误判当前非视觉任务。
+        """
         task_lower = task.lower()
         is_visual = any(k in task_lower for k in _VISUAL_KW)
-        is_qa     = any(k in task_lower for k in _QA_KW)
 
-        # 上下文：上一轮用户是否主动要求了视觉内容
-        prev_visual = False
-        if memory:
+        if is_visual:
+            return True
+
+        # 仅在当前任务含“修改/编辑/调整”等词汇且上一轮是视觉任务时，
+        # 才认为这是对已有图表的后续编辑
+        edit_keywords = ("修改", "编辑", "调整", "重画", "改", "update", "edit", "modify", "redo", "rerun")
+        is_edit = any(k in task_lower for k in edit_keywords)
+
+        if is_edit and memory:
             msgs = memory.get_window_messages()
             for m in reversed(msgs):
                 if m["role"] == "user":
@@ -153,9 +162,11 @@ class DefaultStrategy(BaseStrategy):
                         k in m["content"].lower()
                         for k in _VISUAL_KW
                     )
+                    if prev_visual:
+                        return True
                     break
 
-        return is_visual or (not is_qa and prev_visual)
+        return False
 
     def _get_visual_tool_names(self) -> set[str]:
         """动态从 ToolRegistry 获取视觉工具名，不再硬编码。"""
@@ -217,44 +228,6 @@ class DefaultStrategy(BaseStrategy):
     def _execute_tools_parallel(self, tool_calls: list, messages: list):
         """并行执行多个独立的工具调用。
 
-        与 Agent._agent_loop 中的并行逻辑一致：
-        每个工具用临时 list 收集 execute_tool 追加的 tool message（含完整 content），
-        执行完毕后按顺序合并到主 messages list。
+        委托给 BaseStrategy.execute_tools_parallel，避免代码重复。
         """
-        from concurrent.futures import ThreadPoolExecutor, as_completed
-
-        results: dict[int, dict] = {}
-
-        def _run_one(idx: int, tc: dict):
-            try:
-                tmp_msgs: list = []
-                info = self.execute_tool(tc, tmp_msgs)
-                # 提取 execute_tool 追加的 tool message（含 Orient 富化后的 content）
-                if tmp_msgs:
-                    info["_tool_msg"] = tmp_msgs[-1]
-            except Exception as e:
-                logger.warning(f"Parallel tool '{tc.get('name', '?')}' failed: {e}")
-                info = {"name": tc.get("name", "?"),
-                        "result": f"Error: {e}",
-                        "content": f"Error: {e}",
-                        "success": False}
-            results[idx] = info
-
-        with ThreadPoolExecutor(max_workers=len(tool_calls)) as executor:
-            futures = [executor.submit(_run_one, i, tc) for i, tc in enumerate(tool_calls)]
-            for f in as_completed(futures):
-                f.result()
-
-        for i in sorted(results.keys()):
-            info = results[i]
-            tc = tool_calls[i]
-            # 优先用 execute_tool 生成的完整 tool message
-            if "_tool_msg" in info:
-                messages.append(info["_tool_msg"])
-            else:
-                content = str(info.get("content") or info.get("result", ""))
-                messages.append({
-                    "role": "tool",
-                    "tool_call_id": tc.get("id", ""),
-                    "content": content,
-                })
+        self.execute_tools_parallel(tool_calls, messages)

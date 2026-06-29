@@ -141,6 +141,73 @@ class BaseStrategy:
         messages.append({"role": "tool", "tool_call_id": tool_call.get("id", ""), "content": content})
         return {"name": name, "result": result_text, "success": is_success}
 
+    # ── 并行工具执行公共方法 ──────────────────────────────
+
+    def execute_tools_parallel(self, tool_calls: list[dict],
+                                messages: list[dict],
+                                tool_callback: Optional[Callable] = None) -> dict[int, dict]:
+        """并行执行多个工具，追加结果到 messages，执行批量 Orient。
+
+        共享逻辑：agent.py 的 _agent_loop 和 default.py 的 _execute_tools_parallel
+        都调用此方法，避免代码重复。
+
+        返回 {idx: info_dict}，info 含 name/result/content/success/_tool_msg。
+        """
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        results: dict[int, dict] = {}
+
+        def _run_one(idx: int, tc: dict):
+            try:
+                tmp_msgs: list = []
+                info = self.execute_tool(tc, tmp_msgs, enable_orient=False)
+                if tmp_msgs:
+                    info["_tool_msg"] = tmp_msgs[-1]
+            except Exception as e:
+                logger.warning(f"Parallel tool '{tc.get('name', '?')}' failed: {e}")
+                info = {"name": tc.get("name", "?"),
+                        "result": f"Error: {e}",
+                        "content": f"Error: {e}",
+                        "success": False}
+            results[idx] = info
+
+        with ThreadPoolExecutor(max_workers=len(tool_calls)) as executor:
+            futures = [executor.submit(_run_one, i, tc)
+                       for i, tc in enumerate(tool_calls)]
+            for f in as_completed(futures):
+                f.result()
+
+        # 按顺序合并 tool messages 到主 messages list
+        for i in sorted(results.keys()):
+            info = results[i]
+            tc = tool_calls[i]
+            if "_tool_msg" in info:
+                messages.append(info["_tool_msg"])
+            else:
+                content = str(info.get("content") or info.get("result", ""))
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": tc.get("id", ""),
+                    "content": content,
+                })
+            if tool_callback:
+                tool_callback(info["name"], tc.get("arguments", {}),
+                              info["result"], info["success"])
+
+        # 批量 Orient：合并所有工具结果做一次 Orient（1次 LLM vs N次）
+        if self._orient_fn:
+            combined = "\n---\n".join(
+                f"[{results[i]['name']}] {results[i]['result'][:500]}"
+                for i in sorted(results.keys())
+            )
+            enriched = self._orient_fn(combined)
+            if enriched and enriched != combined:
+                orient_part = enriched[len(combined):].strip() if enriched.startswith(combined) else enriched
+                if orient_part and messages:
+                    messages[-1]["content"] += f"\n\n{orient_part}"
+
+        return results
+
     def run(self, task: str, agent_loop_fn) -> str:
         """执行推理策略。子类必须实现。
 
@@ -157,12 +224,8 @@ class BaseStrategy:
     def _chat_json(self, messages: list[dict], max_retries: int = 2) -> Optional[Any]:
         """调用 LLM 并解析 JSON 响应，失败自动重试。
 
-        Args:
-            messages:    发给 LLM 的消息列表
-            max_retries: JSON 解析失败时的重试次数
-
-        Returns:
-            解析后的 Python 对象 (dict/list)，或 None（全部重试失败）
+        内部调用 self.llm.chat + self.llm.clean_json_response，
+        保持与 mock 兼容（测试 mock 这两个方法）。
         """
         for attempt in range(max_retries + 1):
             response = self.llm.chat(messages=messages, tools=[], system="",
@@ -180,6 +243,6 @@ class BaseStrategy:
                         f"JSON parse failed after {max_retries+1} attempts. "
                         f"Response: {text[:200]}")
                     self.emit("text", {
-                        "text": f"⚠️ LLM 返回格式解析失败，使用降级策略。"
+                        "text": "LLM returned unparseable JSON, using fallback."
                     })
         return None

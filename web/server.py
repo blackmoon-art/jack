@@ -24,6 +24,7 @@ from fastapi.responses import HTMLResponse, StreamingResponse, FileResponse, JSO
 from fastapi.staticfiles import StaticFiles
 
 from nano_agent import Agent, Config
+from nano_agent.config import get_config
 
 logger = logging.getLogger("nano_agent.web")
 
@@ -228,7 +229,7 @@ def get_or_create_session(session_id: Optional[str] = None) -> str:
 
     # ── 锁外构建 Agent（耗时操作）──
     history = db_load_history(new_id)
-    base_config = Config()
+    base_config = get_config()
     import os as _os
     session_dir = _os.path.join(base_config.work_dir, f"session_{new_id}")
     _os.makedirs(session_dir, exist_ok=True)
@@ -405,8 +406,8 @@ async def health():
     return {
         "status": "ok",
         "sessions": len(sessions),
-        "model": Config().model,
-        "provider": Config().provider,
+        "model": get_config().model,
+        "provider": get_config().provider,
     }
 
 
@@ -502,35 +503,32 @@ async def upload_file(file: UploadFile = FastAPIFile(...), session_id: str = For
 
 @app.get("/api/download/{filename}")
 async def download_file(filename: str, session_id: str = ""):
-    """从会话工作目录下载文件到用户本地。"""
-    import glob as _g
+    """从会话工作目录下载文件到用户本地。
 
-    # 如果没有指定 session，搜索所有活跃会话
-    search_dirs = []
-    if session_id:
-        with _sessions_lock:
-            if session_id in sessions:
-                search_dirs.append(sessions[session_id]["agent"].config.work_dir)
-    else:
-        with _sessions_lock:
-            for sid, s in sessions.items():
-                search_dirs.append(s["agent"].config.work_dir)
+    安全：session_id 必传，不允许跨 session 访问其他用户文件。
+    """
+    if not session_id:
+        return JSONResponse({"error": "session_id is required"}, status_code=400)
 
-    # 找到第一个匹配的文件
-    for d in search_dirs:
-        filepath = (Path(d) / filename).resolve()
-        try:
-            filepath.relative_to(Path(d).resolve())
-        except ValueError:
-            continue
-        if filepath.exists():
-            return FileResponse(
-                filepath,
-                filename=filename,
-                headers={"Content-Disposition": f"attachment; filename=\"{filename}\""},
-            )
+    with _sessions_lock:
+        if session_id not in sessions:
+            return JSONResponse({"error": "Session not found"}, status_code=404)
+        work_dir = Path(sessions[session_id]["agent"].config.work_dir)
 
-    return JSONResponse({"error": "File not found"}, status_code=404)
+    filepath = (work_dir / filename).resolve()
+    try:
+        filepath.relative_to(work_dir.resolve())
+    except ValueError:
+        return JSONResponse({"error": "Access denied"}, status_code=403)
+
+    if not filepath.exists():
+        return JSONResponse({"error": "File not found"}, status_code=404)
+
+    return FileResponse(
+        filepath,
+        filename=filename,
+        headers={"Content-Disposition": f"attachment; filename=\"{filename}\""},
+    )
 
 
 # ── 启动 ──────────────────────────────────────────────
@@ -540,7 +538,7 @@ if __name__ == "__main__":
 
     port = int(os.getenv("WEB_PORT", "8080"))
     logger.info(f"Sleeping fox Web UI — http://localhost:{port}")
-    logger.info(f"Model: {Config().model} | Provider: {Config().provider}")
+    logger.info(f"Model: {get_config().model} | Provider: {get_config().provider}")
 
     cleanup_old_charts()
     uvicorn.run(app, host="0.0.0.0", port=port, log_level="info")

@@ -46,6 +46,8 @@ STRATEGY_MAP = {
     "tot": "tree-of-thought",
     "tree-of-thought": "tree-of-thought",
     "tree": "tree-of-thought",
+    "meta": "meta",
+    "auto": "auto",
 }
 
 

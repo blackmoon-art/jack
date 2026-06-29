@@ -112,6 +112,34 @@ class LLM:
     def _model(self) -> str:
         return self._model_override or self.config.model
 
+    def chat_json_with_retry(self, messages: list[dict], max_retries: int = 2,
+                             system: str = "", model: str | None = None,
+                             tools: list = None) -> Any:
+        """调用 LLM 并解析 JSON 响应，失败自动重试。
+
+        统一的 JSON 重试逻辑，供 Orient、BaseStrategy._chat_json、
+        Reflexion 等共用，避免重复实现。
+
+        Returns:
+            解析后的 Python 对象 (dict/list)，或 None（全部重试失败）
+        """
+        for attempt in range(max_retries + 1):
+            response = self.chat(messages=messages, tools=tools or [], system=system,
+                                  model=model)
+            text = self.clean_json_response(response["text"])
+            try:
+                return json.loads(text)
+            except json.JSONDecodeError:
+                if attempt < max_retries:
+                    logger.warning(
+                        f"JSON parse failed (attempt {attempt+1}/{max_retries+1}), "
+                        f"retrying... Response: {text[:200]}")
+                else:
+                    logger.warning(
+                        f"JSON parse failed after {max_retries+1} attempts. "
+                        f"Response: {text[:200]}")
+        return None
+
     def _get_client(self):
         if self._client is None:
             if self._provider == "anthropic":
@@ -375,7 +403,7 @@ class LLM:
         kwargs = {
             "model": model or self._model,
             "messages": converted,
-            "max_tokens": 4096,
+            "max_tokens": self.config.max_tokens,
         }
         if system:
             kwargs["system"] = system

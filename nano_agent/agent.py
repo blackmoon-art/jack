@@ -21,6 +21,7 @@ O-O-D-A 阶段:
 
 import json
 import logging
+import threading
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Callable, Optional
@@ -63,6 +64,7 @@ class Agent:
         self._strategy_instance = None
         self._last_orientation: Optional[dict] = None  # 最近一次 Orient 结果
         self._on_event = None
+        self._emit_lock = threading.Lock()  # 保护 _emit 回调的线程安全
         self._current_orient_fn: Optional[Callable] = None  # 当前任务的 Orient 函数（绑定原始任务）
         self._prompt_cache: Optional[str] = None  # system prompt 缓存
         self._prompt_cache_key: tuple = ()
@@ -119,12 +121,13 @@ class Agent:
         return final
 
     def _emit(self, event_type: str, data: dict):
-        """发送事件给回调。"""
+        """发送事件给回调。线程安全：并行工具执行时多线程同时调用。"""
         if self._on_event:
-            try:
-                self._on_event(event_type, data)
-            except Exception as e:
-                logger.warning(f"Event callback error ({event_type}): {e}")
+            with self._emit_lock:
+                try:
+                    self._on_event(event_type, data)
+                except Exception as e:
+                    logger.warning(f"Event callback error ({event_type}): {e}")
 
     def _make_strategy_context(self) -> StrategyContext:
         """构建策略上下文，替代猴子补丁注入。"""
@@ -327,55 +330,11 @@ class Agent:
                     tool_callback(info["name"], tc.get("arguments", {}),
                                   info["result"], info["success"])
             else:
-                # 并行执行工具（不包含 Orient，避免线程问题）
-                results: dict[int, dict] = {}
-                def _run_one(idx: int, tc: dict):
-                    try:
-                        tmp_msgs: list = []
-                        info = self.execute_tool(tc, tmp_msgs, enable_orient=False)
-                        if tmp_msgs:
-                            info["_tool_msg"] = tmp_msgs[-1]
-                    except Exception as e:
-                        logger.warning(f"Parallel tool '{tc.get('name', '?')}' failed: {e}")
-                        info = {"name": tc.get("name", "?"), "result": f"Error: {e}",
-                                "content": f"Error: {e}", "success": False}
-                    results[idx] = info
+                # 并行执行工具（委托给 BaseStrategy.execute_tools_parallel）
+                self.execute_tools_parallel(
+                    response["tool_calls"], messages,
+                    tool_callback=tool_callback)
 
-                with ThreadPoolExecutor(max_workers=len(response["tool_calls"])) as executor:
-                    futures = [executor.submit(_run_one, i, tc)
-                               for i, tc in enumerate(response["tool_calls"])]
-                    for f in as_completed(futures):
-                        f.result()
-
-                for i in sorted(results.keys()):
-                    info = results[i]
-                    tc = response["tool_calls"][i]
-                    if "_tool_msg" in info:
-                        messages.append(info["_tool_msg"])
-                    else:
-                        content = str(info.get("content") or info.get("result", ""))
-                        messages.append({
-                            "role": "tool",
-                            "tool_call_id": tc.get("id", ""),
-                            "content": content,
-                        })
-                    if tool_callback:
-                        tool_callback(info["name"], tc.get("arguments", {}),
-                                      info["result"], info["success"])
-
-                # ── Orient: 批量解读所有并行结果 ──
-                # 合并为单次调用，比逐个 Orient 更高效（1次LLM调用 vs N次），
-                # 且能让 Orient 看到全部工具结果，产生更准确的关联解读
-                if self._current_orient_fn:
-                    combined = "\n---\n".join(
-                        f"[{results[i]['name']}] {results[i]['result'][:500]}"
-                        for i in sorted(results.keys())
-                    )
-                    enriched = self._enrich_with_orient(combined)
-                    if enriched != combined:
-                        orient_part = enriched[len(combined):].strip()
-                        if orient_part:
-                            messages[-1]["content"] += f"\n\n{orient_part}"
 
         logger.warning(f"Max iterations ({self.config.max_iterations}) reached, "
                         f"forcing stop. Last tool: "
@@ -410,11 +369,36 @@ class Agent:
 
     # ── 消息构建 ────────────────────────────────────────
 
+    _builtin_rules_cache: Optional[str] = None
+
+    def _load_builtin_rules(self) -> str:
+        """加载内置规则文件（rules/system_rules.md）。缓存避免重复读盘。"""
+        if self._builtin_rules_cache is not None:
+            return self._builtin_rules_cache
+        # 搜索项目根目录下的 rules/system_rules.md
+        candidates = [
+            Path(__file__).parent.parent / "rules" / "system_rules.md",  # 项目根/rules/
+            Path.cwd() / "rules" / "system_rules.md",
+        ]
+        for p in candidates:
+            if p.is_file():
+                try:
+                    self._builtin_rules_cache = p.read_text(encoding="utf-8").strip()
+                    return self._builtin_rules_cache
+                except OSError:
+                    pass
+        self._builtin_rules_cache = ""
+        return self._builtin_rules_cache
+
     def _system_prompt(self) -> str:
         # Cache: rules 和 persistent 各自有缓存，这里缓存拼接结果避免重复构建
         rules = self.orient_engine.load_rules()
         persistent = self.memory.load_persistent()
-        cache_key = (hash(rules), hash(persistent))
+
+        # 加载内置规则（rules/system_rules.md）
+        builtin_rules = self._load_builtin_rules()
+
+        cache_key = (hash(rules), hash(persistent), hash(builtin_rules))
         if self._prompt_cache is not None and self._prompt_cache_key == cache_key:
             return self._prompt_cache
 
@@ -424,31 +408,7 @@ class Agent:
             "Be concise, helpful, and act decisively. When asked who you are, say you are Sleeping fox.",
             "Keep answers reasonably short — use bullet points and tables over long paragraphs. Don't over-explain, skip filler."
             "",
-            "# Quick Rules",
-            "- Simple knowledge/definition → answer directly, no tools. Be fast.",
-            "- RULE #1: If the user says draw, 画, 生成, create, make, show, 图, chart, diagram, plot, 图, image → MUST call a tool. Text description is a VIOLATION. Every. Single. Time.",
-            "- Pick the right tool based on its description. Trust the tool descriptions.",
-            "- Always show images with ![title](url)",
-            "- A股大盘用 stock_market，美股大盘用 stock_market_us，不要用 stock_info 逐个查询指数。",
-            "",
-            "# Math / Formula Writing",
-            "- CRITICAL: ALL math MUST be inside $...$ (inline) or $$...$$ (block). Never write math in plain text.",
-            "- Superscript: $x^2$ NOT x^2. Subscript: $x_1$ NOT x1. Fractions: $\\frac{a}{b}$ NOT a/b.",
-            "- NEVER write raw expressions like x^2, 1/2, sqrt(x), a_1 — they look broken. Always KaTeX-wrap them.",
-            "- Use \\text{...} for text inside formulas, never raw words in math mode.",
-            "- Break long derivations into multiple display blocks, one step per block.",
-            "- Write units with \\text{...} or \\mathrm{...}: $3.0 \\times 10^8 \\text{ m/s}$",
-            "- Use \\frac, \\sqrt, \\sum, \\int with clear limits.",
-            "- Align multi-line equations with \\begin{aligned} inside $$...$$.",
-            "",
-            "# File Operations",
-            "- When you write a file, ALWAYS provide a download link: [下载 {filename}](/api/download/{filename})",
-            "- Example: [下载 report.txt](/api/download/report.txt)",
-            "",
-            "# Chart / Drawing Rules — pick the right tool and chart_type based on the task",
-            "- Read the tool's `chart_type` descriptions carefully before choosing. Each type has a distinct purpose.",
-            "- NEVER output Chart.js/D3.js/HTML/SVG/JS code. The frontend cannot render them.",
-            "- Always include the returned ![title](url) markdown in your response so users see the image.",
+            builtin_rules,
         ]
         if rules:
             parts.append(f"\n# Rules\n{rules}")

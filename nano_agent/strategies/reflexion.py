@@ -115,13 +115,26 @@ class ReflexionStrategy(BaseStrategy):
     # ── 反思 ──────────────────────────────────────────────
 
     def _extract_lesson(self, reflection: str) -> str:
-        """从反思文本中提取 LESSON 行。"""
+        """从反思文本中提取 LESSON 行。
+
+        多格式兼容：LESSON:, **LESSON:**, LESSON :, - LESSON:, ## LESSON
+        """
         for line in reflection.split("\n"):
             stripped = line.strip()
-            if stripped.upper().startswith("LESSON:"):
-                return stripped[7:].strip()
-            if stripped.upper().startswith("LESSON :"):
-                return stripped[8:].strip()
+            # 去除 markdown 前缀
+            clean = stripped.lstrip("-*#>").strip()
+            # 匹配各种 LESSON 前缀格式
+            if clean.upper().startswith("LESSON:"):
+                return clean[7:].strip().strip("**")
+            if clean.upper().startswith("LESSON :"):
+                return clean[8:].strip().strip("**")
+            # 兼容 **LESSON:** 格式
+            if clean.startswith("**LESSON"):
+                # 移除 **LESSON:**  或 **LESSON**:
+                after = clean.split("LESSON", 1)[-1]
+                after = after.lstrip("*: ").strip()
+                if after:
+                    return after
         # 没有明确的 LESSON 行，取最后一行作为教训
         lines = [l.strip() for l in reflection.split("\n") if l.strip()]
         return lines[-1] if lines else reflection[:100]
@@ -293,14 +306,12 @@ class ReflexionStrategy(BaseStrategy):
             if content:
                 for line in content.split("\n"):
                     stripped = line.strip()
-                    if stripped.startswith("**LESSON:**"):
-                        lesson = stripped.replace("**LESSON:**", "").strip()
-                    elif stripped.startswith("**Reflection:**"):
-                        continue
-                    else:
-                        continue
-                    if lesson:
-                        self.lesson_memory.append(lesson)
+                    # 委托给 _extract_lesson 统一解析
+                    clean = stripped.lstrip("-*#>").strip()
+                    if clean.upper().startswith("LESSON:") or clean.startswith("**LESSON"):
+                        lesson = self._extract_lesson(stripped)
+                        if lesson:
+                            self.lesson_memory.append(lesson)
                 if self.lesson_memory:
                     logger.info(f"[Reflexion] Loaded {len(self.lesson_memory)} historical lessons")
         except Exception as e:

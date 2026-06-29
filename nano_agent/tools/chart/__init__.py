@@ -30,7 +30,7 @@ class Chart:
          "geometric proofs (勾股定理, Pythagoras, triangle squares) → chart_type='geometry'. "
          "data comparison → bar, trend → line, math → function, 3D → wireframe. "
          "waveform: signal/voltage waveform (信号波形, NOT 交互时序图 — use mermaid_chart sequenceDiagram for that).", "generate_chart",
-         {"chart_type": {"type": "string", "description": "geometry: geometric proof. wireframe: 3D. line: trend. bar: comparison. curve: smoothed. scatter: x-y. pie: proportions. function: math formula. regression: fitting. histogram: distribution. area/heatmap/radar/bubble: specialized. waveform: signal/voltage wave (NOT sequence diagram). Digital data='0,1,0,1;1,0,0,1' labels='CLK;DATA'. Analog data='sine,2,5;square,1,3' labels='CH1;CH2' (type,freq_hz,amplitude)."},
+         {"chart_type": {"type": "string", "description": "geometry: geometric proof. wireframe: 3D. line: trend. bar: comparison. curve: smoothed. scatter: x-y. pie: proportions. function: math formula. regression: fitting. histogram: distribution. area/heatmap/radar/bubble/contour: specialized. contour: 等高线图/梯度下降可视化, data=目标函数表达式(如 X**2+Y**2), labels=迭代轨迹(如 0,5;1,3;2,1). waveform: signal/voltage wave (NOT sequence diagram). Digital data='0,1,0,1;1,0,0,1' labels='CLK;DATA'. Analog data='sine,2,5;square,1,3' labels='CH1;CH2' (type,freq_hz,amplitude)."},
           "data": {"type": "string", "description": "Data: comma-sep values. Multi-series: semicolon-sep. Waveform digital: '0,1,0,1;1,0,0,1' (levels per channel). Waveform analog: 'sine,2,5;square,1,3' (type,freq,amp)."},
           "title": {"type": "string", "description": "Chart title"},
           "labels": {"type": "string", "description": "X-axis labels or series names (semicolon-separated). For bar: 'A,B;Series1;Series2'. For line/scatter with X coords: 'x;Series1'. Shape defs for draw/geometry."},
@@ -43,7 +43,7 @@ class Chart:
 
     # chart_type → 绘制器映射
     _BASIC_TYPES = {"line", "curve", "bar", "scatter", "pie", "histogram", "area"}
-    _ADVANCED_TYPES = {"heatmap", "radar", "bubble", "function", "regression", "wireframe", "waveform"}
+    _ADVANCED_TYPES = {"heatmap", "radar", "bubble", "function", "regression", "wireframe", "waveform", "contour"}
     _SPECIAL_TYPES = {"geometry", "draw", "cat"}
 
     def __init__(self, work_dir: str, charts_dir: str = ""):

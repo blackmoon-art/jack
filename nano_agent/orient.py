@@ -148,52 +148,58 @@ class Orient:
 
     def _parse_orientation(self, text: str, observation: str = "",
                             model: str | None = None) -> dict:
-        """解析 LLM 返回的 JSON。含重试逻辑。"""
+        """解析 LLM 返回的 JSON。含重试逻辑。
+
+        委托给 LLM.chat_json_with_retry 避免重复实现。
+        """
         text = text.strip()
         if text.startswith("```"):
             text = text.split("\n", 1)[-1]
             if text.endswith("```"):
                 text = text[:-3]
 
-        for attempt in range(3):
-            try:
-                data = json.loads(text.strip())
-                return {
-                    "interpretation": data.get("interpretation", ""),
-                    "association": data.get("association", ""),
-                    "implication": data.get("implication", ""),
-                    "confidence": int(data.get("confidence", 5)),
-                    "focus": data.get("focus", ""),
-                }
-            except (json.JSONDecodeError, ValueError) as e:
-                if attempt >= 2:
-                    logger.warning(f"Failed to parse orientation JSON after 3 attempts: {e}")
-                    return {
-                        "interpretation": text[:500],
-                        "association": "",
-                        "implication": "Proceed with the next action.",
-                        "confidence": 5,
-                        "focus": "",
-                    }
-                # 重试：让 LLM 重新生成，保留原始上下文
-                logger.warning(f"Orient JSON parse failed (attempt {attempt+1}/3), retrying: {e}")
-                retry_prompt = (
+        try:
+            data = json.loads(text.strip())
+            return {
+                "interpretation": data.get("interpretation", ""),
+                "association": data.get("association", ""),
+                "implication": data.get("implication", ""),
+                "confidence": int(data.get("confidence", 5)),
+                "focus": data.get("focus", ""),
+            }
+        except (json.JSONDecodeError, ValueError):
+            pass
+
+        # 重试：让 LLM 重新生成
+        data = self.llm.chat_json_with_retry(
+            messages=[{
+                "role": "user",
+                "content": (
                     f"Observation: {observation[:2000]}\n\n"
-                    "Your previous response was not valid JSON. "
                     "Return ONLY a valid JSON object with keys: "
                     "interpretation, association, implication, confidence, focus. "
                     "No markdown, no explanation."
-                )
-                response = self.llm.chat(
-                    messages=[
-                        {"role": "user", "content": retry_prompt},
-                    ],
-                    tools=[],
-                    system="You are an analytical observer. Be precise and concise.",
-                    model=model,
-                )
-                text = response["text"].strip()
-                if text.startswith("```"):
-                    text = text.split("\n", 1)[-1]
-                    if text.endswith("```"):
-                        text = text[:-3]
+                ),
+            }],
+            max_retries=2,
+            system="You are an analytical observer. Be precise and concise.",
+            model=model,
+        )
+
+        if data and isinstance(data, dict):
+            return {
+                "interpretation": data.get("interpretation", ""),
+                "association": data.get("association", ""),
+                "implication": data.get("implication", ""),
+                "confidence": int(data.get("confidence", 5)),
+                "focus": data.get("focus", ""),
+            }
+
+        logger.warning("Failed to parse orientation JSON after retries")
+        return {
+            "interpretation": text[:500],
+            "association": "",
+            "implication": "Proceed with the next action.",
+            "confidence": 5,
+            "focus": "",
+        }
