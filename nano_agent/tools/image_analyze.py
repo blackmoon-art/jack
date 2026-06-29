@@ -29,8 +29,9 @@ class ImageAnalyzer:
           1. GEMINI_API_KEY (Google Gemini 免费, 1500次/天)
           2. VISION_API_KEY + VISION_BASE_URL (OpenAI 兼容)
           3. ANTHROPIC_API_KEY (Claude, 原生 vision)
+          4. Tesseract 本地 OCR (免费，离线，只提取文字)
 
-        Returns: (provider: "gemini"|"openai"|"anthropic", api_key, base_url, model)
+        Returns: (provider: "openai"|"anthropic"|"tesseract", api_key, base_url, model)
         """
         # 1. Google Gemini (免费)
         gemini_key = os.getenv("GEMINI_API_KEY", "")
@@ -55,6 +56,12 @@ class ImageAnalyzer:
             model = os.getenv("VISION_MODEL", "claude-sonnet-4-6")
             logger.info(f"Vision provider: Anthropic ({model})")
             return ("anthropic", anthropic_key, base_url, model)
+
+        # 4. Tesseract 本地 OCR (免费，离线)
+        import shutil
+        if shutil.which("tesseract"):
+            logger.info("Vision provider: Tesseract OCR (local, offline, free)")
+            return ("tesseract", "", "", "tesseract")
 
         return ("none", "", "", "")
 
@@ -104,6 +111,29 @@ class ImageAnalyzer:
         )
         return response.content[0].text
 
+    def _analyze_tesseract(self, filepath, image_data: bytes, question: str) -> str:
+        """Tesseract 本地 OCR：从图片提取文字。免费、离线。"""
+        try:
+            from PIL import Image
+            import pytesseract
+            import io
+
+            img = Image.open(io.BytesIO(image_data))
+            # 自动检测中英文
+            text = pytesseract.image_to_string(img, lang="chi_sim+eng")
+            text = text.strip()
+            if not text:
+                return "[Tesseract OCR] No text found in image."
+
+            result = f"[Tesseract OCR — offline, free]\n\nExtracted text from image:\n\n{text}"
+            if len(result) > 5000:
+                result = result[:5000] + "\n...(truncated)"
+            return result
+        except ImportError as e:
+            return f"Error: Tesseract not available — {e}. Run: brew install tesseract tesseract-lang && pip install pytesseract pillow"
+        except Exception as e:
+            return f"Error: Tesseract OCR failed — {e}"
+
     def analyze_image(self, path: str, question: str = "Describe this image in detail") -> str:
         """分析图片：读取 → base64 → Vision API → 返回结果。"""
         try:
@@ -147,6 +177,8 @@ class ImageAnalyzer:
             if provider == "anthropic":
                 result = self._analyze_anthropic(image_data, mime_type, question,
                                                  api_key, base_url or "", model)
+            elif provider == "tesseract":
+                result = self._analyze_tesseract(filepath, image_data, question)
             else:
                 result = self._analyze_openai(data_url, mime_type, question,
                                               api_key, base_url, model)
