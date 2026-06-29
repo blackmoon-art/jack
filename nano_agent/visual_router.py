@@ -212,8 +212,18 @@ def _ascii_word_match(kw: str, text: str) -> bool:
 
 def _exact_match(task_lower: str) -> Optional[tuple[str, dict]]:
     """Layer 1: 精确关键词匹配。英文词加单词边界防子串误匹配。"""
-    # waveform 不应匹配时序图请求——即使含 "clock/pulse/timing"
-    _SEQ_KW = re.compile(r"时序|sequence|交互|interaction|消息|message")
+    # 硬件信号时序关键词 — 这些场景的"时序图"是信号波形，不是 sequenceDiagram
+    _HW_TIMING_KW = re.compile(
+        r"时钟|SPI|I2C|UART|CAN|USB|信号|电平|上升沿|下降沿|"
+        r"高电平|低电平|电路|OCC|总线|晶振|脉冲|波特|probe|"
+        r"oscilloscope|逻辑分析仪|trigger|edge",
+        re.IGNORECASE
+    )
+    # 软件交互时序关键词 — 这些才是 sequenceDiagram
+    _SW_SEQ_KW = re.compile(
+        r"交互时序|sequence|消息交互|组件交互|用户.*时序|"
+        r"API.*时序|登录.*流程|支付.*流程|请求.*响应"
+    )
     for keywords, tool_name, params in _EXACT_ROUTES:
         for kw in keywords.split("|"):
             kw = kw.strip()
@@ -223,17 +233,15 @@ def _exact_match(task_lower: str) -> Optional[tuple[str, dict]]:
             # 不用 \b 因为中文字符也是 \w，\b 在 "个ppt" 之间不匹配
             if kw.isascii():
                 if _ascii_word_match(kw, task_lower):
-                    # waveform 排除时序图请求
-                    if tool_name == "generate_chart" and params.get("chart_type") == "waveform":
-                        if _SEQ_KW.search(task_lower):
-                            continue
                     return tool_name, dict(params)
             else:
                 if kw.lower() in task_lower:
-                    # waveform 排除时序图请求
-                    if tool_name == "generate_chart" and params.get("chart_type") == "waveform":
-                        if _SEQ_KW.search(task_lower):
-                            continue
+                    # "时序图"歧义消解：硬件信号 vs 软件交互
+                    if kw in ("时序图", "时序"):
+                        if _HW_TIMING_KW.search(task_lower):
+                            # 硬件时序 → 波形图
+                            return "generate_chart", {"chart_type": "waveform"}
+                        # 无硬件上下文 → 默认 mermaid sequenceDiagram
                     return tool_name, dict(params)
     return None
 

@@ -63,13 +63,21 @@ class DefaultStrategy(BaseStrategy):
             tool_name, tool_params = route
             logger.info(f"[Router] Hit: {task[:40]} -> {tool_name}({tool_params})")
             self.emit("text", {"text": "🎨 正在生成图表..."})
-            tool_call = {
-                "name": tool_name,
-                "arguments": tool_params,
-                "id": "routed_visual",
-            }
-            self.execute_tool(tool_call, messages)
-            return agent_loop_fn(messages)[0]
+            # mermaid_chart / drawio_diagram / ai_image / create_ppt 需要 LLM 生成代码/描述
+            # 不能直接执行，让 agent_loop 来调 LLM 生成具体内容
+            _LLM_CONTENT_TOOLS = {"mermaid_chart", "drawio_diagram", "ai_image", "create_ppt"}
+            if tool_name in _LLM_CONTENT_TOOLS:
+                # 不直接执行，走正常 agent_loop 让 LLM 生成参数
+                pass
+            else:
+                # generate_chart 等参数完整的工具 → 直接执行
+                tool_call = {
+                    "name": tool_name,
+                    "arguments": tool_params,
+                    "id": "routed_visual",
+                }
+                self.execute_tool(tool_call, messages)
+                return agent_loop_fn(messages)[0]
 
         # ── Phase 1: 流式调用 LLM ──
         system_prompt = self._get_system_prompt()

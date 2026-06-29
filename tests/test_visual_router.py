@@ -79,8 +79,18 @@ class TestLayer1ExactMatch(unittest.TestCase):
         self.assertEqual(result[0], "mermaid_chart")
 
     def test_mermaid_sequence(self):
-        result = route_visual("画 OCC 时序图")
+        result = route_visual("画用户登录时序图")
         self.assertEqual(result[0], "mermaid_chart")
+
+    def test_waveform_hardware_timing(self):
+        """硬件时序图应该路由到 waveform，不是 mermaid sequenceDiagram"""
+        result = route_visual("画 OCC 时序图")
+        self.assertEqual(result[0], "generate_chart")
+        self.assertEqual(result[1].get("chart_type"), "waveform")
+
+        result = route_visual("SPI 时序图")
+        self.assertEqual(result[0], "generate_chart")
+        self.assertEqual(result[1].get("chart_type"), "waveform")
 
     def test_mermaid_state_machine(self):
         result = route_visual("画状态机")
