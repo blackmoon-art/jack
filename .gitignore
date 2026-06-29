@@ -30,3 +30,4 @@ combined_ols*
 .DS_Store
 web/reflexion_trace.db
 web/session_*/
+reflexion_trace.db
