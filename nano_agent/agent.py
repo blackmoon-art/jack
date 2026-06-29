@@ -30,6 +30,7 @@ from .memory import Memory
 from .orient import Orient
 from .tools import ToolRegistry
 from .strategies import STRATEGY_REGISTRY
+from .strategies.context import StrategyContext
 
 logger = logging.getLogger("nano_agent.agent")
 
@@ -133,10 +134,8 @@ class Agent:
         不再依赖 _TOOL_KEYWORDS 黑名单，而是让 LLM 自己决定是否需要工具。
         """
         from .strategies.default import DefaultStrategy
-        s = DefaultStrategy(self.config, self.llm, self.tools, memory=self.memory)
-        s._emit = self._emit
-        s._orient_fn = self._current_orient_fn
-        s._execute_tool = self.execute_tool
+        ctx = self._make_strategy_context()
+        s = DefaultStrategy(context=ctx)
         self._strategy_instance = s
         messages = s.build_messages(task)
         system_prompt = self._system_prompt()
@@ -229,14 +228,20 @@ class Agent:
 
         return full_text
 
+    def _make_strategy_context(self) -> StrategyContext:
+        """构建策略上下文，替代猴子补丁注入。"""
+        return StrategyContext(
+            config=self.config, llm=self.llm, tools=self.tools, memory=self.memory,
+            emit=self._emit, execute_tool=self.execute_tool,
+            agent_loop=self._agent_loop, orient_fn=self._current_orient_fn,
+            model_override=self._model_override,
+        )
+
     def _run_strategy(self, strategy_cls, task: str, **kwargs) -> str:
-        """通用策略执行：实例化 → 注入事件回调 + memory + orient → 缓存 → 运行。"""
+        """通用策略执行：构建 StrategyContext → 实例化 → 运行。"""
+        ctx = self._make_strategy_context()
         kwargs.setdefault("memory", self.memory)
-        s = strategy_cls(self.config, self.llm, self.tools, **kwargs)
-        s._emit = self._emit  # 透传事件回调，让策略能发事件
-        s._orient_fn = self._current_orient_fn  # 透传 Orient（已绑定原始任务）
-        s._execute_tool = self.execute_tool
-        s._model_override = self._model_override  # 透传请求级模型覆盖
+        s = strategy_cls(context=ctx, **kwargs)
         self._strategy_instance = s
         return s.run(task, self._agent_loop)
 
@@ -295,14 +300,31 @@ class Agent:
         return "default"
 
     def _execute_tools_parallel(self, tool_calls: list, messages: list):
-        """并行执行多个独立的工具调用。"""
-        def run_one(tc):
-            self.execute_tool(tc, messages, orient_fn=self._current_orient_fn)
+        """并行执行多个独立的工具调用。结果按原始顺序追加，单工具异常不中断其他。"""
+        results: dict[int, dict] = {}
+
+        def run_one(idx: int, tc: dict):
+            try:
+                results[idx] = self.execute_tool(tc, [], orient_fn=self._current_orient_fn)
+            except Exception as e:
+                logger.warning(f"Parallel tool '{tc.get('name', '?')}' failed: {e}")
+                results[idx] = {"name": tc.get("name", "?"), "result": f"Error: {e}", "success": False}
 
         with ThreadPoolExecutor(max_workers=len(tool_calls)) as executor:
-            futures = [executor.submit(run_one, tc) for tc in tool_calls]
+            futures = [executor.submit(run_one, i, tc) for i, tc in enumerate(tool_calls)]
             for f in as_completed(futures):
-                f.result()  # 有异常会在这里抛出
+                f.result()  # 等待全部完成
+
+        # 按原始顺序追加到 messages，保证 LLM 看到一致的顺序
+        for i in sorted(results.keys()):
+            info = results[i]
+            tc = tool_calls[i]
+            content = str(info.get("result", ""))
+            messages.append({
+                "role": "tool",
+                "tool_call_id": tc.get("id", ""),
+                "content": content,
+            })
 
     def _strategy_defaults(self, strategy: str) -> dict:
         """从 Config 获取策略默认参数。"""

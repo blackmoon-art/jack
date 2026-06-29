@@ -23,6 +23,7 @@ from typing import Any, Callable, Optional
 from ..config import Config
 from ..llm import LLM
 from ..tools import ToolRegistry
+from .context import StrategyContext
 
 logger = logging.getLogger("nano_agent.strategies.base")
 
@@ -32,16 +33,37 @@ class BaseStrategy:
 
     子类必须实现 run() 方法。
     通过 self.emit() 发送事件给上层（Web UI 等）。
+
+    构造函数支持两种模式:
+      1. 新式: BaseStrategy(context=StrategyContext(...)) — 显式契约
+      2. 旧式: BaseStrategy(config, llm, tools, **kwargs) — 向后兼容
     """
 
-    def __init__(self, config: Config, llm: LLM, tools: ToolRegistry, **kwargs):
-        self.config = config
-        self.llm = llm
-        self.tools = tools
-        self.memory = kwargs.get("memory")  # 可选 Memory 实例
-        self._emit: Optional[Callable[[str, dict], None]] = None
-        self._orient_fn: Optional[Callable] = None  # 由 Agent 注入（已绑定原始任务）
-        self._model_override: Optional[str] = None   # 请求级模型覆盖（线程安全）
+    def __init__(self, config: Config = None, llm: LLM = None,
+                 tools: ToolRegistry = None, **kwargs):
+        ctx = kwargs.pop("context", None)
+        if ctx is not None:
+            # 新式: 从 StrategyContext 提取
+            self.config = ctx.config
+            self.llm = ctx.llm
+            self.tools = ctx.tools
+            self.memory = ctx.memory
+            self._emit = ctx.emit
+            self._execute_tool = ctx.execute_tool  # 明确定义，IDE 可见
+            self._agent_loop = ctx.agent_loop
+            self._orient_fn = ctx.orient_fn
+            self._model_override = ctx.model_override
+        else:
+            # 旧式: 向后兼容
+            self.config = config
+            self.llm = llm
+            self.tools = tools
+            self.memory = kwargs.get("memory")
+            self._emit: Optional[Callable[[str, dict], None]] = None
+            self._execute_tool = None  # 等待猴子补丁注入
+            self._agent_loop = None
+            self._orient_fn: Optional[Callable] = None
+            self._model_override: Optional[str] = None
 
     def emit(self, event_type: str, data: dict):
         """发送事件给回调（如果已设置）。静默失败。"""
@@ -74,11 +96,11 @@ class BaseStrategy:
     def execute_tool(self, tool_call: dict, messages: list[dict],
                       orient_fn: Optional[Callable] = None) -> dict:
         """委托给 Agent 的统一实现，确保行为一致。"""
-        fn = getattr(self, '_execute_tool', None)
-        if fn:
-            return fn(tool_call, messages, orient_fn=orient_fn)
-        # 兜底：依赖注入未完成，仅在兼容模式使用
-        logger.warning("_execute_tool not injected — using fallback. Strategy should be created by Agent.run().")
+        if self._execute_tool:
+            return self._execute_tool(tool_call, messages, orient_fn=orient_fn)
+        # 兜底：依赖注入未完成（直接 new 策略绕过 Agent 时触发）
+        logger.warning("_execute_tool not injected — using fallback. "
+                       "Create strategy via Agent.run() or pass StrategyContext.")
         from ..tools.observation import Observation
         name = tool_call["name"]
         args = tool_call.get("arguments", {})

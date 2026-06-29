@@ -39,9 +39,22 @@ def _get_db() -> sqlite3.Connection:
     return conn
 
 
+def _db_execute_with_retry(conn, sql, params=(), max_retries=3):
+    """执行 SQL，SQLITE_BUSY 时自动重试。"""
+    for attempt in range(max_retries):
+        try:
+            return conn.execute(sql, params)
+        except sqlite3.OperationalError as e:
+            if "database is locked" in str(e).lower() and attempt < max_retries - 1:
+                _time.sleep(0.1 * (attempt + 1))
+                continue
+            raise
+
+
 def _init_db():
-    """初始化数据库表。"""
+    """初始化数据库表，启用 WAL 模式提升并发性能。"""
     with _get_db() as conn:
+        conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("""
             CREATE TABLE IF NOT EXISTS session_history (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
