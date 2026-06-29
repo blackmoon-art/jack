@@ -241,7 +241,7 @@ class Agent:
         """通用策略执行：构建 StrategyContext → 实例化 → 运行。"""
         ctx = self._make_strategy_context()
         kwargs.setdefault("memory", self.memory)
-        s = strategy_cls(context=ctx, **kwargs)
+        s = strategy_cls(ctx.config, ctx.llm, ctx.tools, context=ctx, **kwargs)
         self._strategy_instance = s
         return s.run(task, self._agent_loop)
 
