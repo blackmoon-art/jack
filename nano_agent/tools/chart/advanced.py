@@ -10,7 +10,7 @@ logger = logging.getLogger("nano_agent.tools.chart.advanced")
 
 # ── eval 安全沙箱 ───────────────────────────────────────
 # 禁止模式：任何包含这些字符串的表达式都会被拒绝
-# 与 _SafeEval2D._FORBIDDEN_PATTERNS 保持一致，单一数据源
+# 这是唯一数据源，draw_function 和 _safe_eval_2d 共用
 _FORBIDDEN = (
     "__", "import ", "exec", "eval", "compile", "open(",
     "getattr", "setattr", "globals", "locals", "vars",
@@ -113,9 +113,9 @@ class AdvancedCharts:
                        float(data_sets[1][1]) if len(data_sets[1]) > 1 else 5)
         x = np.linspace(x_range[0], x_range[1], 500)
 
-        # 安全沙箱：只暴露纯数值函数和 np 数组，禁止属性链逃逸
+        # 安全沙箱：只暴露纯数值函数，不暴露 np 模块（防属性链逃逸）
         safe_globals = {"__builtins__": {}}
-        ns = {"x": x, "np": np, "sin": np.sin, "cos": np.cos, "tan": np.tan,
+        ns = {"x": x, "sin": np.sin, "cos": np.cos, "tan": np.tan,
               "exp": np.exp, "log": np.log, "sqrt": np.sqrt, "abs": np.abs,
               "pi": np.pi, "e": np.e}
 
@@ -133,7 +133,7 @@ class AdvancedCharts:
         ax.axhline(y=0, color=fg, linewidth=0.5, alpha=0.5)
         ax.axvline(x=0, color=fg, linewidth=0.5, alpha=0.5)
 
-        is_trig = any(fn in expr_lower for fn in ('sin', 'cos', 'tan'))
+        is_trig = any(fn in expr.lower() for fn in ('sin', 'cos', 'tan'))
         if is_trig:
             pi = np.pi
             x_min, x_max = x_range
@@ -474,7 +474,7 @@ class AdvancedCharts:
         if err:
             logger.warning(err)
             return None
-        ns = {"X": X, "Y": Y, "x": X, "y": Y, "np": np, **cls._SAFE_FUNCTIONS}
+        ns = {"X": X, "Y": Y, "x": X, "y": Y, **cls._SAFE_FUNCTIONS}
         try:
             Z = eval(expr, {"__builtins__": {}}, ns)
             return np.asarray(Z, dtype=float)

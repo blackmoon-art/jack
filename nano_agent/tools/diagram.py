@@ -300,7 +300,13 @@ class Diagram:
 
         xml = self._build_drawio_xml(title, node_list, edge_list, diagram_type)
         encoded = urllib.parse.quote(xml, safe="")
-        drawio_url = f"https://app.diagrams.net/?lightbox=1#R{encoded}"
+        # 大图表 (>2000字符URL) → deflate+base64 压缩，避免浏览器拒绝超长 URL
+        if len(encoded) > 2000:
+            compressed = zlib.compress(xml.encode(), level=9)
+            encoded = base64.urlsafe_b64encode(compressed).decode().rstrip("=")
+            drawio_url = f"https://app.diagrams.net/?lightbox=1#pako:{encoded}"
+        else:
+            drawio_url = f"https://app.diagrams.net/?lightbox=1#R{encoded}"
         return (
             f"📊 Draw.io diagram ({len(node_list)} nodes, {len(edge_list)} edges):\n"
             f"{drawio_url}\n\n"
