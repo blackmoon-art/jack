@@ -3,6 +3,7 @@
 import base64
 import logging
 import os
+import shutil
 from pathlib import Path
 
 logger = logging.getLogger("nano_agent.tools.image_analyze")
@@ -33,19 +34,19 @@ class ImageAnalyzer:
 
         Returns: (provider: "openai"|"anthropic"|"tesseract", api_key, base_url, model)
         """
-        # 1. 本地 safetensors 模型 (ModelScope 下载, 已就绪)
-        local_model = os.getenv("LOCAL_VISION_MODEL", "")
-        if local_model and Path(local_model).exists():
-            logger.info(f"Vision provider: Local MiniCPM-V ({local_model}) — free, offline, Chinese")
-            return ("transformers", "", "", local_model)
+        # 确保 .env 已加载（直接 os.getenv 取不到 .env 里的值）
+        from ..config import _ensure_dotenv
+        _ensure_dotenv()
 
-        # 2. Ollama 本地视觉模型
-        import shutil
+        # 1. Ollama 本地视觉模型 (优先，速度快兼容好)
         if shutil.which("ollama"):
             model = os.getenv("VISION_MODEL", os.getenv("OLLAMA_VISION_MODEL", "minicpm-v:8b"))
             base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1")
-            logger.info(f"Vision provider: Ollama local ({model}) — free, offline")
-            return ("openai", "ollama", base_url, model)
+            if self._ollama_model_available(base_url, model):
+                logger.info(f"Vision provider: Ollama local ({model}) — free, offline")
+                return ("openai", "ollama", base_url, model)
+            else:
+                logger.warning(f"Ollama running but model '{model}' not installed. Skipping.")
 
         # 2. Google Gemini (免费)
         gemini_key = os.getenv("GEMINI_API_KEY", "")
@@ -71,8 +72,7 @@ class ImageAnalyzer:
             logger.info(f"Vision provider: Anthropic ({model})")
             return ("anthropic", anthropic_key, base_url, model)
 
-        # 4. Tesseract 本地 OCR (免费，离线)
-        import shutil
+        # 6. Tesseract 本地 OCR (免费，离线)
         if shutil.which("tesseract"):
             logger.info("Vision provider: Tesseract OCR (local, offline, free)")
             return ("tesseract", "", "", "tesseract")
@@ -138,12 +138,17 @@ class ImageAnalyzer:
             model = AutoModel.from_pretrained(
                 model_path, trust_remote_code=True,
                 torch_dtype=torch.float16 if device == "mps" else torch.float32,
-            ).to(device).eval()
-            processor = AutoProcessor.from_pretrained(model_path, trust_remote_code=True)
+            )
+            model = model.to(device).eval()
+            processor = AutoProcessor.from_pretrained(model_path, trust_remote_code=True, local_files_only=True)
 
             from PIL import Image
             import io
             img = Image.open(io.BytesIO(image_data))
+
+            # MiniCPM-V 要求文本中包含 <image> 标签标记图片位置
+            if "<image>" not in question.lower():
+                question = f"(<image>./</image>)\n{question}"
 
             inputs = processor(images=img, text=question, return_tensors="pt").to(device)
             with torch.no_grad():
@@ -184,6 +189,21 @@ class ImageAnalyzer:
             return f"Error: Tesseract not available — {e}. Run: brew install tesseract tesseract-lang && pip install pytesseract pillow"
         except Exception as e:
             return f"Error: Tesseract OCR failed — {e}"
+
+    @staticmethod
+    def _ollama_model_available(base_url: str, model: str) -> bool:
+        """Check if a model is actually installed in Ollama via /api/tags."""
+        import urllib.request
+        import json as _json
+        try:
+            tags_url = base_url.rstrip("/").removesuffix("/v1") + "/api/tags"
+            with urllib.request.urlopen(tags_url, timeout=3) as resp:
+                data = _json.loads(resp.read())
+            installed = [m.get("name", "") for m in data.get("models", [])]
+            model_base = model.split(":")[0]
+            return any(name.split(":")[0] == model_base for name in installed)
+        except Exception:
+            return False
 
     def analyze_image(self, path: str, question: str = "Describe this image in detail") -> str:
         """分析图片：读取 → base64 → Vision API → 返回结果。"""
