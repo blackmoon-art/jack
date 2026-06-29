@@ -431,6 +431,42 @@ class AdvancedCharts:
         "abs": np.abs, "pi": np.pi, "e": np.e,
     }
 
+    @staticmethod
+    def _parse_trajectory(data_sets, label_sets) -> list:
+        """解析梯度下降轨迹点序列。支持 'x,y;x,y' 字符串和数值对格式。"""
+        pts = []
+        for ds in (data_sets or []):
+            for item in ds:
+                if isinstance(item, str) and ";" in item:
+                    for pair in item.split(";"):
+                        parts = pair.strip().split(",")
+                        if len(parts) >= 2:
+                            try:
+                                pts.append((float(parts[0]), float(parts[1])))
+                            except ValueError:
+                                continue
+                elif isinstance(item, (int, float)):
+                    pass  # 数值格式在循环外处理
+            # 数值对: [x1,y1,x2,y2,...]
+            nums = [float(x) for x in ds if isinstance(x, (int, float))]
+            for i in range(0, len(nums) - 1, 2):
+                pts.append((nums[i], nums[i + 1]))
+        # labels 中的轨迹点
+        for group in (label_sets or []):
+            for item in group:
+                if isinstance(item, str) and ";" in item:
+                    for pair in item.split(";"):
+                        parts = pair.strip().split(",")
+                        if len(parts) >= 2:
+                            try:
+                                pts.append((float(parts[0]), float(parts[1])))
+                            except ValueError:
+                                continue
+            nums = [float(x) for x in group if isinstance(x, (int, float))]
+            for i in range(0, len(nums) - 1, 2):
+                pts.append((nums[i], nums[i + 1]))
+        return pts
+
     @classmethod
     def _safe_eval_2d(cls, expr: str, X: np.ndarray, Y: np.ndarray) -> np.ndarray | None:
         """安全求值 2D 数学表达式 Z = f(X, Y)。失败返回 None。"""
@@ -465,129 +501,96 @@ class AdvancedCharts:
 
     @staticmethod
     def draw_contour(ax, data_sets, label_sets, is_dark=True, **kwargs):
-        """等高线图 — 支持函数表达式和数值矩阵两种模式。
+        """等高线图 + 梯度下降轨迹。
 
-        模式 1（函数表达式）：
-            data = "X**2 + Y**2"
-            → 画出 Z = X² + Y² 的等高线
-
-        模式 2（梯度下降轨迹）：
-            data = "X**2 + Y**2"          # 目标函数
-            labels = "0,0; 1,2; 0.5,3; -1,1"  # 迭代点序列 (x,y;x,y;...)
-            → 等高线背景 + 梯度下降轨迹
-
-        模式 3（纯轨迹，无函数）：
-            data = "0,5; 1,3; 2,1.5; 2.5,0.5; 2.5,0"  # 点对格式
-            → 只有轨迹点和连线，无等高线背景
+        data = "X**2+Y**2"                       → 纯等高线
+        data = "X**2+Y**2", labels = "0,0;1,2;0.5,3"  → 等高线 + 轨迹
+        data = "0,5;1,3;2,1.5;2.5,0.5;2.5,0"   → 纯轨迹
         """
         fg = "#e0e0e0" if is_dark else "#333"
-        bg = "#1a1a2e" if is_dark else "ffffff"
+        bg_c = "#1a1a2e" if is_dark else "#f0f0f0"
 
-        # 判断数据模式
         first_item = data_sets[0][0] if data_sets and data_sets[0] else ""
-        # 表达式检测：包含数学运算符或非坐标字母 → 表达式模式
-        has_math_ops = any(op in first_item for op in ("**", "*", "+", "-", "/", "^"))
-        has_non_coord_letters = any(c.isalpha() and c not in "XxYyEe" for c in first_item)
-        is_expr_mode = (has_math_ops or has_non_coord_letters) and ";" not in first_item
 
-        # 尝试提取目标函数表达式
+        # 表达式检测：包含函数名/数学运算符，且不含 ';'（轨迹分隔符）
+        _FN_NAMES = ("sin", "cos", "tan", "exp", "log", "abs", "sqrt")
+        has_fn = any(fn in first_item.lower() for fn in _FN_NAMES)
+        has_op = any(op in first_item for op in ("**", "*", "+", "-", "/", "^"))
+        has_semicolon = ";" in first_item
+        is_expr = (has_fn or has_op) and not has_semicolon
+
         expr = None
-        Z = None
-        X_grid = Y_grid = None
+        Z = X_grid = Y_grid = None
 
-        if is_expr_mode or (first_item and any(op in first_item for op in ["**", "*", "+", "-"])):
-            expr = first_item.strip()
-            if expr.startswith("`") or expr.startswith("'"):
-                expr = expr.strip("`'")
-            # 确定范围：默认 [-5, 5]，或从 labels 解析
-            x_min, x_max, y_min, y_max = -5.0, 5.0, -5.0, 5.0
+        if is_expr:
+            expr = first_item.strip().strip("`'\"")
+            # 范围
+            x_min, x_max = -5.0, 5.0
+            y_min, y_max = -5.0, 5.0
             for ds in data_sets[1:]:
-                vals = []
-                for v in ds:
-                    try:
-                        vals.append(float(v))
-                    except ValueError:
-                        pass
-                if len(vals) >= 4:
-                    x_min, x_max, y_min, y_max = vals[:4]
-                elif len(vals) >= 2:
-                    x_min, x_max = vals[0], vals[1]
+                nums = [float(x) for x in ds if isinstance(x, (int, float))]
+                if len(nums) >= 4:
+                    x_min, x_max, y_min, y_max = nums[:4]
+                elif len(nums) >= 2:
+                    x_min, x_max = nums[0], nums[1]
                 break
-
             X_grid, Y_grid = np.meshgrid(
                 np.linspace(x_min, x_max, 100),
                 np.linspace(y_min, y_max, 100),
             )
             Z = AdvancedCharts._safe_eval_2d(expr, X_grid, Y_grid)
 
-        if Z is not None and X_grid is not None:
-            # 画填充等高线
-            levels = 20
-            contour_colors = ["#7c3aed", "#3b82f6", "#10b981", "#f59e0b", "#ef4444"]
-            if is_dark:
-                cf = ax.contourf(X_grid, Y_grid, Z, levels=levels, cmap="coolwarm", alpha=0.6)
-            else:
-                cf = ax.contourf(X_grid, Y_grid, Z, levels=levels, cmap="RdYlBu_r", alpha=0.6)
-            cs = ax.contour(X_grid, Y_grid, Z, levels=levels, colors="#444" if is_dark else "#666",
-                            linewidths=0.5, alpha=0.5)
-            ax.clabel(cs, inline=True, fontsize=8, fmt="%.1f")
-            ax.set_facecolor(bg)
+        # 画填充等高线
+        if Z is not None:
+            try:
+                levels = 15 if Z.min() != Z.max() else [Z.min(), Z.min() + 1]
+                cmap = "coolwarm" if is_dark else "RdYlBu_r"
+                ax.contourf(X_grid, Y_grid, Z, levels=levels, cmap=cmap, alpha=0.6)
+                cs = ax.contour(X_grid, Y_grid, Z, levels=levels,
+                                colors="#555" if is_dark else "#999", linewidths=0.5, alpha=0.4)
+                ax.clabel(cs, inline=True, fontsize=7, fmt="%.0f")
+            except Exception as e:
+                logger.warning(f"Contour failed: {e}")
+        ax.set_facecolor(bg_c)
 
-        # 解析轨迹点（梯度下降路径）
-        trajectory_sets = data_sets[1:] if Z is not None else data_sets
-        traj_pts = []
-        for ds in trajectory_sets:
-            # 点对格式：每组是 "x,y" 或两个独立值
-            for i in range(0, len(ds) - 1, 2):
-                try:
-                    traj_pts.append((float(ds[i]), float(ds[i + 1])))
-                except ValueError:
-                    continue
+        # 解析并画轨迹
+        traj_data = data_sets[1:] if is_expr else data_sets
+        traj_pts = AdvancedCharts._parse_trajectory(traj_data, label_sets)
 
-        # 也尝试 labels 中的轨迹点
-        label_traj = []
-        if label_sets:
-            for group in label_sets:
-                for i in range(0, len(group) - 1, 2):
-                    try:
-                        label_traj.append((float(group[i]), float(group[i + 1])))
-                    except ValueError:
-                        continue
+        if traj_pts:
+            c_gold = "#fbbf24" if is_dark else "#d97706"
+            tx = [p[0] for p in traj_pts]
+            ty = [p[1] for p in traj_pts]
 
-        all_traj = traj_pts + label_traj
+            # 连线 + 点
+            ax.plot(tx, ty, "o-", color=c_gold, linewidth=2, markersize=7,
+                    markerfacecolor="white", markeredgecolor=c_gold,
+                    markeredgewidth=2, zorder=5, label="Descent")
 
-        if all_traj:
-            tx = [p[0] for p in all_traj]
-            ty = [p[1] for p in all_traj]
+            # 箭头
+            for i in range(len(traj_pts) - 1):
+                ax.annotate("", xy=traj_pts[i + 1], xytext=traj_pts[i],
+                            arrowprops=dict(arrowstyle="->", color=c_gold, lw=1.5), zorder=6)
 
-            # 画轨迹线
-            ax.plot(tx, ty, "o-", color="#fbbf24" if is_dark else "#d97706",
-                    linewidth=2, markersize=7, markerfacecolor="white",
-                    markeredgecolor="#fbbf24" if is_dark else "#d97706",
-                    markeredgewidth=2, zorder=5, label="Gradient descent")
+            # 起点 / 终点
+            if traj_pts:
+                ax.plot(*traj_pts[0], "o", color="#10b981", markersize=10, zorder=7, label="Start")
+                if len(traj_pts) > 1:
+                    ax.plot(*traj_pts[-1], "*", color="#ef4444", markersize=14, zorder=7, label="Min")
 
-            # 画箭头
-            for i in range(len(all_traj) - 1):
-                x0, y0 = all_traj[i]
-                x1, y1 = all_traj[i + 1]
-                ax.annotate("", xy=(x1, y1), xytext=(x0, y0),
-                            arrowprops=dict(arrowstyle="->", color="#fbbf24" if is_dark else "#d97706",
-                                            lw=1.5), zorder=6)
+            # 步数标签
+            for i, (px, py) in enumerate(traj_pts):
+                ax.annotate(str(i + 1), (px, py), textcoords="offset points",
+                            xytext=(8, 8), fontsize=8, color=fg)
 
-            # 标记起点和终点
-            if len(all_traj) >= 1:
-                ax.plot(*all_traj[0], "o", color="#10b981", markersize=10, zorder=7, label="Start")
-                if len(all_traj) > 1:
-                    ax.plot(*all_traj[-1], "*", color="#ef4444", markersize=14, zorder=7, label="Minimum")
+            lc = "#222" if is_dark else "#f0f0f0"
+            ax.legend(facecolor=lc, edgecolor="#444" if is_dark else "#ccc", labelcolor=fg)
 
-            ax.legend(facecolor="#222" if is_dark else "#f0f0f0",
-                      edgecolor="#444" if is_dark else "#ccc",
-                      labelcolor=fg, loc="upper right")
-
-        # 标注表达式
+        # 标题
         if expr:
-            display_expr = expr.replace("**", "^").replace("*", "·")
-            ax.set_title(f"Z = {display_expr}", color=fg, fontsize=13, fontweight="bold")
+            ax.set_title(f"Z = {expr.replace('**', '^').replace('*', '·')}", color=fg, fontsize=13, fontweight="bold")
+        elif traj_pts:
+            ax.set_title("Gradient Descent Path", color=fg, fontsize=13)
 
         ax.set_xlabel("θ₀ / x", color=fg, fontsize=11)
         ax.set_ylabel("θ₁ / y", color=fg, fontsize=11)
