@@ -33,11 +33,17 @@ class ImageAnalyzer:
 
         Returns: (provider: "openai"|"anthropic"|"tesseract", api_key, base_url, model)
         """
-        # 1. Ollama 本地视觉模型
+        # 1. 本地 safetensors 模型 (ModelScope 下载, 已就绪)
+        local_model = os.getenv("LOCAL_VISION_MODEL", "")
+        if local_model and Path(local_model).exists():
+            logger.info(f"Vision provider: Local MiniCPM-V ({local_model}) — free, offline, Chinese")
+            return ("transformers", "", "", local_model)
+
+        # 2. Ollama 本地视觉模型
         import shutil
         if shutil.which("ollama"):
-            base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1")
             model = os.getenv("VISION_MODEL", os.getenv("OLLAMA_VISION_MODEL", "minicpm-v:8b"))
+            base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1")
             logger.info(f"Vision provider: Ollama local ({model}) — free, offline")
             return ("openai", "ollama", base_url, model)
 
@@ -119,6 +125,39 @@ class ImageAnalyzer:
         )
         return response.content[0].text
 
+    def _analyze_transformers(self, image_data: bytes, mime_type: str, question: str,
+                              model_path: str) -> str:
+        """本地 transformers 模型分析图片。"""
+        try:
+            from transformers import AutoModel, AutoProcessor
+            import torch
+
+            device = "mps" if torch.backends.mps.is_available() else "cpu"
+            logger.info(f"Loading vision model from {model_path} on {device}...")
+
+            model = AutoModel.from_pretrained(
+                model_path, trust_remote_code=True,
+                torch_dtype=torch.float16 if device == "mps" else torch.float32,
+            ).to(device).eval()
+            processor = AutoProcessor.from_pretrained(model_path, trust_remote_code=True)
+
+            from PIL import Image
+            import io
+            img = Image.open(io.BytesIO(image_data))
+
+            inputs = processor(images=img, text=question, return_tensors="pt").to(device)
+            with torch.no_grad():
+                result = model.generate(**inputs, max_new_tokens=512)
+            answer = processor.decode(result[0], skip_special_tokens=True)
+
+            logger.info(f"Vision model inference complete ({device})")
+            return f"[Local MiniCPM-V — offline, free]\n\n{answer}"
+        except ImportError as e:
+            return f"Error: transformers not installed — {e}. Run: pip install transformers accelerate torch"
+        except Exception as e:
+            logger.error(f"Local model inference failed: {e}")
+            return f"Error: Local model inference failed — {e}"
+
     def _analyze_tesseract(self, filepath, image_data: bytes, question: str) -> str:
         """Tesseract 本地 OCR：从图片提取文字。免费、离线。"""
         try:
@@ -189,6 +228,8 @@ class ImageAnalyzer:
             if provider == "anthropic":
                 result = self._analyze_anthropic(image_data, mime_type, question,
                                                  api_key, base_url or "", model)
+            elif provider == "transformers":
+                result = self._analyze_transformers(image_data, mime_type, question, model)
             elif provider == "tesseract":
                 result = self._analyze_tesseract(filepath, image_data, question)
             else:
