@@ -153,10 +153,9 @@ class Diagram:
 
         plant_code = "\n".join(plant_lines)
 
-        # 编码: raw deflate → PlantUML base64
-        compressed = zlib.compress(plant_code.encode('utf-8'), level=9)[2:-4]
-        encoded = self._plantuml_encode(compressed)
-        url = f"{self.PLANTUML_BASE}/png/{encoded}"
+        # 编码: hex (更可靠，尤其是中文/UTF-8)
+        hex_str = plant_code.encode('utf-8').hex()
+        url = f"{self.PLANTUML_BASE}/png/~h{hex_str}"
 
         # 下载 PNG
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
