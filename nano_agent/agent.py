@@ -96,16 +96,8 @@ class Agent:
         if not strategy_cls:
             raise ValueError(f"Unknown strategy: '{strategy}'. Available: {list(STRATEGY_REGISTRY.keys())}")
 
-        # ── 流式快速路径：default 策略纯文本回答，边生成边推送 ──
-        if strategy == "default":
-            final = self._run_stream_default(task)
-            self._emit("done", {"text": final})
-            self.memory.save_context(task, final)
-            self.memory.save_persistent(task, final)
-            self._on_event = None
-            self._current_orient_fn = None
-            return final
-
+        # 所有策略统一走 _run_strategy → StrategyContext → strategy.run()。
+        # 详见 README "决策 7：策略执行路径统一 vs 热路径特化"。
         defaults = self._strategy_defaults(strategy)
         defaults.update(strategy_kwargs)
         final = self._run_strategy(strategy_cls, task, **defaults)
@@ -125,108 +117,95 @@ class Agent:
             except Exception as e:
                 logger.warning(f"Event callback error ({event_type}): {e}")
 
-    # ── 策略实现 ────────────────────────────────────────
-
-    def _run_stream_default(self, task: str) -> str:
-        """Default 策略流式快速路径：带 tools 流式调用，纯知识问答即时输出，
-        如果 LLM 要调工具则自动切换到 agent_loop。
-
-        不再依赖 _TOOL_KEYWORDS 黑名单，而是让 LLM 自己决定是否需要工具。
-        """
-        from .strategies.default import DefaultStrategy
-        ctx = self._make_strategy_context()
-        s = DefaultStrategy(context=ctx)
-        self._strategy_instance = s
-        messages = s.build_messages(task)
-        system_prompt = self._system_prompt()
-        schemas = self.tools.get_schemas()
-
-        # 流式调用（带 tools），边生成边推送文本
-        full_text = ""
-        tool_calls = None
-        for chunk in self.llm.chat_stream(messages=messages, system=system_prompt, tools=schemas,
-                                            model=self._model_override):
-            if isinstance(chunk, dict) and chunk.get("type") == "tool_calls":
-                tool_calls = chunk["tool_calls"]
-                break  # LLM 要调工具，中断流式
-            if isinstance(chunk, str):
-                full_text += chunk
-                self._emit("text", {"text": full_text})
-
-        if tool_calls:
-            # LLM 要调工具 → 切到 agent_loop，但复用已有的流式文本
-            # 构造 assistant message 带 tool_calls，走标准 agent_loop 继续
-            assistant_msg = {"role": "assistant", "content": full_text, "tool_calls": [
-                self.llm.format_tool_call_for_message(tc) for tc in tool_calls
-            ]}
-            messages.append(assistant_msg)
-            # 执行工具调用
-            if len(tool_calls) == 1:
-                self.execute_tool(tool_calls[0], messages, orient_fn=self._current_orient_fn)
-            else:
-                self._execute_tools_parallel(tool_calls, messages)
-            # 继续循环：让 LLM 决定下一步
-            return self._agent_loop(messages)[0]
-
-        # 智能画图检测：关键词 + 上下文 → 决定是否出图
-        _DRAW_KW = ('画', '图', 'draw', '生成', '作图', '绘图', 'chart', 'diagram', 'graph')
-        _EDIT_KW = ('改', '换', '修改', '调整', '重画', '重新', '换成', '改成')
-        _ADD_KW  = ('加', '添加', '再加', '加上', '补充', '增加')
-        _QA_KW   = ('天气', '新闻', '计算', '翻译', '搜索', '查', '什么是', '怎么',
-                    '为什么', 'who', 'what', 'when', 'why', 'how', '解释',
-                    'hello', 'hi', 'hey', '你好', '谢谢', '再见', '帮助')
-
-        is_draw = any(k in task.lower() for k in _DRAW_KW)
-        is_edit = any(k in task.lower() for k in _EDIT_KW)
-        is_add  = any(k in task.lower() for k in _ADD_KW)
-        is_qa   = any(k in task.lower() for k in _QA_KW)
-
-        # 上下文：上一轮用户是否主动要求了视觉内容（防止无限续图链）
-        prev_visual = False
-        if self.memory:
-            msgs = self.memory.get_window_messages()
-            for m in reversed(msgs):
-                if m["role"] == "user":
-                    prev_visual = any(k in m["content"].lower() for k in _DRAW_KW + _EDIT_KW + _ADD_KW)
-                    break
-
-        needs_visual = is_draw or is_edit or is_add or (not is_qa and prev_visual)
-
-        if not tool_calls and needs_visual:
-            logger.info(f"VISUAL: '{task[:50]}' draw={is_draw} edit={is_edit} prev={prev_visual}")
-            self._emit("text", {"text": "🔧 正在生成图片..."})
-
-            ctx = ""
-            if self.memory:
-                for m in self.memory.get_window_messages()[-6:]:
-                    r = "用户" if m["role"] == "user" else "助手"
-                    txt = m["content"][:150].split("![")[0].strip()
-                    if txt: ctx += f"[{r}]: {txt}\n"
-
-            # 优先让 LLM 尝试调用工具
-            override = (
-                "Call a drawing tool NOW. Context:\n{ctx}\n"
-                "User said: '{task}'. You MUST call one of: mermaid_chart, generate_chart, draw_circuit."
-            ).format(ctx=ctx.strip(), task=task[:200])
-            messages.append({"role": "user", "content": override})
-            result, msgs = self._agent_loop(messages)
-
-            # LLM 还是没调工具 → 代码直接兜底
-            had_tool = any(m.get("role") == "assistant" and m.get("tool_calls") for m in msgs[-4:])
-            if not had_tool:
-                try:
-                    from nano_agent.tools.diagram import Diagram
-                    d = Diagram(work_dir=self.config.work_dir, charts_dir=self.config.charts_dir)
-                    img = d.mermaid_chart(f"flowchart LR\n  A[{task[:40]}]-->B[Result]", theme="dark")
-                    return result + "\n\n" + img
-                except Exception:
-                    pass
-            return result
-
-        if not full_text.strip():
-            return self._agent_loop(messages)[0]
-
-        return full_text
+    # ── [已废弃] default 热路径：流式快速通道 ──────────────
+    # 2026-06-29: 统一架构，所有策略走 _run_strategy。
+    # 流式逻辑已移到 DefaultStrategy.run() (strategies/default.py)。
+    # 保留此代码作为参考，如需恢复热路径优化，取消注释并恢复
+    # Agent.run() 里的 `if strategy == "default"` 分支。
+    #
+    # def _run_stream_default(self, task: str) -> str:
+    #     """Default 策略流式快速路径：带 tools 流式调用，纯知识问答即时输出，
+    #     如果 LLM 要调工具则自动切换到 agent_loop。"""
+    #     from .strategies.default import DefaultStrategy
+    #     ctx = self._make_strategy_context()
+    #     s = DefaultStrategy(context=ctx)
+    #     self._strategy_instance = s
+    #     messages = s.build_messages(task)
+    #     system_prompt = self._system_prompt()
+    #     schemas = self.tools.get_schemas()
+    #
+    #     full_text = ""
+    #     tool_calls = None
+    #     for chunk in self.llm.chat_stream(messages=messages, system=system_prompt, tools=schemas,
+    #                                         model=self._model_override):
+    #         if isinstance(chunk, dict) and chunk.get("type") == "tool_calls":
+    #             tool_calls = chunk["tool_calls"]
+    #             break
+    #         if isinstance(chunk, str):
+    #             full_text += chunk
+    #             self._emit("text", {"text": full_text})
+    #
+    #     if tool_calls:
+    #         assistant_msg = {"role": "assistant", "content": full_text, "tool_calls": [
+    #             self.llm.format_tool_call_for_message(tc) for tc in tool_calls
+    #         ]}
+    #         messages.append(assistant_msg)
+    #         if len(tool_calls) == 1:
+    #             self.execute_tool(tool_calls[0], messages, orient_fn=self._current_orient_fn)
+    #         else:
+    #             self._execute_tools_parallel(tool_calls, messages)
+    #         return self._agent_loop(messages)[0]
+    #
+    #     from .strategies.default import _DRAW_KW, _EDIT_KW, _ADD_KW, _QA_KW
+    #     is_draw = any(k in task.lower() for k in _DRAW_KW)
+    #     is_edit = any(k in task.lower() for k in _EDIT_KW)
+    #     is_add  = any(k in task.lower() for k in _ADD_KW)
+    #     is_qa   = any(k in task.lower() for k in _QA_KW)
+    #
+    #     prev_visual = False
+    #     if self.memory:
+    #         msgs = self.memory.get_window_messages()
+    #         for m in reversed(msgs):
+    #             if m["role"] == "user":
+    #                 prev_visual = any(k in m["content"].lower()
+    #                                   for k in _DRAW_KW + _EDIT_KW + _ADD_KW)
+    #                 break
+    #
+    #     needs_visual = is_draw or is_edit or is_add or (not is_qa and prev_visual)
+    #
+    #     if not tool_calls and needs_visual:
+    #         logger.info(f"VISUAL: '{task[:50]}' draw={is_draw} edit={is_edit} prev={prev_visual}")
+    #         self._emit("text", {"text": "🔧 正在生成图片..."})
+    #
+    #         ctx = ""
+    #         if self.memory:
+    #             for m in self.memory.get_window_messages()[-6:]:
+    #                 r = "用户" if m["role"] == "user" else "助手"
+    #                 txt = m["content"][:150].split("![")[0].strip()
+    #                 if txt: ctx += f"[{r}]: {txt}\n"
+    #
+    #         override = (
+    #             "Call a drawing tool NOW. Context:\n{ctx}\n"
+    #             "User said: '{task}'. You MUST call one of: mermaid_chart, generate_chart, draw_circuit."
+    #         ).format(ctx=ctx.strip(), task=task[:200])
+    #         messages.append({"role": "user", "content": override})
+    #         result, msgs = self._agent_loop(messages)
+    #
+    #         had_tool = any(m.get("role") == "assistant" and m.get("tool_calls") for m in msgs[-4:])
+    #         if not had_tool:
+    #             try:
+    #                 from nano_agent.tools.diagram import Diagram
+    #                 d = Diagram(work_dir=self.config.work_dir, charts_dir=self.config.charts_dir)
+    #                 img = d.mermaid_chart(f"flowchart LR\n  A[{task[:40]}]-->B[Result]", theme="dark")
+    #                 return result + "\n\n" + img
+    #             except Exception:
+    #                 pass
+    #         return result
+    #
+    #     if not full_text.strip():
+    #         return self._agent_loop(messages)[0]
+    #
+    #     return full_text
 
     def _make_strategy_context(self) -> StrategyContext:
         """构建策略上下文，替代猴子补丁注入。"""
@@ -235,6 +214,7 @@ class Agent:
             emit=self._emit, execute_tool=self.execute_tool,
             agent_loop=self._agent_loop, orient_fn=self._current_orient_fn,
             model_override=self._model_override,
+            system_prompt_fn=self._system_prompt,
         )
 
     def _run_strategy(self, strategy_cls, task: str, **kwargs) -> str:
@@ -246,46 +226,25 @@ class Agent:
         return s.run(task, self._agent_loop)
 
     def _auto_select_strategy(self, task: str) -> str:
-        """根据用户意图自动选择策略。简单任务直接匹配关键词，复杂任务走 LLM。"""
+        """根据用户意图自动选择策略。关键词可配(.env)，无匹配时走 LLM 分类。"""
         task_lower = task.lower().strip()
+        cfg = self.config
 
-        # 快速路径：关键词直接匹配，省掉一次 LLM 调用（~5s）
-        _SIMPLE_KEYWORDS = (
-            '天气', '气温', '温度', '汇率', '股价', '行情', '大盘', '指数',
-            '新闻', '热搜', '今天', '查询', '查一下', '搜索', '搜一下',
-            '多少', '几度', '几点', '什么时候', '是什么', '什么是', 'who', 'what', 'when',
-            '计算', '换算', '翻译', '帮我', '告诉我',
-            '如何', '怎么', '为什么', '怎样', '为什么', 'why', 'how',
-            '攻略', '技巧', '教程', '入门', '推荐', '建议',
-            '画', '生成图', '画图', '绘图', '作图', '生成', '画一只', '画个',
-        )
-        _COMPLEX_KEYWORDS = (
-            '计划', '规划', '方案', '对比', '比较', '分析报告', '调研',
-            '多步骤', '分步', '项目', '策划',
-        )
-        _CREATIVE_KEYWORDS = (
-            '头脑风暴', 'brainstorm', '创意', '多种方案', '最优',
-        )
+        # 从 Config 加载关键词（逗号分隔，可在 .env 中覆盖）
+        simple_kw = [k.strip() for k in cfg.strategy_simple_keywords.split(",") if k.strip()]
+        complex_kw = [k.strip() for k in cfg.strategy_complex_keywords.split(",") if k.strip()]
+        creative_kw = [k.strip() for k in cfg.strategy_creative_keywords.split(",") if k.strip()]
 
-        # 优先级：复杂 > 创意 > 简单（长任务中的简单词不应误判）
-        if any(kw in task_lower for kw in _COMPLEX_KEYWORDS):
+        # 优先级：复杂 > 创意 > 简单
+        if any(kw in task_lower for kw in complex_kw):
             return "plan-execute"
-        if any(kw in task_lower for kw in _CREATIVE_KEYWORDS):
+        if any(kw in task_lower for kw in creative_kw):
             return "tree-of-thought"
-        if any(kw in task_lower for kw in _SIMPLE_KEYWORDS) and len(task_lower) < 80:
+        if any(kw in task_lower for kw in simple_kw) and len(task_lower) < 80:
             return "default"
 
-        # 无关键词匹配 → LLM 分类
-        prompt = (
-            "Classify this task into exactly one strategy. Reply with ONLY the strategy name.\n\n"
-            "Strategies:\n"
-            "- default: simple Q&A, knowledge, calculation, chat\n"
-            "- react: needs step-by-step visible reasoning, debugging, audit trail\n"
-            "- plan-execute: complex multi-step task, project, report, analysis\n"
-            "- reflexion: quality-critical, needs self-review, error-prone task\n"
-            "- tree-of-thought: multiple valid approaches, creative brainstorming, optimization\n\n"
-            f"Task: {task}\n\nStrategy:"
-        )
+        # 无关键词匹配 → LLM 分类（prompt 也可在 .env 中覆盖）
+        prompt = cfg.strategy_classify_prompt + f"\n\nTask: {task}\n\nStrategy:"
         try:
             resp = self.llm.chat(
                 messages=[{"role": "user", "content": prompt}],
@@ -298,33 +257,6 @@ class Agent:
         except Exception:
             pass
         return "default"
-
-    def _execute_tools_parallel(self, tool_calls: list, messages: list):
-        """并行执行多个独立的工具调用。结果按原始顺序追加，单工具异常不中断其他。"""
-        results: dict[int, dict] = {}
-
-        def run_one(idx: int, tc: dict):
-            try:
-                results[idx] = self.execute_tool(tc, [], orient_fn=self._current_orient_fn)
-            except Exception as e:
-                logger.warning(f"Parallel tool '{tc.get('name', '?')}' failed: {e}")
-                results[idx] = {"name": tc.get("name", "?"), "result": f"Error: {e}", "success": False}
-
-        with ThreadPoolExecutor(max_workers=len(tool_calls)) as executor:
-            futures = [executor.submit(run_one, i, tc) for i, tc in enumerate(tool_calls)]
-            for f in as_completed(futures):
-                f.result()  # 等待全部完成
-
-        # 按原始顺序追加到 messages，保证 LLM 看到一致的顺序
-        for i in sorted(results.keys()):
-            info = results[i]
-            tc = tool_calls[i]
-            content = str(info.get("result", ""))
-            messages.append({
-                "role": "tool",
-                "tool_call_id": tc.get("id", ""),
-                "content": content,
-            })
 
     def _strategy_defaults(self, strategy: str) -> dict:
         """从 Config 获取策略默认参数。"""
@@ -376,20 +308,26 @@ class Agent:
             "tool_call_id": tc.get("id", ""),
             "content": content,
         })
-        return {"name": name, "result": result_text, "success": is_success}
+        return {"name": name, "result": result_text, "content": content, "success": is_success}
 
     # ── 核心循环 (O-O-D-A) ──────────────────────────────
 
     def _agent_loop(self, messages: list, exclude_tools: Optional[list] = None,
-                    stream_final: bool = False,
-                    system_prompt: Optional[str] = None) -> tuple[str, list]:
+                    system_prompt: Optional[str] = None,
+                    step_callback: Optional[Callable[[str, list], Optional[str]]] = None,
+                    tool_callback: Optional[Callable[[str, dict, str, bool], None]] = None,
+                    ) -> tuple[str, list]:
         """
         Agent 核心循环：O-O-D-A
 
         Observe (工具返回) → Orient (解读) → Decide (LLM) → Act (执行工具)
 
-        stream_final: 为 True 时，最终文本回答用流式生成边 emit text 事件。
-        system_prompt: 覆盖默认 prompt。ReAct 等策略可通过此参数注入专属 prompt。
+        system_prompt: 覆盖默认 prompt。策略可通过此参数注入专属 prompt。
+
+        step_callback:  每次 LLM 响应后调用 f(text, tool_calls) → 返回 str 则提前终止
+                        并以此 str 作为最终回答。ReAct 用于检测 Final Answer。
+        tool_callback:  每次工具执行后调用 f(tool_name, tool_args, result_text, is_success)。
+                        ReAct 用于记录 observation 到 thought_trail。
         """
         schemas = self.tools.get_schemas()
         if exclude_tools:
@@ -397,6 +335,7 @@ class Agent:
 
         # system_prompt — 允许策略覆盖
         prompt = system_prompt or self._system_prompt()
+        response = None  # 防止 max_iterations=0 时 NameError
 
         for _ in range(self.config.max_iterations):
             # ── Decide: LLM 决策 ──
@@ -415,16 +354,53 @@ class Agent:
                 ]
             messages.append(assistant_msg)
 
+            # ── step_callback: 策略可拦截 LLM 响应，提前终止循环 ──
+            if step_callback:
+                early_stop = step_callback(response["text"], response["tool_calls"])
+                if early_stop is not None:
+                    return early_stop, messages
+
             # 无工具调用 → 结束
             if not response["tool_calls"]:
                 return response["text"], messages
 
-            # ── Act: 并行执行工具 ──
+            # ── Act: 执行工具 ──
             if len(response["tool_calls"]) == 1:
-                self.execute_tool(response["tool_calls"][0], messages,
-                                  orient_fn=self._current_orient_fn)
+                tc = response["tool_calls"][0]
+                info = self.execute_tool(tc, messages,
+                                         orient_fn=self._current_orient_fn)
+                if tool_callback:
+                    tool_callback(info["name"], tc.get("arguments", {}),
+                                  info["result"], info["success"])
             else:
-                self._execute_tools_parallel(response["tool_calls"], messages)
+                # 并行执行：记录结果后在 tool_callback 中回调
+                results: dict[int, dict] = {}
+                def _run_one(idx: int, tc: dict):
+                    try:
+                        results[idx] = self.execute_tool(tc, [], orient_fn=self._current_orient_fn)
+                    except Exception as e:
+                        logger.warning(f"Parallel tool '{tc.get('name', '?')}' failed: {e}")
+                        results[idx] = {"name": tc.get("name", "?"), "result": f"Error: {e}", "success": False}
+
+                with ThreadPoolExecutor(max_workers=len(response["tool_calls"])) as executor:
+                    futures = [executor.submit(_run_one, i, tc)
+                               for i, tc in enumerate(response["tool_calls"])]
+                    for f in as_completed(futures):
+                        f.result()
+
+                for i in sorted(results.keys()):
+                    info = results[i]
+                    tc = response["tool_calls"][i]
+                    # 优先用 content（含 Orient 富化），回退到 raw result
+                    content = str(info.get("content") or info.get("result", ""))
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": tc.get("id", ""),
+                        "content": content,
+                    })
+                    if tool_callback:
+                        tool_callback(info["name"], tc.get("arguments", {}),
+                                      info["result"], info["success"])
 
         logger.warning(f"Max iterations ({self.config.max_iterations}) reached, "
                         f"forcing stop. Last tool: "

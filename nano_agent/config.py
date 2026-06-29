@@ -95,6 +95,33 @@ class Config:
         default_factory=lambda: os.getenv("AGENT_PUBLIC_MODE", "").lower() in ("1", "true", "yes")
     )
 
+    # ── 策略自动选择 ──
+    strategy_simple_keywords: str = field(
+        default_factory=lambda: os.getenv("AGENT_STRATEGY_SIMPLE_KW",
+            "天气,气温,温度,汇率,股价,行情,大盘,指数,新闻,热搜,今天,查询,查一下,搜索,搜一下,"
+            "多少,几度,几点,什么时候,是什么,什么是,who,what,when,"
+            "计算,换算,翻译,帮我,告诉我,如何,怎么,为什么,怎样,why,how,"
+            "攻略,技巧,教程,入门,推荐,建议,画,生成图,画图,绘图,作图,生成,画一只,画个")
+    )
+    strategy_complex_keywords: str = field(
+        default_factory=lambda: os.getenv("AGENT_STRATEGY_COMPLEX_KW",
+            "计划,规划,方案,对比,比较,分析报告,调研,多步骤,分步,项目,策划")
+    )
+    strategy_creative_keywords: str = field(
+        default_factory=lambda: os.getenv("AGENT_STRATEGY_CREATIVE_KW",
+            "头脑风暴,brainstorm,创意,多种方案,最优")
+    )
+    strategy_classify_prompt: str = field(
+        default_factory=lambda: os.getenv("AGENT_STRATEGY_CLASSIFY_PROMPT",
+            "Classify this task into exactly one strategy. Reply with ONLY the strategy name.\n\n"
+            "Strategies:\n"
+            "- default: simple Q&A, knowledge, calculation, chat\n"
+            "- react: needs step-by-step visible reasoning, debugging, audit trail\n"
+            "- plan-execute: complex multi-step task, project, report, analysis\n"
+            "- reflexion: quality-critical, needs self-review, error-prone task\n"
+            "- tree-of-thought: multiple valid approaches, creative brainstorming, optimization")
+    )
+
     @property
     def is_anthropic(self) -> bool:
         return self.provider in ("anthropic", "claude")
