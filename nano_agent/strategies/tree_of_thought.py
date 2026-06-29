@@ -35,6 +35,12 @@ logger = logging.getLogger("nano_agent.strategies.tot")
 class TreeOfThoughtStrategy(BaseStrategy):
     """Tree-of-Thought 推理策略 — 多路径探索 + 评估选择 + 回溯。"""
 
+    uses_orient = False
+    default_params = {"num_candidates": 3, "score_threshold": 6}
+    auto_keywords = ('头脑风暴', 'brainstorm', '创意', '多种方案', '最优',
+                     '探索', '所有可能', '穷举', '候选')
+    auto_priority = 2
+
     def __init__(self, config: Config, llm: LLM, tools: ToolRegistry,
                  num_candidates: int = None, score_threshold: int = None, **kwargs):
         super().__init__(config, llm, tools, **kwargs)

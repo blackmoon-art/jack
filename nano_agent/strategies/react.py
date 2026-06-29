@@ -34,6 +34,11 @@ class ReActStrategy(BaseStrategy):
       - Tree-of-Thought: 多分支并行探索
     """
 
+    uses_orient = False
+    default_params = {"max_steps": 10}
+    auto_keywords = ('逐步', 'step by step', '推理过程', '思考步骤', '审计', 'debug步骤')
+    auto_priority = 1
+
     def __init__(self, config: Config, llm: LLM, tools: ToolRegistry,
                  max_steps: int = None, **kwargs):
         super().__init__(config, llm, tools, **kwargs)

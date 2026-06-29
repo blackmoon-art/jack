@@ -85,20 +85,18 @@ class Agent:
             strategy = self._auto_select_strategy(task)
             self._emit("text", {"text": f"🤖 Auto-selected strategy: {strategy}"})
 
-        # 创建绑定原始任务的 Orient 函数
-        # 默认不启用 Orient（省 ~5s LLM 调用），只在 Reflexion 等需要深度反思的策略中启用
-        need_orient = strategy in ("reflexion",)
-        self._current_orient_fn = (
-            (lambda obs: self._orient(obs, task=task)) if need_orient else None
-        )
-
         strategy_cls = STRATEGY_REGISTRY.get(strategy)
         if not strategy_cls:
             raise ValueError(f"Unknown strategy: '{strategy}'. Available: {list(STRATEGY_REGISTRY.keys())}")
 
+        # Orient: 从策略类元数据读取，不再硬编码策略名
+        self._current_orient_fn = (
+            (lambda obs: self._orient(obs, task=task)) if strategy_cls.uses_orient else None
+        )
+
         # 所有策略统一走 _run_strategy → StrategyContext → strategy.run()。
         # 详见 README "决策 7：策略执行路径统一 vs 热路径特化"。
-        defaults = self._strategy_defaults(strategy)
+        defaults = self._strategy_defaults(strategy_cls)
         defaults.update(strategy_kwargs)
         final = self._run_strategy(strategy_cls, task, **defaults)
 
@@ -226,25 +224,38 @@ class Agent:
         return s.run(task, self._agent_loop)
 
     def _auto_select_strategy(self, task: str) -> str:
-        """根据用户意图自动选择策略。关键词可配(.env)，无匹配时走 LLM 分类。"""
+        """根据用户意图自动选择策略。
+
+        按 auto_priority 降序遍历所有策略，用各策略类的 auto_keywords 匹配。
+        新增策略只需在类上设 auto_keywords + auto_priority，无需改 Agent。
+        无关键词匹配时走 LLM 分类。
+        """
         task_lower = task.lower().strip()
-        cfg = self.config
 
-        # 从 Config 加载关键词（逗号分隔，可在 .env 中覆盖）
-        simple_kw = [k.strip() for k in cfg.strategy_simple_keywords.split(",") if k.strip()]
-        complex_kw = [k.strip() for k in cfg.strategy_complex_keywords.split(",") if k.strip()]
-        creative_kw = [k.strip() for k in cfg.strategy_creative_keywords.split(",") if k.strip()]
+        # 按优先级降序遍历所有策略，关键词匹配
+        sorted_strategies = sorted(
+            STRATEGY_REGISTRY.items(),
+            key=lambda item: item[1].auto_priority,
+            reverse=True,
+        )
+        for name, cls in sorted_strategies:
+            if cls.auto_keywords and any(kw in task_lower for kw in cls.auto_keywords):
+                # default 策略额外检查：短任务才匹配，避免长任务误判
+                if name == "default" and len(task_lower) >= 80:
+                    continue
+                return name
 
-        # 优先级：复杂 > 创意 > 简单
-        if any(kw in task_lower for kw in complex_kw):
-            return "plan-execute"
-        if any(kw in task_lower for kw in creative_kw):
-            return "tree-of-thought"
-        if any(kw in task_lower for kw in simple_kw) and len(task_lower) < 80:
-            return "default"
-
-        # 无关键词匹配 → LLM 分类（prompt 也可在 .env 中覆盖）
-        prompt = cfg.strategy_classify_prompt + f"\n\nTask: {task}\n\nStrategy:"
+        # 无关键词匹配 → LLM 分类
+        prompt = (
+            "Classify this task into exactly one strategy. Reply with ONLY the strategy name.\n\n"
+            "Strategies:\n"
+            "- default: simple Q&A, knowledge, calculation, chat\n"
+            "- react: needs step-by-step visible reasoning, debugging, audit trail\n"
+            "- plan-execute: complex multi-step task, project, report, analysis\n"
+            "- reflexion: quality-critical, needs self-review, error-prone task\n"
+            "- tree-of-thought: multiple valid approaches, creative brainstorming, optimization\n\n"
+            f"Task: {task}\n\nStrategy:"
+        )
         try:
             resp = self.llm.chat(
                 messages=[{"role": "user", "content": prompt}],
@@ -258,16 +269,24 @@ class Agent:
             pass
         return "default"
 
-    def _strategy_defaults(self, strategy: str) -> dict:
-        """从 Config 获取策略默认参数。"""
-        defaults = {}
-        if strategy == "react":
-            defaults["max_steps"] = self.config.react_max_steps
-        elif strategy == "reflexion":
-            defaults["max_retries"] = self.config.reflexion_max_retries
-        elif strategy == "tree-of-thought":
-            defaults["num_candidates"] = self.config.tot_num_candidates
-            defaults["score_threshold"] = self.config.tot_score_threshold
+    def _strategy_defaults(self, strategy_cls) -> dict:
+        """从策略类元数据 + Config 构建默认参数。
+
+        策略类声明 default_params（硬编码默认值），Config 环境变量可覆盖。
+        新增策略只需在类上设 default_params，无需改 Agent。
+        """
+        # 类默认值
+        defaults = dict(strategy_cls.default_params)
+        # Config 覆盖（按参数名映射到 Config 属性）
+        _config_map = {
+            "max_steps": self.config.react_max_steps,
+            "max_retries": self.config.reflexion_max_retries,
+            "num_candidates": self.config.tot_num_candidates,
+            "score_threshold": self.config.tot_score_threshold,
+        }
+        for key, config_val in _config_map.items():
+            if key in defaults:
+                defaults[key] = config_val
         return defaults
 
     def execute_tool(self, tc: dict, messages: list, orient_fn=None):

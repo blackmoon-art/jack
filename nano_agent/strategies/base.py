@@ -39,6 +39,19 @@ class BaseStrategy:
       2. 旧式: BaseStrategy(config, llm, tools, **kwargs) — 向后兼容
     """
 
+    # ── 策略元数据（子类覆盖）────────────────────────
+    uses_orient: bool = False
+    """是否需要 Orient 解读阶段。Reflexion 等需要深度反思的策略设为 True。"""
+
+    default_params: dict = {}
+    """默认参数，Agent 从 Config 读取并合并。key → env var 的默认值。"""
+
+    auto_keywords: tuple[str, ...] = ()
+    """auto 模式的关键词匹配。Agent._auto_select_strategy 遍历所有策略按优先级匹配。"""
+
+    auto_priority: int = 0
+    """auto 模式匹配优先级。越大越优先。Default=0, ReAct=1, ToT=2, PlanExecute=3。"""
+
     def __init__(self, config: Config = None, llm: LLM = None,
                  tools: ToolRegistry = None, **kwargs):
         ctx = kwargs.pop("context", None)

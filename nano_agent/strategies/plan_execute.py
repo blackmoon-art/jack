@@ -28,6 +28,12 @@ logger = logging.getLogger("nano_agent.strategies.plan_execute")
 class PlanExecuteStrategy(BaseStrategy):
     """Plan-Execute 推理策略。"""
 
+    uses_orient = False
+    default_params = {}
+    auto_keywords = ('计划', '规划', '方案', '对比', '比较', '分析报告',
+                     '调研', '多步骤', '分步', '项目', '策划')
+    auto_priority = 3  # 最高优先级
+
     def __init__(self, config: Config, llm: LLM, tools: ToolRegistry, **kwargs):
         super().__init__(config, llm, tools, **kwargs)
 
