@@ -120,12 +120,16 @@ class ImageAnalyzer:
 
             img = Image.open(io.BytesIO(image_data))
             # 自动检测中英文
+            # 根据用户意图调整 OCR 策略
+            is_extract = any(kw in question.lower() for kw in
+                           ('extract', 'ocr', '文字', '提取', 'read', '读取', '文本'))
             text = pytesseract.image_to_string(img, lang="chi_sim+eng")
             text = text.strip()
             if not text:
-                return "[Tesseract OCR] No text found in image."
+                return "[Tesseract OCR] No text found in image. This tool only extracts text (OCR). For visual description, configure GEMINI_API_KEY or VISION_API_KEY."
 
-            result = f"[Tesseract OCR — offline, free]\n\nExtracted text from image:\n\n{text}"
+            prefix = "Extracted text" if is_extract else "This OCR tool only extracts text from images. For visual description, use a vision API.\n\nFound text"
+            result = f"[Tesseract OCR — offline, free]\n\n{prefix}:\n\n{text}"
             if len(result) > 5000:
                 result = result[:5000] + "\n...(truncated)"
             return result
