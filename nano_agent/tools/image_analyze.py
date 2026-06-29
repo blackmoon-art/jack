@@ -26,14 +26,22 @@ class ImageAnalyzer:
         """检测可用的 Vision 提供商。
 
         优先级:
-          1. GEMINI_API_KEY (Google Gemini 免费, 1500次/天)
+          1. Ollama 本地视觉模型 (免费，离线，支持中文: minicpm-v / llava)
           2. VISION_API_KEY + VISION_BASE_URL (OpenAI 兼容)
           3. ANTHROPIC_API_KEY (Claude, 原生 vision)
           4. Tesseract 本地 OCR (免费，离线，只提取文字)
 
         Returns: (provider: "openai"|"anthropic"|"tesseract", api_key, base_url, model)
         """
-        # 1. Google Gemini (免费)
+        # 1. Ollama 本地视觉模型
+        import shutil
+        if shutil.which("ollama"):
+            base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1")
+            model = os.getenv("VISION_MODEL", os.getenv("OLLAMA_VISION_MODEL", "minicpm-v:8b"))
+            logger.info(f"Vision provider: Ollama local ({model}) — free, offline")
+            return ("openai", "ollama", base_url, model)
+
+        # 2. Google Gemini (免费)
         gemini_key = os.getenv("GEMINI_API_KEY", "")
         if gemini_key:
             base_url = "https://generativelanguage.googleapis.com/v1beta/openai/"
