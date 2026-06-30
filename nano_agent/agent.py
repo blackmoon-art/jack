@@ -346,6 +346,7 @@ class Agent:
                     tool_call = {"name": tool_name, "arguments": tool_params, "id": "routed_visual"}
                     messages.append({
                         "role": "assistant", "content": "",
+                        "reasoning_content": "",  # DeepSeek 思考模式要求回传
                         "tool_calls": [{
                             "id": "routed_visual", "type": "function",
                             "function": {"name": tool_name,
