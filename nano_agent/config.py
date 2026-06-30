@@ -3,24 +3,29 @@
 """
 
 import os
+import threading
 from dataclasses import dataclass, field, replace as _dc_replace
 from pathlib import Path
 from typing import Optional
 
 _dotenv_loaded = False
+_dotenv_lock = threading.Lock()
 _config_instance = None  # Config 单例缓存（延迟初始化，避免前向引用）
 
 
 def _ensure_dotenv():
-    """延迟加载 .env，避免 import 时文件 I/O 副作用。仅首次调用时执行。"""
+    """延迟加载 .env，避免 import 时文件 I/O 副作用。仅首次调用时执行。线程安全。"""
     global _dotenv_loaded
     if _dotenv_loaded:
         return
-    _dotenv_loaded = True
-    from dotenv import load_dotenv
-    for env_path in [Path.cwd() / ".env", Path.home() / ".claude" / ".env"]:
-        if env_path.exists():
-            load_dotenv(env_path, override=True)
+    with _dotenv_lock:
+        if _dotenv_loaded:  # double-check inside lock
+            return
+        _dotenv_loaded = True
+        from dotenv import load_dotenv
+        for env_path in [Path.cwd() / ".env", Path.home() / ".claude" / ".env"]:
+            if env_path.exists():
+                load_dotenv(env_path, override=True)
 
 
 def _env(key: str, default: str = "") -> str:

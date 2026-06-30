@@ -90,6 +90,9 @@ class ToolRegistry:
         # PPT + search_and_fetch 有复杂/跨模块 schema，手动补充
         self._register_manual_overrides()
 
+        # 缓存 schema 列表（每次 LLM 调用都请求，避免重复构建）
+        self._cached_schemas = [t["schema"] for t in self._tools.values()]
+
     def _auto_register(self):
         """从各工具类的 TOOLS 属性自动注册。公网模式下过滤危险工具。"""
         for attr_name, cls in self._MODULE_MAP.items():
@@ -137,8 +140,8 @@ class ToolRegistry:
     # ── 公开方法 ──────────────────────────────────────
 
     def get_schemas(self) -> list:
-        """返回所有工具的 OpenAI tool schema 列表。"""
-        return [t["schema"] for t in self._tools.values()]
+        """返回所有工具的 OpenAI tool schema 列表（缓存）。"""
+        return self._cached_schemas
 
     def execute(self, name: str, arguments: dict) -> Observation:
         """执行指定工具，返回结构化 Observation。"""

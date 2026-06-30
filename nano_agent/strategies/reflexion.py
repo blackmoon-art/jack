@@ -141,7 +141,11 @@ class ReflexionStrategy(BaseStrategy):
 
     def generate_reflection(self, task: str, result: str, eval_result: dict,
                             attempt: int) -> str:
-        """生成反思：分析失败原因 + 改进策略。"""
+        """生成反思：分析失败原因 + 改进策略。
+
+        返回结构化反思文本，包含 WHAT WENT WRONG / ROOT CAUSE / FIX / LESSON 字段。
+        调用方可通过 parse_reflection() 获取结构化字段。
+        """
         context = "\n".join(
             f"- Lesson {i+1}: {r}"
             for i, r in enumerate(self.lesson_memory[-5:])
@@ -168,6 +172,33 @@ class ReflexionStrategy(BaseStrategy):
         response = self.llm.chat(messages=messages, tools=[], system="",
                                   model=self._model_override)
         return response["text"].strip()
+
+    @staticmethod
+    def parse_reflection(reflection: str) -> dict:
+        """将反思文本解析为结构化字段。
+
+        Returns:
+            {"what_went_wrong": str, "root_cause": str, "fix": str, "lesson": str}
+            缺失字段为空字符串。
+        """
+        import re as _re
+        fields = {"what_went_wrong": "", "root_cause": "", "fix": "", "lesson": ""}
+        key_map = {
+            "WHAT WENT WRONG": "what_went_wrong",
+            "ROOT CAUSE": "root_cause",
+            "FIX": "fix",
+            "LESSON": "lesson",
+        }
+        pattern = _re.compile(
+            r'(WHAT WENT WRONG|ROOT CAUSE|FIX|LESSON)\s*:\s*(.+?)'
+            r'(?=\n(?:WHAT WENT WRONG|ROOT CAUSE|FIX|LESSON)\s*:|\Z)',
+            _re.DOTALL,
+        )
+        for m in pattern.finditer(reflection):
+            key = key_map.get(m.group(1).strip().upper())
+            if key:
+                fields[key] = m.group(2).strip()
+        return fields
 
     # ── 主循环 ────────────────────────────────────────────
 
@@ -266,13 +297,16 @@ class ReflexionStrategy(BaseStrategy):
             # 失败 → 反思
             logger.info(f"[Reflect] Generating reflection...")
             reflection = self.generate_reflection(task, result, eval_result, attempt)
+            parsed = self.parse_reflection(reflection)
             all_reflections.append(reflection)
 
             # #5 优化：只提取 LESSON 行作为教训
-            lesson = self._extract_lesson(reflection)
+            lesson = parsed["lesson"] or self._extract_lesson(reflection)
             self.lesson_memory.append(lesson)
             self._save_lesson(lesson, trace_id=self._trace_id)
             self._save_attempt(attempt, result, eval_result, reflection=reflection, lesson=lesson)
+            logger.info(f"[Reflect] Issue: {parsed.get('what_went_wrong', 'N/A')[:100]}")
+            logger.info(f"[Reflect] Fix: {parsed.get('fix', 'N/A')[:100]}")
             logger.info(f"[Reflect] Lesson: {lesson[:200]}")
 
         # 保存反思教训到持久记忆

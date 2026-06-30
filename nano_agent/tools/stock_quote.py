@@ -392,39 +392,4 @@ class StockQuote:
             symbol = symbol.split('.')[0]
         return symbol, is_a
 
-    @staticmethod
-    def _format_history(df, symbol: str, period: str, is_a: bool, max_rows: int = 16) -> str:
-        """格式化历史数据（yfinance DataFrame 兼容）。"""
-        if is_a:
-            header = f"{'日期':<12} {'开盘':>10} {'收盘':>10} {'最高':>10} {'最低':>10} {'涨跌幅':>8} {'成交额':>14}"
-        else:
-            header = f"{'Date':<12} {'Open':>10} {'Close':>10} {'High':>10} {'Low':>10} {'Volume':>12}"
 
-        total = len(df)
-        if total <= max_rows:
-            rows = df
-            truncated = False
-        else:
-            rows = df.head(max_rows // 2)._append(df.tail(max_rows // 2))
-            truncated = True
-
-        lines = [f"📊 {symbol} 最近 {period} 历史行情 ({'A股前复权' if is_a else 'US/HK'})\n", header]
-        for _, row in rows.iterrows():
-            if is_a:
-                date = str(row.get('日期', ''))[:10]
-                pct = row.get('涨跌幅', '')
-                amt = row.get('成交额', '')
-                pct_str = f"{pct:+.2f}%" if isinstance(pct, (int, float)) else str(pct)
-                amt_str = f"{amt/1e8:.2f}亿" if isinstance(amt, (int, float)) and amt > 0 else str(amt)
-                lines.append(f"{date:<12} {row.get('开盘',''):>10} {row.get('收盘',''):>10} {row.get('最高',''):>10} {row.get('最低',''):>10} {pct_str:>8} {amt_str:>14}")
-            else:
-                lines.append(f"{row.name.strftime('%Y-%m-%d'):<12} {row['Open']:>10.2f} {row['Close']:>10.2f} {row['High']:>10.2f} {row['Low']:>10.2f} {int(row['Volume']):>12,}")
-
-        if truncated:
-            lines.append(f"\n... ({total - max_rows} rows omitted) ...")
-            if is_a:
-                lines.append(f"Summary: mean close {df['收盘'].mean():.2f}, high {df['最高'].max()}, low {df['最低'].min()}, total rows {total}")
-            else:
-                lines.append(f"Summary: mean close {df['Close'].mean():.2f}, high {df['High'].max():.2f}, low {df['Low'].min():.2f}, total rows {total}")
-
-        return '\n'.join(lines)

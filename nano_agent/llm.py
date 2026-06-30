@@ -268,6 +268,7 @@ class LLM:
             messages=anthropic_messages,
             tools=anthropic_tools,
             max_tokens=self.config.max_tokens,
+            timeout=120,
         )
 
         text = ""
@@ -302,6 +303,7 @@ class LLM:
             messages=api_messages,
             tools=tools,
             tool_choice="auto",
+            timeout=120,
         )
 
         msg = response.choices[0].message
@@ -352,7 +354,7 @@ class LLM:
             api_messages.append({"role": "system", "content": system})
         api_messages.extend(messages)
 
-        kwargs = {"model": model or self._model, "messages": api_messages, "stream": True}
+        kwargs = {"model": model or self._model, "messages": api_messages, "stream": True, "timeout": 120}
         if tools:
             kwargs["tools"] = tools
             kwargs["tool_choice"] = "auto"

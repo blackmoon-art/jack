@@ -66,26 +66,28 @@ def _close_all_db():
 
 
 def _init_db():
-    """初始化数据库表，启用 WAL 模式提升并发性能。"""
+    """初始化数据库表，启用 WAL 模式提升并发性能。
+
+    注意：不关闭连接——_get_db() 返回线程本地复用连接，
+    关闭后 _db_local.conn 仍指向已关闭的 conn，下次调用会报错。
+    连接由 _close_all_db() 在进程退出时统一清理。
+    """
     conn = _get_db()
-    try:
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS session_history (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                session_id TEXT NOT NULL,
-                role TEXT NOT NULL,
-                content TEXT NOT NULL,
-                created_at TEXT NOT NULL DEFAULT (datetime('now'))
-            )
-        """)
-        conn.execute("""
-            CREATE INDEX IF NOT EXISTS idx_session_id
-            ON session_history(session_id)
-        """)
-        conn.commit()
-    finally:
-        conn.close()
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS session_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id TEXT NOT NULL,
+            role TEXT NOT NULL,
+            content TEXT NOT NULL,
+            created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        )
+    """)
+    conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_session_id
+        ON session_history(session_id)
+    """)
+    conn.commit()
 
 
 _init_db()
@@ -344,7 +346,7 @@ def agent_stream(task: str, strategy: str, session_id: str,
 
         # 记录历史（内存 + SQLite）— 仅在有结果时
         if last_item and last_item.get("event") == "done":
-            reply = last_item["data"]["text"]
+            reply = last_item["data"].get("text", "")
             with _sessions_lock:
                 if session_id in sessions:
                     sessions[session_id]["history"].append({"role": "user", "content": task})

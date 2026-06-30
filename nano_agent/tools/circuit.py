@@ -194,6 +194,9 @@ class Circuit:
                     last = _place_component(n, v, lbl, last, d)
                 elif part_type == "parallel":
                     # 并联分支: 从 split_point 分叉，各分支终点汇合到 join_point
+                    # NOTE: 当前实现用固定偏移量布局分支，超过 3 个分支或分支长度差异大时
+                    # 元件可能重叠。schemdraw 内置 elm.ElementList + push/pop 可以更好控制，
+                    # 但需要大幅重构。短期建议用户将复杂并联拆分为多个简单电路。
                     branches = part_data
                     if not last:
                         last = elm.Line()

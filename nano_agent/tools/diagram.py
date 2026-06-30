@@ -81,24 +81,6 @@ class Diagram:
 
     PLANTUML_BASE = "https://www.plantuml.com/plantuml"
 
-    @staticmethod
-    def _plantuml_encode(data: bytes) -> str:
-        """PlantUML 自定义 base64 编码（deflate 后使用）。"""
-        res = []
-        for i in range(0, len(data), 3):
-            b1, b2 = data[i], data[i+1] if i+1 < len(data) else 0
-            b3 = data[i+2] if i+2 < len(data) else 0
-            c1, c2 = b1 >> 2, ((b1 & 0x3) << 4) | (b2 >> 4)
-            c3, c4 = ((b2 & 0xF) << 2) | (b3 >> 6), b3 & 0x3F
-            for c in (c1, c2, c3, c4):
-                if c < 10: res.append(chr(48 + c))
-                elif c < 36: res.append(chr(65 + c - 10))
-                elif c < 62: res.append(chr(97 + c - 36))
-                elif c == 62: res.append('-')
-                else: res.append('_')
-        extra = (3 - len(data) % 3) % 3
-        return ''.join(res[:len(res)-extra] if extra else res)
-
     def _render_plantuml(self, code: str) -> str:
         """用 PlantUML 渲染状态图（布局远优于 Mermaid stateDiagram）。"""
         import re as _re3

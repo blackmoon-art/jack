@@ -30,27 +30,25 @@ class Search:
         """搜索网页：Bing → DuckDuckGo → Brave → SearXNG → Wikipedia 五级降级。"""
         max_results = min(max(max_results, 1), 10)
 
-        # 国内环境：Bing 最稳定，优先
-        results = self._search_bing(query, max_results)
-        if results:
-            return f"Search results for '{query}' (Bing):\n\n" + "\n\n".join(results)
+        # 降级链： (名称, 方法引用, 是否需要 API Key)
+        providers = [
+            ("Bing",       self._search_bing,       False),
+            ("DuckDuckGo", self._search_duckduckgo, False),
+            ("Brave",      self._search_brave,      bool(self.brave_api_key)),
+            ("SearXNG",    self._search_searxng,    False),
+            ("Wikipedia",  self._search_wikipedia,  False),
+        ]
 
-        results = self._search_duckduckgo(query, max_results)
-        if results:
-            return f"Search results for '{query}':\n\n" + "\n\n".join(results)
-
-        if self.brave_api_key:
-            results = self._search_brave(query, max_results)
+        for name, search_fn, needs_key in providers:
+            if needs_key and not self.brave_api_key:
+                continue
+            try:
+                results = search_fn(query, max_results)
+            except Exception as e:
+                logger.debug(f"{name} search failed: {e}")
+                results = []
             if results:
-                return f"Search results for '{query}' (Brave):\n\n" + "\n\n".join(results)
-
-        results = self._search_searxng(query, max_results)
-        if results:
-            return f"Search results for '{query}' (SearXNG):\n\n" + "\n\n".join(results)
-
-        results = self._search_wikipedia(query, max_results)
-        if results:
-            return f"Search results for '{query}' (Wikipedia):\n\n" + "\n\n".join(results)
+                return f"Search results for '{query}' ({name}):\n\n" + "\n\n".join(results)
 
         return f"No search results found for '{query}'."
 
