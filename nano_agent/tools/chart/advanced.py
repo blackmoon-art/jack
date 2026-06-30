@@ -541,9 +541,25 @@ class AdvancedCharts:
     @classmethod
     def _safe_eval_2d(cls, expr: str, X: np.ndarray, Y: np.ndarray) -> np.ndarray | None:
         """安全求值 2D 数学表达式 Z = f(X, Y)。失败返回 None。"""
-        # LLM 写法兼容: X^2 → X**2, 2X → 2*X
+        # LLM 写法兼容:
+        #   x²+y² → x**2+y**2     (Unicode 上标 → **n)
+        #   10⁻²  → 10**(-2)       (负上标指数)
+        #   X^2 → X**2
+        #   2X → 2*X
+        #   XY → X*Y              (隐式乘法)
+        _SUPER_DIGITS = {"⁰": "0", "¹": "1", "²": "2", "³": "3", "⁴": "4",
+                         "⁵": "5", "⁶": "6", "⁷": "7", "⁸": "8", "⁹": "9"}
+        # ⁻+数字 → **(-n)   (e.g. x⁻² → x**(-2))
+        for u, d in _SUPER_DIGITS.items():
+            expr = expr.replace("⁻" + u, f"**(-{d})")
+        # 纯上标数字 → **n   (e.g. x² → x**2)
+        for u, d in _SUPER_DIGITS.items():
+            expr = expr.replace(u, f"**{d}")
+        expr = expr.replace("⁻", "**-")  # e⁻ˣ → e**-x
+        expr = expr.replace("⁺", "**+")
         expr = expr.replace("^", "**")
         expr = re.sub(r"(\d)([a-zA-Z])", r"\1*\2", expr)
+        expr = re.sub(r"([a-zA-Z])([a-zA-Z])", r"\1*\2", expr)
         err = _check_forbidden(expr)
         if err:
             logger.warning(err)

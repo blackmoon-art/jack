@@ -25,7 +25,7 @@ _EXACT_ROUTES: list[tuple[str, str, dict]] = [
     # === generate_chart 子类型 ===
     # 等高线（放最前面，优先级高于其他含"图"的词）
     ("等高线|梯度下降|contour|loss surface|损失函数可视化",
-     "generate_chart", {"chart_type": "contour"}),
+     "generate_chart", {"chart_type": "contour", "data": "X**2+Y**2"}),
     # 波形（放前面，避免被"信号"等其他规则抢）
     ("波形|信号波|waveform|时钟脉冲|clock pulse|voltage wave",
      "generate_chart", {"chart_type": "waveform"}),
