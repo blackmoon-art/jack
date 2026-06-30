@@ -189,6 +189,10 @@ class AdvancedCharts:
             ax.legend(facecolor="#222" if is_dark else "#f0f0f0",
                       edgecolor="#444" if is_dark else "#ccc", labelcolor=fg)
 
+        # 默认坐标轴标签（_apply_style 中的用户 x_label/y_label 会覆盖）
+        ax.set_xlabel("x", color=fg, fontsize=12)
+        ax.set_ylabel("y", color=fg, fontsize=12)
+
         # 三角函数检测：用所有表达式的合并文本判断
         all_expr = " ".join(exprs).lower()
         is_trig = any(fn in all_expr for fn in ('sin', 'cos', 'tan'))
@@ -340,30 +344,61 @@ class AdvancedCharts:
 
     @staticmethod
     def draw_waveform(ax, data_sets, label_sets, is_dark=True):
-        """波形图 — 数字时序波形 & 模拟波形。"""
+        """波形图 — 数字时序波形 & 模拟波形，支持混合通道。
+
+        模拟通道: data='sine,2,5;square,1,3' (type,freq_hz,amp[,phase_deg])
+        数字通道: data='0,1,0,1;1,0,0,1' (每通道逗号分隔的电平值，支持多值)
+        混合:    data='sine,2,5;0,1,0,0;1,0,1,1' (模拟+数字自动识别)
+        """
         fg = "#e0e0e0" if is_dark else "#333"
         bg = "#1a1a2e" if is_dark else "#ffffff"
         grid_c = "#333333" if is_dark else "#dddddd"
         colors = ["#7c3aed", "#3b82f6", "#10b981", "#f59e0b", "#ef4444", "#ec4899"]
 
         wave_types = {"sine", "square", "triangle", "sawtooth", "sin", "cos"}
-        is_analog = False
-        if data_sets and data_sets[0]:
-            first_val = str(data_sets[0][0]).strip().lower()
-            if first_val in wave_types:
-                is_analog = True
 
-        if is_analog:
-            t_max = 0
-            for ds in data_sets:
+        # ── 逐通道分类：模拟 vs 数字 ──
+        analog_channels = []   # (idx, ds, label)
+        digital_channels = []  # (idx, ds, label)
+        for i, ds in enumerate(data_sets):
+            if not ds:
+                continue
+            label = label_sets[i][0] if i < len(label_sets) and label_sets[i] else f"CH{i+1}"
+            first_val = str(ds[0]).strip().lower()
+            if first_val in wave_types:
+                analog_channels.append((i, ds, label))
+            else:
+                digital_channels.append((i, ds, label))
+
+        has_analog = len(analog_channels) > 0
+        has_digital = len(digital_channels) > 0
+        total_rows = len(analog_channels) + len(digital_channels)
+        if total_rows == 0:
+            ax.text(0.5, 0.5, "No waveform data", transform=ax.transAxes,
+                    ha="center", color=fg)
+            return
+
+        # ── 布局参数 ──
+        row_height = 1.0
+        row_gap = 0.4 if has_digital else 0.15
+        time_span = None  # 由数字通道数据长度统一
+
+        # ── 模拟通道：统一时间轴 ──
+        if has_analog:
+            t_max = 0.0
+            for _, ds, _ in analog_channels:
                 if len(ds) < 3:
                     continue
                 freq = float(ds[1]) if len(ds) > 1 else 1.0
                 period = 1.0 / freq if freq > 0 else 1.0
                 t_max = max(t_max, period * 3)
+            # 数字通道影响时间跨度
+            if has_digital:
+                max_digital_len = max(len(ds) for _, ds, _ in digital_channels)
+                t_max = max(t_max, float(max_digital_len))
+            t = np.linspace(0, t_max, max(1000, int(t_max * 200)))
 
-            t = np.linspace(0, t_max, 1000)
-            for i, ds in enumerate(data_sets):
+            for row_idx, (orig_idx, ds, label) in enumerate(analog_channels):
                 if len(ds) < 3:
                     continue
                 wtype = str(ds[0]).strip().lower()
@@ -372,17 +407,7 @@ class AdvancedCharts:
                 phase_deg = float(ds[3]) if len(ds) > 3 else 0.0
                 phase_rad = np.radians(phase_deg)
                 omega = 2 * np.pi * freq
-
-                color = colors[i % len(colors)]
-
-                if i < len(label_sets) and label_sets[i]:
-                    label = label_sets[i][0]
-                elif wtype in ("sine", "sin"):
-                    label = f"{freq}Hz sine, A={amp}"
-                elif wtype == "cos":
-                    label = f"{freq}Hz cos, A={amp}"
-                else:
-                    label = f"{freq}Hz {wtype}, A={amp}"
+                color = colors[row_idx % len(colors)]
 
                 if wtype in ("sine", "sin"):
                     y = amp * np.sin(omega * t + phase_rad)
@@ -399,53 +424,54 @@ class AdvancedCharts:
                 else:
                     continue
 
-                ax.plot(t, y, color=color, linewidth=2, label=label)
+                # 垂直偏移：模拟通道放在顶部
+                base_y = (total_rows - 1 - row_idx) * (row_height + row_gap) + row_height / 2
+                ax.plot(t, base_y + y, color=color, linewidth=2, label=label)
+                ax.axhline(y=base_y, color=fg, linewidth=0.5, alpha=0.2)
+                ax.text(-0.5, base_y + y.max() + 0.2, label,
+                        color=color, fontsize=10, fontweight="bold",
+                        ha="right", va="bottom")
 
-            ax.set_xlim(0, t_max)
-            ax.set_ylim(-1.5, 1.5)
-            ax.axhline(y=0, color=fg, linewidth=0.5, alpha=0.3)
-            ax.set_xlabel("Time (s)", color=fg)
-            ax.set_ylabel("Amplitude", color=fg)
-        else:
-            n_channels = len(data_sets)
-            if n_channels == 0:
-                ax.text(0.5, 0.5, "No waveform data", transform=ax.transAxes,
-                        ha="center", color=fg)
-                return
+            time_span = t_max
 
-            channel_height = 1.0
-            channel_gap = 0.4
-            total_height = n_channels * (channel_height + channel_gap)
+        # ── 数字通道：多值电平支持 ──
+        if has_digital:
+            # 无模拟通道时，时间轴来自数据长度
+            if time_span is None:
+                time_span = float(max(len(ds) for _, ds, _ in digital_channels))
 
-            for ch_idx, ds in enumerate(data_sets):
+            digital_offset = len(analog_channels)  # 数字通道从模拟下方开始
+            for row_idx, (orig_idx, ds, label) in enumerate(digital_channels):
                 levels = []
                 for v in ds:
                     try:
-                        levels.append(int(float(v)))
-                    except ValueError:
-                        levels.append(0)
+                        levels.append(float(v))
+                    except (ValueError, TypeError):
+                        levels.append(0.0)
 
                 if not levels:
                     continue
 
-                base_y = total_height - ch_idx * (channel_height + channel_gap)
-                ch_name = f"CH{ch_idx+1}"
-                if ch_idx < len(label_sets) and label_sets[ch_idx]:
-                    ch_name = label_sets[ch_idx][0]
-
-                color = colors[ch_idx % len(colors)]
-
                 n = len(levels)
+                # 多值信号：归一化到 [0, 1] 映射到通道高度
+                l_min, l_max = min(levels), max(levels)
+                l_range = l_max - l_min if l_max != l_min else 1.0
+
+                base_y = (total_rows - 1 - (digital_offset + row_idx)) * (row_height + row_gap)
+                color = colors[(len(analog_channels) + row_idx) % len(colors)]
+
+                # 绘制阶梯波形
                 x_step, y_step = [], []
                 for i, lv in enumerate(levels):
-                    y_val = base_y + (channel_height * 0.6 if lv else 0)
+                    y_norm = (lv - l_min) / l_range
+                    y_val = base_y + y_norm * row_height
                     if i == 0:
                         x_step.append(0)
                         y_step.append(y_val)
                     else:
                         x_step.append(i)
-                        prev_lv = levels[i-1]
-                        prev_y = base_y + (channel_height * 0.6 if prev_lv else 0)
+                        prev_norm = (levels[i-1] - l_min) / l_range
+                        prev_y = base_y + prev_norm * row_height
                         y_step.append(prev_y)
                         x_step.append(i)
                         y_step.append(y_val)
@@ -455,26 +481,37 @@ class AdvancedCharts:
 
                 ax.plot(x_step, y_step, color=color, linewidth=2, solid_joinstyle="miter")
 
+                # 高电平填充
                 for i, lv in enumerate(levels):
-                    if lv:
-                        ax.fill_between([i, i+1], base_y,
-                                        base_y + channel_height * 0.6,
-                                        color=color, alpha=0.15)
+                    y_norm = (lv - l_min) / l_range
+                    if y_norm > 0.01:
+                        ax.fill_between([i, i+1], base_y, base_y + y_norm * row_height,
+                                        color=color, alpha=0.12)
 
-                ax.text(-0.5, base_y + channel_height * 0.3, ch_name,
-                        color=color, fontsize=11, fontweight="bold",
+                # 通道标签 + 电平标注
+                ax.text(-0.5, base_y + row_height * 0.5, label,
+                        color=color, fontsize=10, fontweight="bold",
                         ha="right", va="center")
-
+                # 只在二进制时标注 0/1，多值时标注实际值
                 for i, lv in enumerate(levels):
-                    y_val = base_y + (channel_height * 0.6 if lv else 0)
-                    ax.text(i + 0.5, y_val + 0.05, str(lv),
-                            color=color, fontsize=8, ha="center", alpha=0.7)
+                    y_norm = (lv - l_min) / l_range
+                    y_val = base_y + y_norm * row_height
+                    if l_range <= 2:
+                        # 低电平离散值标注在底部
+                        if y_norm < 0.3:
+                            ax.text(i + 0.5, y_val - 0.12, str(lv),
+                                    color=color, fontsize=7, ha="center", alpha=0.6)
+                    ax.text(i + 0.5, y_val + 0.04, str(lv),
+                            color=color, fontsize=7, ha="center", alpha=0.6)
 
-            ax.set_xlim(-1, max(len(ds) for ds in data_sets) + 1)
-            ax.set_ylim(-0.3, total_height + 0.5)
-            ax.set_xlabel("Clock cycle", color=fg)
-            ax.set_yticks([])
+            ax.set_xlabel("Clock cycle / Time", color=fg)
 
+        # ── 通用轴设置 ──
+        ax.set_xlim(-0.8, time_span + 0.8)
+        y_bottom = -0.3
+        y_top = total_rows * (row_height + row_gap)
+        ax.set_ylim(y_bottom, y_top)
+        ax.set_yticks([])
         ax.tick_params(colors=fg)
         for spine in ["bottom", "left"]:
             ax.spines[spine].set_color(grid_c)
