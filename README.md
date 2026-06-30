@@ -15,10 +15,7 @@ demo_1          demo_2          shared_AI       nanoAgent
               ───────────────
               工程化融合版本
 ```
-
-## 架构
-
-```
+## 初始架构
                     ┌─────────────────────────┐
                     │        run.py            │  CLI 入口
                     │  --strategy plan|ref|tot │
@@ -40,6 +37,116 @@ demo_1          demo_2          shared_AI       nanoAgent
     │   LLM   │  │  Tools  │  │  Memory   │
     │ 多后端  │  │ 21个工具 │  │ 窗口+持久 │
     └─────────┘  └─────────┘  └───────────┘
+## 改进后的架构
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│                              NANO AGENT PLUS                                     │
+│                           "Sleeping Fox" AI Agent                                │
+└─────────────────────────────────────────────────────────────────────────────────┘
+
+                              入口层 (Entry Points)
+┌──────────────────────────────┐  ┌──────────────────────────────────────┐
+│         run.py (CLI)         │  │         web/server.py (FastAPI)       │
+│  • 单次任务模式               │  │  • SSE 流式输出                       │
+│  • 交互 REPL 模式             │  │  • Session 管理 (LRU, 2h TTL)        │
+│  • --strategy 策略选择        │  │  • SQLite 历史持久化                  │
+│  • 策略别名 (plan/ref/tot)    │  │  • 文件上传/下载 + Chart 静态服务      │
+└──────────────┬───────────────┘  └──────────────────┬───────────────────┘
+               │                                     │
+               └──────────────┬──────────────────────┘
+                              │
+                    ┌─────────▼──────────┐
+                    │    Agent (核心)     │
+                    │  OODA 循环编排器    │
+                    └─────────┬──────────┘
+                              │
+       ┌──────────────────────┼──────────────────────┐
+       │                      │                      │
+  ┌────▼─────┐   ┌───────────▼──────────┐   ┌───────▼───────┐
+  │ 策略注册表 │   │  Visual Router      │   │  Auto Select  │
+  │ Registry  │   │  视觉请求路由         │   │  自动策略选择  │
+  └────┬─────┘   │  关键词→意图→LLM     │   │ 关键词→LLM分类 │
+       │         └──────────────────────┘   └───────────────┘
+       │
+       │        策略层 (Strategies)
+       │   ┌──────────────────────────────────────────┐
+       │   │  BaseStrategy (抽象基类)                   │
+       │   │  • build_messages()   • execute_tool()    │
+       │   │  • execute_tools_parallel()               │
+       │   │  • 元数据: auto_keywords, auto_priority    │
+       │   └──────────────────────────────────────────┘
+       │
+       │   ┌──────────────┬──────────────┬──────────────┬──────────────┬──────────────┐
+       ├──►│  Default     │  ReAct        │ Plan-Execute │ Reflexion    │ Tree-of-     │  Meta
+       │   │  (优先级0)   │  (优先级1)    │ (优先级3)    │ (优先级2)    │ Thought(优先2)│ (元策略)
+       │   │              │               │              │              │              │
+       │   │ 流式+可视检测│ Thought→Act  │ 计划→执行→   │ 尝试→评估→   │ 候选→评分→   │ 分析→选子
+       │   │              │ →Obs循环     │ 评估→修正    │ 反思→重试    │ 择优执行     │ 策略→评估
+       │   └──────────────┴──────────────┴──────────────┴──────────────┴──────────────┘
+       │
+       │        依赖层 (Core Services)
+       │   ┌──────────────────────────────────────────────────────────────────────────┐
+       │   │                                                                          │
+       │   │  ┌──────────┐  ┌──────────────┐  ┌──────────────┐  ┌──────────────────┐ │
+       │   │  │   LLM    │  │   Tools      │  │   Memory     │  │    Orient        │ │
+       │   │  │ 多后端   │  │  21+ 工具    │  │  4 层记忆    │  │   理解引擎       │ │
+       │   │  │          │  │              │  │              │  │                  │ │
+       │   │  │•Anthropic│  │•Shell/Bash   │  │①Working Mem │  │ interpretation   │ │
+       │   │  │•OpenAI   │  │•FileOps R/W  │  │ (窗口,FIFO) │  │ association      │ │
+       │   │  │•DeepSeek │  │•Search/Fetch │  │              │  │ implication      │ │
+       │   │  │•Ollama   │  │•Chart(14种)  │  │②Persistent   │  │ confidence       │ │
+       │   │  │•OpenRoute│  │•Diagram      │  │ (Markdown)   │  │ focus            │ │
+       │   │  │          │  │•Stock(5模块) │  │              │  │                  │ │
+       │   │  │JSON Retry│  │•Weather      │  │③Long-Term    │  │ Rules 规则匹配   │ │
+       │   │  │Streaming │  │•AIImage/Circ │  │ (SQLite FTS5)│  │ CJK Bigram分词  │ │
+       │   │  │Retry     │  │•PPT          │  │              │  │                  │ │
+       │   │  │          │  │•ImageAnalyze │  │④ReflexionTr  │  │                  │ │
+       │   │  │          │  │•DocParse     │  │ (SQLite)     │  │                  │ │
+       │   │  └──────────┘  └──────────────┘  └──────────────┘  └──────────────────┘ │
+       │   │                                                                          │
+       │   └──────────────────────────────────────────────────────────────────────────┘
+       │
+       │        配置层
+       │   ┌──────────────────────────────────────────────────────────────┐
+       │   │  Config (@dataclass, 从 .env 加载)                            │
+       │   │  • 模型/Provider/API Key  • 策略参数  • 内存路径/窗口大小     │
+       │   │  • 安全模式 (public_mode) • 限制参数  • with_overrides()     │
+       │   └──────────────────────────────────────────────────────────────┘
+       │
+       │        数据层
+       │   ┌──────────────────────────────────────────────────────────────┐
+       │   │  SQLite DBs:  long_term_memory.db  |  reflexion_trace.db     │
+       │   │              sessions.db (Web)                                │
+       │   │  Files:      agent_memory.md  |  reflection_traces.md        │
+       │   │  Charts:     charts/*.png (matplotlib 生成)                   │
+       │   └──────────────────────────────────────────────────────────────┘
+```
+
+### 数据流（一次典型请求）
+
+```
+用户输入 task
+      │
+      ▼
+┌──────────┐    ┌──────────────┐    ┌──────────────┐
+│ ① Auto   │───►│ ② Strategy   │───►│ ③ OODA Loop  │
+│ Select   │    │    Init       │    │              │
+│ Strategy │    │ build_msgs()  │    │ LLM.chat()   │
+│          │    │ load_memory() │    │   ↓          │
+└──────────┘    └──────────────┘    │ tool_calls?  │
+                                    │   ↓ YES      │
+                                    │ execute()    │
+                                    │   ↓          │
+                                    │ orient()?    │
+                                    │   ↓          │
+                                    │ 循环/终止    │
+                                    └──────────────┘
+                                          │
+                                    ┌─────▼─────┐
+                                    │ ④ 返回结果 │
+                                    │ save_mem() │
+                                    └───────────┘
 ```
 
 ## 快速开始
@@ -706,17 +813,54 @@ nano_agent_plus/
 - ~~**Reflexion 无简单任务跳过**~~ → 已修复：简单任务检测 + 1 次调用完成
 - ~~**FTS5 中文搜索无效**~~ → 已修复：CJK 二字滑窗分词
 
-### P3: Agent 类职责偏重
+---
 
-`agent.py` ~520 行承担 5 个职责：组件装配、任务编排、事件分发、核心循环、Prompt 构建。改 prompt 逻辑要动 agent.py，改循环逻辑也要动 agent.py。
+### 🔴 代码质量（优先修复）
 
-**方案**：拆出 `AgentLoop`（O-O-D-A 循环）和 `PromptBuilder`（system_prompt + messages 构建），agent.py 只保留编排。
+| # | 问题 | 位置 | 影响 |
+|---|------|------|------|
+| 1 | **并行工具执行代码重复** | `agent.py:269` vs `base.py:146` | 两个几乎相同的实现（`_execute_tools_parallel_inline` 和 `execute_tools_parallel`），修改时容易不同步 |
+| 2 | **访问私有属性** | `default.py:156` 访问 `self.tools._tools` | 破坏了 ToolRegistry 封装，内部结构变化就会崩溃 |
+| 3 | **`messages[-1]` 无边界检查** | `base.py:207`, `agent.py:307` | messages 为空时直接 `IndexError`，边界条件未处理 |
 
-### P4: 工具注册未自动化
+**建议：** 优先修复这 3 项，改动小、收益明确。将并行工具执行统一到一处（如 ToolRegistry），给 ToolRegistry 加 `get_tool_names()` 公开方法，给 `messages[-1]` 访问加非空检查。
 
-新增工具需要手写 OpenAI function schema 并手动 `_register()`。14 个工具已经写好，重复成本已付。但后续如果加很多工具，这个模式会越来越烦。
+---
 
-**方案**：装饰器或基类自动从类型注解生成 schema。
+### 🟡 架构改进
+
+| # | 建议 | 说明 |
+|---|------|------|
+| 4 | **统一并行工具执行** | 将 `agent.py` 和 `base.py` 中的重复代码提取到 ToolRegistry，Strategy 和 Agent 都调用同一个实现 |
+| 5 | **ToolRegistry 增加公开 API** | 添加 `get_tool_names()` / `has_tool()` 等方法替代 `_tools` 私有属性访问 |
+| 6 | **Orient 做成可选中间件** | 目前 Orient 硬编码在 Agent 循环中，可改为 hook/中间件模式，让策略自由决定是否及如何做 Orient |
+| 7 | **策略间通信机制** | Meta 策略目前创建新的 StrategyContext 调用子策略。如果子策略间能共享中间结果（如 ToT 产生的候选方案给 PlanExecute 用），会更强大 |
+| 8 | **Agent 类拆分** | `agent.py` ~520 行承担 5 个职责：组件装配、任务编排、事件分发、核心循环、Prompt 构建。可拆出 `AgentLoop` 和 `PromptBuilder`，agent.py 只保留编排 |
+
+---
+
+### 🟢 功能增强
+
+| # | 建议 | 说明 |
+|---|------|------|
+| 9 | **Human-in-the-Loop** | 在关键步骤（文件写入、网络请求、bash 执行）暂停等待用户确认，尤其在 `public_mode` 下很重要 |
+| 10 | **Tool 热加载/热插拔** | 目前工具在 Agent 初始化时注册，运行中无法增减。做成动态注册可按场景按需加载工具 |
+| 11 | **流式 tool_call 通知** | Default 策略流式阶段检测到 tool_call 时直接中断流，用户看不到 LLM 打算调什么工具。可在 SSE 事件中先发 `tool_calling` 事件 |
+| 12 | **Memory 向量化检索** | 目前长时记忆用 FTS5 关键词匹配，对语义相近但用词不同的查询召回率低。可加轻量 embedding 检索（如 Ollama 本地 embedding 模型），与 FTS5 混合召回 |
+| 13 | **请求级模型切换** | `llm.set_model()` 目前是实例级别（重新初始化 client），改成请求级别可避免并发问题 |
+| 14 | **工具注册自动化** | 新增工具需手写 OpenAI function schema。可用装饰器或基类自动从类型注解 + docstring 生成 schema |
+
+---
+
+### 🔵 运维 / 工程化
+
+| # | 建议 | 说明 |
+|---|------|------|
+| 15 | **加 `pyproject.toml`** | 目前只有 `requirements.txt`，没有标准化的项目元数据、依赖锁定、构建配置 |
+| 16 | **加 CI Pipeline** | 现有 `tests/` 目录（143 tests）和 `scripts/evaluation.py`，但没有自动化 CI。加 GitHub Actions 跑测试 + 基准 |
+| 17 | **Docker 化** | `DEPLOY.md` 已有部署文档，加 Dockerfile 让部署更标准化、可复现 |
+| 18 | **请求 Tracing** | 加 trace_id 贯穿 Agent → LLM → Tools 全链路。目前 ReflexionTrace 只覆盖 reflexion 策略，其他策略无调用链追踪 |
+| 19 | **日志结构化** | 目前日志为纯文本，改为结构化 JSON 日志便于采集和分析（保留 stderr 人类可读输出作为 fallback） |
 
 ## 更新日志
 

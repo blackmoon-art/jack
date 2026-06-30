@@ -198,7 +198,13 @@ class Diagram:
                 node_count = len(re.findall(r'[A-Za-z_][A-Za-z0-9_]*\s*[\[\(\{/\\]', code_stripped))
                 direction = "LR" if node_count <= 8 else "TB"
             # 在代码前面加方向声明，保留全部原始内容
-            code_stripped = f"flowchart {direction}\n" + code_stripped
+            # 检查已有 flowchart/graph 行，替换而非追加
+            _lines = code_stripped.split("\n")
+            if _lines and _lines[0].strip().lower().startswith(("flowchart", "graph")):
+                _lines[0] = f"flowchart {direction}"
+                code_stripped = "\n".join(_lines)
+            else:
+                code_stripped = f"flowchart {direction}\n" + code_stripped
 
         return {"code": code_stripped, "mermaid": mermaid_config}
 

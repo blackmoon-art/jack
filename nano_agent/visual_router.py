@@ -247,7 +247,7 @@ def _exact_match(task_lower: str) -> Optional[tuple[str, dict]]:
                 # 中文关键词：子串匹配
                 if kw.lower() in task_lower:
                     # "时序图"歧义消解：硬件信号 vs 软件交互
-                    if kw in ("时序图", "时序"):
+                    if kw in ("时序图", "时序", "timing diagram", "timing"):
                         if _HW_TIMING_KW.search(task_lower):
                             # 硬件时序 → 波形图
                             return "generate_chart", {"chart_type": "waveform"}

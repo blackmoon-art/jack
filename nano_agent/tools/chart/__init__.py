@@ -121,8 +121,10 @@ class Chart:
         if not str(filepath).startswith(str(self.charts_dir.resolve())):
             return f"Error: path traversal blocked — '{filename}'"
 
-        fig.savefig(filepath, dpi=150, bbox_inches="tight", facecolor=bg)
-        plt.close(fig)
+        try:
+            fig.savefig(filepath, dpi=150, bbox_inches="tight", facecolor=bg)
+        finally:
+            plt.close(fig)
         url = f"/charts/{filename}"
         return f"Chart generated: {url}\n![{title}]({url})"
 
@@ -186,8 +188,12 @@ class Chart:
         return groups
 
     def _cleanup(self, max_files: int = 50):
-        """保留最近 max_files 个 chart_*.png，1 小时内的不删。只清理图表文件，不误删其他工具的 PNG。"""
-        files = sorted(self.charts_dir.glob("chart_*.png"), key=lambda f: f.stat().st_mtime)
+        """保留最近 max_files 个 PNG，1 小时内的不删。清理所有工具生成的图片。"""
+        all_pngs = []
+        for pattern in ("chart_*.png", "mermaid_*.png", "circuit_*.png",
+                        "ai_*.png", "plantuml_*.png"):
+            all_pngs.extend(self.charts_dir.glob(pattern))
+        files = sorted(all_pngs, key=lambda f: f.stat().st_mtime)
         now = datetime.now().timestamp()
         grace = 3600
         for f in files[:-max_files]:

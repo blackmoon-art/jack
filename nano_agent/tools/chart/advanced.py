@@ -52,7 +52,7 @@ class AdvancedCharts:
         for i in range(len(data_sets)):
             for j in range(len(data_sets[0])):
                 ax.text(j, i, f"{matrix[i,j]:.1f}", ha="center", va="center",
-                        color="white" if abs(matrix[i,j]) > matrix.max()/2 else "black",
+                        color="white" if abs(matrix[i,j]) > (abs(matrix.max()) + abs(matrix.min())) / 2 else "black",
                         fontsize=10)
         if label_sets and label_sets[0]:
             ax.set_xticks(range(len(label_sets[0])))
@@ -70,6 +70,9 @@ class AdvancedCharts:
         angles += angles[:1]
         colors = ["#7c3aed", "#3b82f6", "#10b981"]
         for i, ds in enumerate(data_sets):
+            if len(ds) != n:
+                logger.warning(f"Radar series {i} has {len(ds)} values, expected {n}, skipping")
+                continue
             v = [float(x) for x in ds] + [float(ds[0])]
             ax.fill(angles, v, alpha=0.25, color=colors[i % len(colors)])
             ax.plot(angles, v, color=colors[i % len(colors)], linewidth=2)
@@ -89,6 +92,8 @@ class AdvancedCharts:
         xs = np.array([float(x) for x in data_sets[0]])
         ys = np.array([float(x) for x in data_sets[1]])
         sizes = np.array([float(x) for x in data_sets[2]]) * 50
+        min_len = min(len(xs), len(ys), len(sizes))
+        xs, ys, sizes = xs[:min_len], ys[:min_len], sizes[:min_len]
         sc = ax.scatter(xs, ys, s=sizes, alpha=0.6, c=sizes, cmap="coolwarm",
                         edgecolors="#fff", linewidth=0.5)
         if label_sets and label_sets[0]:
@@ -109,7 +114,7 @@ class AdvancedCharts:
           [['sin(x)'],['-3','3']]  → 函数 + 范围
         """
         fg = "#e0e0e0" if is_dark else "#333"
-        colors = ["#7c3aed", "#3b82f6", "#10b981", "f59e0b", "#ef4444"]
+        colors = ["#7c3aed", "#3b82f6", "#10b981", "#f59e0b", "#ef4444"]
 
         if not data_sets or not data_sets[0]:
             ax.text(0.5, 0.5, "No function expression provided", transform=ax.transAxes,
@@ -140,6 +145,7 @@ class AdvancedCharts:
             # LLM 写法兼容: x^2 → x**2, 2x → 2*x
             expr = expr.replace("^", "**")
             expr = re.sub(r"(\d)([a-zA-Z])", r"\1*\2", expr)
+            expr = re.sub(r"(\d)\*([eE])(\d)", r"\1\2\3", expr)  # 修复科学计数法
             err = _check_forbidden(expr)
             if err:
                 raise ValueError(err)
@@ -496,7 +502,7 @@ class AdvancedCharts:
                 for i, lv in enumerate(levels):
                     y_norm = (lv - l_min) / l_range
                     y_val = base_y + y_norm * row_height
-                    if l_range <= 2:
+                    if l_range <= 1:  # 真正的二值信号: max-min <= 1
                         # 低电平离散值标注在底部
                         if y_norm < 0.3:
                             ax.text(i + 0.5, y_val - 0.12, str(lv),
@@ -594,10 +600,16 @@ class AdvancedCharts:
             expr = expr.replace(u, f"**{d}")
         expr = expr.replace("⁻", "**-")  # e⁻ˣ → e**-x
         expr = expr.replace("⁺", "**+")
+        # 剥离 np. 前缀（与 draw_function 一致）
+        for _fn in ("sin", "cos", "tan", "exp", "log", "sqrt", "abs"):
+            expr = expr.replace(f"np.{_fn}", _fn)
+        expr = expr.replace("np.pi", "pi").replace("np.e", "e")
         expr = expr.replace("^", "**")
         expr = re.sub(r"(\d)([a-zA-Z])", r"\1*\2", expr)
+        expr = re.sub(r"(\d)\*([eE])(\d)", r"\1\2\3", expr)  # 修复科学计数法
         # 隐式乘法 XY→X*Y，但不拆分已知函数名 (sin/cos/exp/log/abs/sqrt/tan/pi)
         expr = re.sub(r"(?<![a-zA-Z])([a-zA-Z])([a-zA-Z])(?![a-zA-Z])", r"\1*\2", expr)
+        expr = expr.replace("p*i", "pi")  # 保护 pi 常量
         err = _check_forbidden(expr)
         if err:
             logger.warning(err)

@@ -125,6 +125,11 @@ class BasicCharts:
         colors = ["#7c3aed", "#3b82f6", "#10b981", "#f59e0b", "#ef4444", "#ec4899", "#14b8a6"]
         vals = [float(x) for x in data_sets[0]]
         labels = label_sets[0] if label_sets else None
+        if labels:
+            if len(labels) < len(vals):
+                labels = labels + [None] * (len(vals) - len(labels))
+            elif len(labels) > len(vals):
+                labels = labels[:len(vals)]
         text_color = "#e0e0e0" if is_dark else "#333"
         bg = "#1a1a2e" if is_dark else "#ffffff"
         ax.pie(vals, labels=labels, colors=colors[:len(vals)],
