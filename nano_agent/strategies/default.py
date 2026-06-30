@@ -27,6 +27,9 @@ _VISUAL_TOOL_PREFIXES = (
     "stock_chart",
 )
 
+# chart_type 中无需 data 参数的类型 — Phase 0 可安全直接执行
+_CHART_NO_DATA_TYPES = {"geometry", "wireframe", "contour", "cat"}
+
 
 class DefaultStrategy(BaseStrategy):
     """默认推理策略 — 优先流式，必要时切 agent_loop，智能画图检测。"""
@@ -63,22 +66,21 @@ class DefaultStrategy(BaseStrategy):
         if route:
             tool_name, tool_params = route
             logger.info(f"[Router] Hit: {task[:40]} -> {tool_name}({tool_params})")
-            self.emit("text", {"text": "🎨 正在生成图表..."})
-            # mermaid_chart / drawio_diagram / ai_image / create_ppt 需要 LLM 生成代码/描述
-            # 不能直接执行，让 agent_loop 来调 LLM 生成具体内容
-            _LLM_CONTENT_TOOLS = {"mermaid_chart", "drawio_diagram", "ai_image", "create_ppt"}
-            if tool_name in _LLM_CONTENT_TOOLS:
-                # 不直接执行，走正常 agent_loop 让 LLM 生成参数
-                pass
-            else:
-                # generate_chart 等参数完整的工具 → 直接执行
+
+            # 判断是否可以直接执行（route 提供了全部必需参数）
+            can_direct = (
+                tool_name == "generate_chart"
+                and tool_params.get("chart_type", "") in _CHART_NO_DATA_TYPES
+            )
+
+            if can_direct:
+                # generate_chart 无需 data 的类型 → 直接执行
+                self.emit("text", {"text": "🎨 正在生成图表..."})
                 tool_call = {
                     "name": tool_name,
                     "arguments": tool_params,
                     "id": "routed_visual",
                 }
-                # 必须先追加 assistant tool_calls 消息，否则 tool result 消息
-                # 缺少配对的 assistant 调用，OpenAI/DeepSeek API 会报错
                 messages.append({
                     "role": "assistant",
                     "content": "",
@@ -93,6 +95,14 @@ class DefaultStrategy(BaseStrategy):
                 })
                 self.execute_tool(tool_call, messages)
                 return agent_loop_fn(messages)[0]
+            else:
+                # 需要 LLM 生成 content/params → 在 task 消息注入工具提示
+                # 让 Phase 1 流式调用时 LLM 自然选择正确工具
+                params_hint = f" (params hint: {tool_params})" if tool_params else ""
+                hint = f"\n[Visual hint: Use the '{tool_name}' tool{params_hint}. Generate appropriate content.]"
+                if messages and messages[-1].get("role") == "user":
+                    messages[-1]["content"] += hint
+                # 落到 Phase 1
 
         # ── Phase 1: 流式调用 LLM ──
         system_prompt = self._get_system_prompt()
@@ -117,7 +127,8 @@ class DefaultStrategy(BaseStrategy):
 
         # ── Phase 3: 纯文本回答 — 检查是否需要画图 ──
         if self._should_force_visual(task, self.memory):
-            return self._force_visual(task, full_text, messages, agent_loop_fn)
+            return self._force_visual(task, full_text, messages, agent_loop_fn,
+                                      route_hint=route)
 
         if not full_text.strip():
             return agent_loop_fn(messages)[0]
@@ -167,7 +178,8 @@ class DefaultStrategy(BaseStrategy):
 
         # 编辑类任务：当前轮含编辑词 + 上一轮是视觉任务
         task_lower = task.lower()
-        edit_keywords = ("修改", "编辑", "调整", "重画", "改", "update", "edit", "modify", "redo", "rerun")
+        edit_keywords = ("修改", "编辑", "调整", "重画", "改图", "改一下", "更新",
+                          "update", "edit", "modify", "redo", "rerun")
         if any(k in task_lower for k in edit_keywords) and memory:
             msgs = memory.get_window_messages()
             for m in reversed(msgs):
@@ -187,14 +199,26 @@ class DefaultStrategy(BaseStrategy):
         return names
 
     def _force_visual(self, task: str, full_text: str, messages: list,
-                      agent_loop_fn) -> str:
-        """强制让 LLM 调用绘图工具。包含代码兜底。"""
-        logger.info(f"VISUAL: '{task[:50]}'")
+                      agent_loop_fn, route_hint: Optional[tuple[str, dict]] = None) -> str:
+        """强制让 LLM 调用绘图工具。包含代码兜底。
+
+        Args:
+            route_hint: Phase 0 路由命中时的 (tool_name, params)，用于缩小工具范围。
+        """
+        hint_tool = route_hint[0] if route_hint else None
+        logger.info(f"VISUAL: '{task[:50]}' (hint: {hint_tool or 'none'})")
         self.emit("text", {"text": "🔧 正在生成图片..."})
 
-        # 动态获取当前可用的视觉工具
-        visual_tools = self._get_visual_tool_names()
-        tool_hint = ", ".join(sorted(visual_tools)) if visual_tools else "generate_chart, mermaid_chart"
+        # 确定目标工具集合
+        if hint_tool:
+            # Route 已识别具体工具 → 精准引导
+            tool_hint = hint_tool
+            _target_tools = {hint_tool}
+        else:
+            # 未命中 route → 给全部视觉工具
+            visual_tools = self._get_visual_tool_names()
+            tool_hint = ", ".join(sorted(visual_tools)) if visual_tools else "generate_chart, mermaid_chart"
+            _target_tools = visual_tools
 
         # 构建上下文
         ctx = ""
@@ -219,7 +243,7 @@ class DefaultStrategy(BaseStrategy):
             if tool_calls:
                 for tc in tool_calls:
                     name = tc.get("name", "")
-                    if name in visual_tools:
+                    if name in _target_tools:
                         _draw_done[0] = True
                         break
             return None  # 继续循环

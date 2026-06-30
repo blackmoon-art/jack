@@ -258,14 +258,22 @@ def is_visual_request(task: str) -> bool:
     """快速判断任务是否是画图请求（比 route_visual 更宽松）。
 
     用于替代 default.py 中的 _should_force_visual 关键词列表。
+    ASCII 关键词使用 _ascii_word_match 防子串误匹配
+    （如 'scatter' 不应匹配 'scattering', 'pie' 不应匹配 'empire'）。
     """
     task_lower = task.lower()
     # 含精确路由关键词
     for keywords, _, _ in _EXACT_ROUTES:
         for kw in keywords.split("|"):
             kw = kw.strip()
-            if kw and kw.lower() in task_lower:
-                return True
+            if not kw:
+                continue
+            if kw.isascii():
+                if _ascii_word_match(kw, task_lower):
+                    return True
+            else:
+                if kw.lower() in task_lower:
+                    return True
     # 含意图模式动词
     for verb_pat, _, _, _ in _INTENT_PATTERNS:
         if re.search(verb_pat, task_lower):
