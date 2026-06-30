@@ -75,7 +75,7 @@ class ToolRegistry:
         self._fetch = Fetch(max_chars=fetch_max_chars)
         self._weather = Weather()
         self._stock = StockUnified(work_dir, charts_dir=charts_dir)
-        self._ppt = PPT(work_dir)
+        self._ppt = PPT(work_dir, charts_dir=charts_dir)
         self._chart = Chart(work_dir, charts_dir=charts_dir)
         self._diagram = Diagram(work_dir, charts_dir=charts_dir)
         self._ai_image = AIImage(work_dir, charts_dir=charts_dir)

@@ -43,8 +43,9 @@ class PPT:
          ["title", "slides"]),
     ]
 
-    def __init__(self, work_dir: str):
+    def __init__(self, work_dir: str, charts_dir: str = ""):
         self.work_dir = work_dir
+        self.charts_dir = charts_dir or work_dir
 
     def create_ppt(self, title: str, slides: list[dict], filename: str = "",
                    subtitle: str = "") -> str:
@@ -195,7 +196,15 @@ class PPT:
         if not filename.endswith(".pptx"):
             filename += ".pptx"
 
-        filepath = os.path.join(self.work_dir, filename)
+        # 保存到 charts_dir（Web 可访问目录）
+        if not filename:
+            from datetime import datetime
+            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+            filename = f"ppt_{ts}.pptx"
+        if not filename.endswith(".pptx"):
+            filename += ".pptx"
+        filepath = os.path.join(self.charts_dir, filename)
         prs.save(filepath)
-        return f"PPT generated: {filepath} ({len(slides)+1} slides)"
+        url = f"/charts/{filename}"
+        return f"PPT generated: {url} ({len(slides)+1} slides)\n[Download]({url})"
 

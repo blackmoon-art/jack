@@ -500,9 +500,16 @@ async def serve_chart(filename: str):
     # 根据扩展名自动检测 MIME 类型
     ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else "png"
     mime_map = {"png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg",
-                "gif": "image/gif", "webp": "image/webp", "svg": "image/svg+xml"}
-    media_type = mime_map.get(ext, "image/png")
-    return FileResponse(filepath, media_type=media_type, headers={"Cache-Control": "public, max-age=86400"})
+                "gif": "image/gif", "webp": "image/webp", "svg": "image/svg+xml",
+                "pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                "pdf": "application/pdf",
+                "mp3": "audio/mpeg", "wav": "audio/wav"}
+    media_type = mime_map.get(ext, "application/octet-stream")
+    # 非图片文件强制下载
+    headers = {"Cache-Control": "public, max-age=86400"}
+    if ext not in ("png", "jpg", "jpeg", "gif", "webp", "svg"):
+        headers["Content-Disposition"] = f'attachment; filename="{filename}"'
+    return FileResponse(filepath, media_type=media_type, headers=headers)
 
 
 # ── 文件上传 ──────────────────────────────────────────
