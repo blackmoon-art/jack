@@ -6,6 +6,7 @@
 import re
 import urllib.parse
 import urllib.request
+import urllib.error
 
 
 class Fetch:

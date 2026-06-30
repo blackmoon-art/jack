@@ -102,7 +102,8 @@ class FileOps:
 
     def glob(self, pattern: str) -> Observation:
         """在工作目录内查找匹配的文件。"""
-        full_pattern = str(Path(self.work_dir) / pattern)
+        safe = self.sandbox.safe_path(pattern)
+        full_pattern = str(Path(self.work_dir) / safe)
         try:
             files = _glob.glob(full_pattern, recursive=True)
             rel_files = [str(Path(f).relative_to(self.work_dir)) for f in sorted(files)]

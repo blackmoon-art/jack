@@ -84,10 +84,10 @@ class Weather:
         weather = _WMO_CODES.get(c.get("weather_code", -1), "未知")
         return (
             f"📍 {location} ({country}) 实时天气\n"
-            f"🌡️  温度: {c['temperature_2m']}°C\n"
-            f"🤔 体感温度: {c['apparent_temperature']}°C\n"
-            f"💧 湿度: {c['relative_humidity_2m']}%\n"
-            f"🌬️  风速: {c['wind_speed_10m']} km/h\n"
-            f"🌀 气压: {c['pressure_msl']} hPa\n"
+            f"🌡️  温度: {c.get('temperature_2m', 'N/A')}°C\n"
+            f"🤔 体感温度: {c.get('apparent_temperature', 'N/A')}°C\n"
+            f"💧 湿度: {c.get('relative_humidity_2m', 'N/A')}%\n"
+            f"🌬️  风速: {c.get('wind_speed_10m', 'N/A')} km/h\n"
+            f"🌀 气压: {c.get('pressure_msl', 'N/A')} hPa\n"
             f"☁️  天气: {weather}"
         )

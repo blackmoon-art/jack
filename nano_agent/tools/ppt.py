@@ -18,7 +18,7 @@ def _ensure_pptx():
     except ImportError:
         subprocess.run(
             [sys.executable, "-m", "pip", "install", "python-pptx", "-q"],
-            check=True,
+            check=True, timeout=120,
         )
 
 
