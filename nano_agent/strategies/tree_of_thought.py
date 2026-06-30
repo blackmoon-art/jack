@@ -160,10 +160,14 @@ class TreeOfThoughtStrategy(BaseStrategy):
         simple_patterns = [
             "证明", "计算", "翻译", "解释", "什么是", "为什么",
             "prove", "calculate", "explain", "what is", "why",
-            "写", "总结", "分析", "比较",
+            "总结", "分析", "比较",
         ]
-        task_lower = task.lower()
-        return any(p in task_lower for p in simple_patterns) and len(task) < 100
+        # "写" 太宽泛（写信/写代码都不是简单任务），需要组合词
+        if len(task) < 100:
+            task_lower = task.lower()
+            if any(p in task_lower for p in simple_patterns):
+                return True
+        return False
 
     def run(self, task: str, agent_loop_fn) -> str:
         """

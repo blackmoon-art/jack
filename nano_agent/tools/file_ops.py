@@ -116,12 +116,12 @@ class FileOps:
         safe = self.sandbox.safe_path(path)
         try:
             result = subprocess.run(
-                ["grep", "-rn",
+                ["grep", "-rn", "-e", pattern,
                  "--include=*.py", "--include=*.js", "--include=*.ts",
                  "--include=*.md", "--include=*.json", "--include=*.html", "--include=*.css",
                  "--include=*.txt", "--include=*.yaml", "--include=*.yml",
                  "--include=*.sh", "--include=*.toml", "--include=*.ini", "--include=*.cfg",
-                 pattern, str(safe)],
+                 str(safe)],
                 capture_output=True, text=True, timeout=30,
             )
             out = result.stdout.strip()

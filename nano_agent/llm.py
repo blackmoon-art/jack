@@ -186,7 +186,14 @@ class LLM:
 
                 if not retryable or attempt == 2:
                     raise
+                # 优先用 Retry-After header，否则指数退避
                 wait = 2 ** attempt
+                retry_after = getattr(getattr(e, 'response', None), 'headers', {}).get('Retry-After')
+                if retry_after:
+                    try:
+                        wait = min(int(retry_after), 30)  # 最多等 30s
+                    except (ValueError, TypeError):
+                        pass
                 logger.warning(f"LLM retryable error (attempt {attempt+1}/3): {e}, waiting {wait}s")
                 time.sleep(wait)
 

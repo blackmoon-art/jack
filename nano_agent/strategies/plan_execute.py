@@ -113,8 +113,7 @@ class PlanExecuteStrategy(BaseStrategy):
         for i, s in enumerate(steps, 1):
             logger.info(f"  {i}. {s}")
 
-        if self._emit:
-            self._emit("text", {"text": f"📋 计划 ({len(steps)} 步):\n" + chr(10).join(f"  {i}. {s}" for i, s in enumerate(steps, 1))})
+        self.emit("text", {"text": f"📋 计划 ({len(steps)} 步):\n" + chr(10).join(f"  {i}. {s}" for i, s in enumerate(steps, 1))})
 
         # 简单任务短路：1 步直接执行
         if len(steps) == 1:

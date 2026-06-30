@@ -87,16 +87,13 @@ class Shell:
             return None  # 语法错误由 bash() 处理
         work_dir_real = os.path.realpath(self.work_dir)
         for part in test_parts:
-            # 跳过选项（-x, --xxx）和命令名
+            # 跳过选项（-x, --xxx）和不含路径的命令名/参数
             if part.startswith('-') or '/' not in part:
-                # 仍检查 cd 命令的参数
-                if part.startswith('-') or '/' not in part:
-                    continue
+                continue
             # 对含路径的参数做 realpath 解析
-            if '/' in part or part in ('.', '..'):
-                resolved = os.path.realpath(os.path.join(work_dir_real, part))
-                if not resolved.startswith(work_dir_real + os.sep) and resolved != work_dir_real:
-                    return f"Access denied: path escapes workspace ('{part}' → {resolved})"
+            resolved = os.path.realpath(os.path.join(work_dir_real, part))
+            if not resolved.startswith(work_dir_real + os.sep) and resolved != work_dir_real:
+                return f"Access denied: path escapes workspace ('{part}' → {resolved})"
         return None
 
     def bash(self, command: str) -> Observation:
