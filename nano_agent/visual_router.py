@@ -33,7 +33,7 @@ _EXACT_ROUTES: list[tuple[str, str, dict]] = [
     ("回归|拟合|regression|线性回归|最小二乘",
      "generate_chart", {"chart_type": "regression"}),
     # 函数图
-    (r"函数图|画函数|函数图像|function plot|画.*y\s*=|画.*f\(x\)",
+    (r"函数图|画函数|函数图像|function plot|画.*y\s*=|画.*f\(x\)|画.*sin\(|画.*cos\(|画.*tan\(|画.*log\(|画.*exp\(|画.*sqrt\(|画.*x\*\*|画.*x\^2|画.*数学函数",
      "generate_chart", {"chart_type": "function"}),
     # 几何证明
     ("证明.*定理|几何证明|勾股|pythagoras|相似三角形|全等三角形",
@@ -62,6 +62,11 @@ _EXACT_ROUTES: list[tuple[str, str, dict]] = [
     # 曲线
     ("曲线图|平滑曲线|curve|平滑图",
      "generate_chart", {"chart_type": "curve"}),
+    # 简笔画 / 形状绘制
+    ("简笔猫|画猫|cat|画只猫|小猫",
+     "generate_chart", {"chart_type": "cat"}),
+    ("画形状|draw circle|draw rect|绘制图形|画图形",
+     "generate_chart", {"chart_type": "draw"}),
     # 柱状
     ("柱状|条形图|bar chart|柱形",
      "generate_chart", {"chart_type": "bar"}),
