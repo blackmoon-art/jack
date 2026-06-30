@@ -316,6 +316,9 @@ class LLM:
         msg = response.choices[0].message
         text = msg.content or ""
 
+        # DeepSeek reasoner: 必须保留 reasoning_content 并在下一轮传回
+        reasoning = getattr(msg, "reasoning_content", None) or ""
+
         tool_calls = []
         if msg.tool_calls:
             for tc in msg.tool_calls:
@@ -333,6 +336,7 @@ class LLM:
             "text": text,
             "tool_calls": tool_calls,
             "stop_reason": "tool_calls" if tool_calls else "stop",
+            "reasoning_content": reasoning,
         }
 
     def chat_stream(self, messages: list, system: str = "", tools: list = None,

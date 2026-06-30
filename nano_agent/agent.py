@@ -378,6 +378,9 @@ class Agent:
             )
 
             assistant_msg: dict[str, Any] = {"role": "assistant", "content": response["text"]}
+            # DeepSeek reasoner: 保留 reasoning_content 以传给下轮请求
+            if response.get("reasoning_content"):
+                assistant_msg["reasoning_content"] = response["reasoning_content"]
             if response["tool_calls"]:
                 assistant_msg["tool_calls"] = [
                     self.llm.format_tool_call_for_message(tc)
