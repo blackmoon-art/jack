@@ -157,9 +157,9 @@ class Orient:
 
     def _parse_orientation(self, text: str, observation: str = "",
                             model: str | None = None) -> dict:
-        """解析 LLM 返回的 JSON。含重试逻辑。
+        """解析 LLM 返回的 JSON。
 
-        委托给 LLM.chat_json_with_retry 避免重复实现。
+        先尝试直接解析，失败后用 chat_json_with_retry 重试（传入完整上下文）。
         """
         text = text.strip()
         if text.startswith("```"):
@@ -179,14 +179,17 @@ class Orient:
         except (json.JSONDecodeError, ValueError):
             pass
 
-        # 重试：让 LLM 重新生成
+        # 重试：传完整 observation 上下文，让 LLM 重新生成
         data = self.llm.chat_json_with_retry(
             messages=[{
                 "role": "user",
                 "content": (
-                    f"Observation: {observation[:2000]}\n\n"
-                    "Return ONLY a valid JSON object with keys: "
-                    "interpretation, association, implication, confidence, focus. "
+                    f"The following text was supposed to be JSON but had formatting issues. "
+                    f"Fix it and return ONLY a valid JSON object.\n\n"
+                    f"Original observation: {observation[:2000]}\n\n"
+                    f"Raw text: {text[:1000]}\n\n"
+                    f"Return ONLY a JSON object with keys: "
+                    "interpretation, association, implication, confidence (0-10), focus. "
                     "No markdown, no explanation."
                 ),
             }],

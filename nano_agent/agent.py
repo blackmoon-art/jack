@@ -68,10 +68,9 @@ class Agent:
         self._local.on_event = None
         self._local.model_override = None
         self._local.visual_routed = False
+        self._local.prompt_cache = None  # system prompt 缓存 (per-request)
+        self._local.prompt_cache_key = ()
         self._current_orient_fn: Optional[Callable] = None  # 当前任务的 Orient 函数（绑定原始任务）
-        self._prompt_cache: Optional[str] = None  # system prompt 缓存
-        self._prompt_cache_key: tuple = ()
-
     # ── 主入口 ──────────────────────────────────────────
 
     def run(self, task: str, strategy: str = "default",
@@ -92,6 +91,8 @@ class Agent:
         self._local.on_event = on_event
         self._local.model_override = model_override
         self._local.visual_routed = False
+        self._local.prompt_cache = None  # reset per request
+        self._local.prompt_cache_key = ()
         self._emit("text", {"text": f"Task: {task}\nStrategy: {strategy}"})
 
         # auto 模式：LLM 根据用户意图自动选策略
@@ -273,76 +274,12 @@ class Agent:
     ):
         """并行执行多个工具，追加结果到 messages，执行批量 Orient。
 
-        这是 BaseStrategy.execute_tools_parallel 的 Agent 端实现，
-        避免对 BaseStrategy 的不必要依赖。
+        委托给 BaseStrategy.execute_tools_parallel，避免代码重复。
         """
-        from concurrent.futures import ThreadPoolExecutor, as_completed
-
-        results: dict[int, dict] = {}
-
-        def _run_one(idx: int, tc: dict):
-            try:
-                tmp_msgs: list = []
-                info = self.execute_tool(tc, tmp_msgs, enable_orient=False)
-                if tmp_msgs:
-                    info["_tool_msg"] = tmp_msgs[-1]
-            except Exception as e:
-                logger.warning(f"Parallel tool '{tc.get('name', '?')}' failed: {e}")
-                info = {
-                    "name": tc.get("name", "?"),
-                    "result": f"Error: {e}",
-                    "content": f"Error: {e}",
-                    "success": False,
-                }
-            results[idx] = info
-
-        with ThreadPoolExecutor(max_workers=len(tool_calls)) as executor:
-            futures = [
-                executor.submit(_run_one, i, tc)
-                for i, tc in enumerate(tool_calls)
-            ]
-            for f in as_completed(futures):
-                f.result()
-
-        # 按顺序合并 tool messages 到主 messages list
-        for i in sorted(results.keys()):
-            info = results[i]
-            tc = tool_calls[i]
-            if "_tool_msg" in info:
-                messages.append(info["_tool_msg"])
-            else:
-                content = str(info.get("content") or info.get("result", ""))
-                messages.append({
-                    "role": "tool",
-                    "tool_call_id": tc.get("id", ""),
-                    "content": content,
-                })
-            if tool_callback:
-                tool_callback(
-                    info["name"],
-                    tc.get("arguments", {}),
-                    info["result"],
-                    info["success"],
-                )
-
-        # 批量 Orient：合并所有工具结果做一次 Orient
-        if self._current_orient_fn:
-            combined = "\n---\n".join(
-                f"[{results[i]['name']}] {results[i]['result'][:500]}"
-                for i in sorted(results.keys())
-            )
-            enriched = self._enrich_with_orient(combined)
-            if enriched != combined:
-                orient_part = (
-                    enriched[len(combined):].strip()
-                    if enriched.startswith(combined)
-                    else enriched
-                )
-                if orient_part:
-                    messages.append({
-                        "role": "user",
-                        "content": f"[Orient Summary] {orient_part}",
-                    })
+        from .strategies.base import BaseStrategy
+        # 构建临时 BaseStrategy 实例以复用并行逻辑
+        helper = BaseStrategy(context=self._make_strategy_context())
+        helper.execute_tools_parallel(tool_calls, messages, tool_callback=tool_callback)
 
     # ── 核心循环 (O-O-D-A) ─────────────────────────────
 
@@ -542,8 +479,10 @@ class Agent:
         builtin_rules = self._load_builtin_rules()
 
         cache_key = (hash(rules), hash(persistent), hash(builtin_rules))
-        if self._prompt_cache is not None and self._prompt_cache_key == cache_key:
-            return self._prompt_cache
+        cached = getattr(self._local, 'prompt_cache', None)
+        cached_key = getattr(self._local, 'prompt_cache_key', ())
+        if cached is not None and cached_key == cache_key:
+            return cached
 
         parts = [
             "You are Sleeping fox (睡狐), an AI assistant developed for this platform. "
@@ -558,8 +497,8 @@ class Agent:
         if persistent:
             parts.append(f"\n# Previous Context\n{persistent}")
         result = "\n".join(parts)
-        self._prompt_cache = result
-        self._prompt_cache_key = cache_key
+        self._local.prompt_cache = result
+        self._local.prompt_cache_key = cache_key
         return result
 
     # ── 便利方法 ────────────────────────────────────────

@@ -144,11 +144,14 @@ class PlanExecuteStrategy(BaseStrategy):
 
             # Phase 3: Evaluate (只评估非最后一步，且只在可能失败时)
             if step_idx < len(steps) - 1:
-                # 快速判断：如果结果包含错误信息，才评估
+                # 快速判断：如果结果包含错误信号，才评估
+                result_lower = step_result.lower()[:500]
                 needs_eval = (
-                    "error" in step_result.lower()[:200]
-                    or "failed" in step_result.lower()[:200]
-                    or "timeout" in step_result.lower()[:200]
+                    "error" in result_lower
+                    or "failed" in result_lower
+                    or "timeout" in result_lower
+                    or "exception" in result_lower
+                    or "traceback" in result_lower
                     or len(step_result.strip()) < 10  # 结果太短可能失败
                 )
 

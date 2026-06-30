@@ -24,14 +24,25 @@ logger = logging.getLogger("nano_agent.memory")
 # ── 文件轮转锁：防止多线程并发写导致数据丢失 ──
 _rotate_locks: dict[str, threading.Lock] = {}
 _rotate_locks_guard = threading.Lock()
+_ROTATE_LOCKS_MAX = 64  # 防止无界增长
 
 
 def _get_rotate_lock(file_path: str) -> threading.Lock:
-    """获取文件对应的轮转锁（惰性创建，线程安全）。"""
+    """获取文件对应的轮转锁（惰性创建，线程安全）。
+
+    超过 _ROTATE_LOCKS_MAX 时清空重建，避免长期运行内存泄漏。
+    清空是安全的：锁只在写操作期间持有，清空时无人持有即可安全删除。
+    """
     with _rotate_locks_guard:
-        if file_path not in _rotate_locks:
-            _rotate_locks[file_path] = threading.Lock()
-        return _rotate_locks[file_path]
+        lock = _rotate_locks.get(file_path)
+        if lock is not None:
+            return lock
+        # 超限时清空（安全：旧锁对应的文件不在活跃写入中）
+        if len(_rotate_locks) >= _ROTATE_LOCKS_MAX:
+            _rotate_locks.clear()
+        lock = threading.Lock()
+        _rotate_locks[file_path] = lock
+        return lock
 
 
 class LongTermMemory:
@@ -300,9 +311,11 @@ class ReflexionTrace:
             if not tokens:
                 # Fallback: 加载最近的
                 return self.load_lessons(top_k)
-            # 用 AND 缩小范围
+            # 用 AND 缩小范围，转义 LIKE 通配符
+            def _escape_like(t: str) -> str:
+                return t.replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_')[:50]
             conditions = " AND ".join(
-                f"lesson LIKE '%{t.replace(chr(39), chr(39)+chr(39))[:50]}%'"
+                f"lesson LIKE '%{_escape_like(t)}%' ESCAPE '\\'"
                 for t in tokens[:6]  # 最多 6 个 token
             )
             rows = self._conn.execute(

@@ -211,7 +211,12 @@ def _ascii_word_match(kw: str, text: str) -> bool:
 
 
 def _exact_match(task_lower: str) -> Optional[tuple[str, dict]]:
-    """Layer 1: 精确关键词匹配。英文词加单词边界防子串误匹配。"""
+    """Layer 1: 精确关键词匹配。英文词加单词边界防子串误匹配。
+
+    关键词分两类：
+    - 纯文本（含中文）：子串匹配
+    - 正则模式（含 \\, *, +, [, ( 等元字符）：re.search 匹配
+    """
     # 硬件信号时序关键词 — 这些场景的"时序图"是信号波形，不是 sequenceDiagram
     _HW_TIMING_KW = re.compile(
         r"时钟|SPI|I2C|UART|CAN|USB|信号|电平|上升沿|下降沿|"
@@ -224,17 +229,22 @@ def _exact_match(task_lower: str) -> Optional[tuple[str, dict]]:
         r"交互时序|sequence|消息交互|组件交互|用户.*时序|"
         r"API.*时序|登录.*流程|支付.*流程|请求.*响应"
     )
+    _REGEX_META = set('\\*+?[](){}|^$.|')
     for keywords, tool_name, params in _EXACT_ROUTES:
         for kw in keywords.split("|"):
             kw = kw.strip()
             if not kw:
                 continue
-            # 纯 ASCII 关键词：前后不能紧邻 ASCII 字母（防 "pie"→"empire", "bar"→"barber"）
-            # 不用 \b 因为中文字符也是 \w，\b 在 "个ppt" 之间不匹配
-            if kw.isascii():
+            # 含正则元字符的规则 → 用 re.search
+            if any(c in _REGEX_META for c in kw):
+                if re.search(kw, task_lower):
+                    return tool_name, dict(params)
+            # 纯 ASCII 关键词：前后不能紧邻 ASCII 字母
+            elif kw.isascii():
                 if _ascii_word_match(kw, task_lower):
                     return tool_name, dict(params)
             else:
+                # 中文关键词：子串匹配
                 if kw.lower() in task_lower:
                     # "时序图"歧义消解：硬件信号 vs 软件交互
                     if kw in ("时序图", "时序"):
@@ -260,15 +270,20 @@ def is_visual_request(task: str) -> bool:
     用于替代 default.py 中的 _should_force_visual 关键词列表。
     ASCII 关键词使用 _ascii_word_match 防子串误匹配
     （如 'scatter' 不应匹配 'scattering', 'pie' 不应匹配 'empire'）。
+    正则规则用 re.search 检测。
     """
     task_lower = task.lower()
+    _REGEX_META = set('\\*+?[](){}|^$.|')
     # 含精确路由关键词
     for keywords, _, _ in _EXACT_ROUTES:
         for kw in keywords.split("|"):
             kw = kw.strip()
             if not kw:
                 continue
-            if kw.isascii():
+            if any(c in _REGEX_META for c in kw):
+                if re.search(kw, task_lower):
+                    return True
+            elif kw.isascii():
                 if _ascii_word_match(kw, task_lower):
                     return True
             else:

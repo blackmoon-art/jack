@@ -4,6 +4,7 @@ LLM 客户端抽象 — 统一 Anthropic / OpenAI / DeepSeek / OpenRouter 接口
 
 import json
 import logging
+import threading
 import time
 from typing import Any
 
@@ -74,6 +75,8 @@ class LLM:
         self._client = None  # 懒初始化
         self._model_override: str | None = None  # 运行时模型覆盖
         self._provider_override: str | None = None  # 运行时 provider 覆盖（不修改共享 Config）
+        self._client_lock = threading.Lock()  # 保护 _client 懒加载和 set_model
+        self._model_lock = threading.Lock()  # 保护 set_model 原子性
 
     # 模型名前缀 → provider 映射（不修改共享 Config）
     _MODEL_PROVIDER_MAP = {
@@ -87,19 +90,22 @@ class LLM:
     def set_model(self, model: str):
         """运行时覆盖模型名称。用于 Web UI 模型切换。
 
+        线程安全：加锁防止并发请求读到半更新状态。
         不修改共享的 Config 对象，而是用实例级 _provider_override
         避免影响其他 session。
         """
-        self._model_override = model
-        self._provider_override = None
-        self._client = None  # 重新创建客户端
+        with self._model_lock:
+            self._model_override = model
+            self._provider_override = None
+            with self._client_lock:
+                self._client = None  # 重新创建客户端
 
-        for prefix, provider in self._MODEL_PROVIDER_MAP.items():
-            if model.startswith(prefix):
-                self._provider_override = provider
-                break
-        else:
-            self._provider_override = "openai_compatible"
+            for prefix, provider in self._MODEL_PROVIDER_MAP.items():
+                if model.startswith(prefix):
+                    self._provider_override = provider
+                    break
+            else:
+                self._provider_override = "openai_compatible"
 
     @property
     def _provider(self) -> str:
@@ -141,12 +147,17 @@ class LLM:
         return None
 
     def _get_client(self):
-        if self._client is None:
+        # 双检查锁：避免并发创建多个 client
+        if self._client is not None:
+            return self._client
+        with self._client_lock:
+            if self._client is not None:
+                return self._client
             if self._provider == "anthropic":
                 self._client = _create_anthropic_client(self.config)
             else:
                 self._client = _create_openai_client(self.config)
-        return self._client
+            return self._client
 
     # ── 向后兼容：类方法委托到模块级工具函数 ─────────────
 
