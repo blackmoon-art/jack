@@ -117,8 +117,10 @@ class AdvancedCharts:
         colors = ["#7c3aed", "#3b82f6", "#10b981", "#f59e0b", "#ef4444"]
 
         if not data_sets or not data_sets[0]:
-            ax.text(0.5, 0.5, "No function expression provided", transform=ax.transAxes,
-                    ha="center", color=fg)
+            # Demo 模式
+            data_sets = [["sin(x)"], ["x**2 / 10"]]
+            ax.text(0.3, 0.95, "Demo: y = sin(x), y = x²/10", transform=ax.transAxes,
+                    color="#10b981", fontsize=10, alpha=0.8)
             return
 
         # 收集所有表达式（非数值的 data_set 视为表达式）
@@ -237,9 +239,15 @@ class AdvancedCharts:
         fg = "#e0e0e0" if is_dark else "#333"
         groups = [ds for ds in data_sets if ds]
         if not groups:
-            ax.text(0.5, 0.5, "Need ≥2 data points for regression", transform=ax.transAxes,
-                    ha="center", color=fg)
-            return
+            # Demo 模式：生成带噪声的线性数据
+            import numpy as np
+            np.random.seed(42)
+            x_demo = np.linspace(0, 10, 20)
+            y_demo = 2.5 * x_demo + 1.0 + np.random.normal(0, 2, 20)
+            data_sets = [[float(x), float(y)] for x, y in zip(x_demo, y_demo)]
+            groups = data_sets
+            ax.text(0.3, 0.95, "Demo: y = 2.5x + 1 + noise", transform=ax.transAxes,
+                    color="#10b981", fontsize=10, alpha=0.8)
 
         pts = []
         all_pairs = all(len(ds) == 2 for ds in groups)

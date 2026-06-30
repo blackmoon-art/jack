@@ -320,7 +320,7 @@ class Agent:
             if route:
                 tool_name, tool_params = route
                 # 直接可执行的 chart 类型（无需 data）
-                _NO_DATA = {"geometry", "wireframe", "contour", "cat"}
+                _NO_DATA = {"geometry", "wireframe", "contour", "cat", "regression", "function"}
                 can_direct = (
                     tool_name == "generate_chart"
                     and tool_params.get("chart_type", "") in _NO_DATA

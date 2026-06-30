@@ -202,6 +202,45 @@ nano_agent_plus 是**策略总部的参谋** — 动手前先问"这个任务值
 
 **一句话：Claude Code 是万能扳手，nano_agent_plus 是一套可组合的工具箱。**
 
+## 与 OpenClaw 的对比
+
+OpenClaw (原 Clawdbot) 是 2025-2026 年最火爆的开源 AI Agent 框架——33 万 GitHub Star，1.3 万社区插件，50+ 平台集成。它验证了一个事实：**人们需要能真正做事的 AI Agent，而不只是聊天**。
+
+那 nano_agent_plus 在 OpenClaw 已经统治市场的情况下，存在的理由是什么？
+
+### 对比总览
+
+| | OpenClaw | nano_agent_plus |
+|---|:---:|:---:|
+| **定位** | Agent 操作系统 / 生态系统 | 安全优先、可理解的多策略 Agent 框架 |
+| **规模** | 33 万 Star, 1.3 万插件, 50+ 平台 | ~5000 行, 0 外部插件依赖 |
+| **推理深度** | 单一 ReAct 风格循环 | 6 种策略 + auto 匹配 + Meta 升级 |
+| **定向层** | 无 | Orient 结构化解读：`{interpretation, implication, confidence}` |
+| **安全设计** | 默认 `0.0.0.0` 无认证 | `shell=False` + 白名单 + 路径沙箱 + `ast`，从零就考虑安全 |
+| **记忆检索** | Markdown 文件 + SQLite 向量搜索 | FTS5 关键词 + CJK 二字滑窗，0 额外依赖 |
+| **策略间通信** | 不支持 | `pipeline_state`：子策略间共享探索成果 |
+| **学习产品** | 读源码像看 Linux kernel | 模块化清晰，< 5000 行，读 1 天能懂全局 |
+| **部署** | 50+ 平台（WhatsApp/Telegram/微信...） | 1 个 Web 界面 + 1 个 CLI |
+| **适用人群** | 想要开箱即用的终端用户 | 想理解 Agent 原理、做二次开发的工程师 |
+
+### 不是竞争，是不同的支点
+
+```
+OpenClaw 做对了的事:
+  "Agent 不应该只是聊天框，应该能操作真实系统"
+  → 一个 50+ 平台的网关，Agent 替人干活
+
+nano_agent_plus 关心的事:
+  "Agent 不应该对什么任务都花同样的脑子"
+  → 一套策略体系，好的 Agent 先判断"值得多深地思考"
+```
+
+OpenClaw 的安全事故（默认无认证暴露 13.5 万实例、800+ 恶意插件、零点击漏洞）说明了一个问题：**生态扩张的速度远远超过了安全治理的能力。** nano_agent_plus 走了相反的路径——不追求生态和规模，追求每一行代码都是自己掌控的、能被审计的。
+
+### 一句话
+
+> **OpenClaw 是 Android — 海量生态、覆盖一切；nano_agent_plus 是 Arduino — 小巧可控、每一层你都知道在干什么。**
+
 ## 快速开始
 
 ```bash

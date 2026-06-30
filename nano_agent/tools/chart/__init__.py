@@ -74,7 +74,7 @@ class Chart:
         except Exception as e:
             return f"Error parsing data: {e}"
 
-        no_data_types = {"draw", "cat", "wireframe", "geometry", "contour"}
+        no_data_types = {"draw", "cat", "wireframe", "geometry", "contour", "regression", "function"}
         if (not data_sets or not data_sets[0]) and chart_type not in no_data_types:
             return "Error: data is required (e.g. '10,20,30,40')"
 
