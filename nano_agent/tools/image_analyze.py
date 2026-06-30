@@ -58,7 +58,7 @@ class ImageAnalyzer:
 
         # 2. Ollama 本地视觉模型
         if shutil.which("ollama"):
-            model = os.getenv("VISION_MODEL", os.getenv("OLLAMA_VISION_MODEL", "minicpm-v:8b"))
+            model = os.getenv("VISION_MODEL", os.getenv("OLLAMA_VISION_MODEL", "moondream:latest"))
             base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1")
             if self._ollama_model_available(base_url, model):
                 logger.info(f"Vision provider: Ollama local ({model}) — free, offline")
