@@ -35,3 +35,4 @@ reflexion_trace.db
 *.db-shm
 *.db-wal
 web/models/
+test.py
