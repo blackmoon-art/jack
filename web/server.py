@@ -607,6 +607,19 @@ async def download_file(filename: str, session_id: str = ""):
         except ValueError:
             pass
 
+    # 最后：直接搜文件系统（服务器重启后 session 内存丢失，但文件还在磁盘上）
+    if filepath is None:
+        work_root = Path(Config().work_dir)
+        for session_dir in work_root.glob("session_*"):
+            fp = (session_dir / filename).resolve()
+            try:
+                fp.relative_to(work_root.resolve())
+                if fp.exists():
+                    filepath = fp
+                    break
+            except ValueError:
+                continue
+
     if filepath is None:
         return JSONResponse({"error": "File not found"}, status_code=404)
 
