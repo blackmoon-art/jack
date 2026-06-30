@@ -383,6 +383,10 @@ class LLM:
             if delta.content:
                 yield delta.content
 
+            # reasoning_content (DeepSeek reasoner thinking mode)
+            if hasattr(delta, 'reasoning_content') and delta.reasoning_content:
+                yield {"type": "reasoning", "text": delta.reasoning_content}
+
             # tool_calls 片段
             if hasattr(delta, 'tool_calls') and delta.tool_calls:
                 for tc_delta in delta.tool_calls:

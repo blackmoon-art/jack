@@ -107,7 +107,7 @@ class DefaultStrategy(BaseStrategy):
         # ── Phase 1: 流式调用 LLM ──
         system_prompt = self._get_system_prompt()
         schemas = self.tools.get_schemas()
-        full_text, tool_calls = self._stream_to_first_decision(
+        full_text, tool_calls, reasoning = self._stream_to_first_decision(
             messages, system_prompt, schemas
         )
 
@@ -116,6 +116,8 @@ class DefaultStrategy(BaseStrategy):
             assistant_msg = {"role": "assistant", "content": full_text, "tool_calls": [
                 self.llm.format_tool_call_for_message(tc) for tc in tool_calls
             ]}
+            if reasoning:
+                assistant_msg["reasoning_content"] = reasoning
             messages.append(assistant_msg)
 
             if len(tool_calls) == 1:
@@ -149,22 +151,27 @@ class DefaultStrategy(BaseStrategy):
         )
 
     def _stream_to_first_decision(self, messages: list, system_prompt: str,
-                                  schemas: list) -> tuple[str, Optional[list]]:
-        """流式调用 LLM，边生成边推送。返回 (累积文本, tool_calls 或 None)。"""
+                                  schemas: list) -> tuple[str, Optional[list], str]:
+        """流式调用 LLM，边生成边推送。返回 (累积文本, tool_calls 或 None, reasoning_content)。"""
         full_text = ""
+        reasoning = ""
         model = self._model_override
 
         for chunk in self.llm.chat_stream(
             messages=messages, system=system_prompt,
             tools=schemas, model=model,
         ):
-            if isinstance(chunk, dict) and chunk.get("type") == "tool_calls":
-                return full_text, chunk["tool_calls"]
+            if isinstance(chunk, dict):
+                if chunk.get("type") == "tool_calls":
+                    return full_text, chunk["tool_calls"], reasoning
+                if chunk.get("type") == "reasoning":
+                    reasoning += chunk.get("text", "")
+                    continue
             if isinstance(chunk, str):
                 full_text += chunk
                 self.emit("text", {"text": full_text})
 
-        return full_text, None
+        return full_text, None, reasoning
 
     @staticmethod
     def _should_force_visual(task: str, memory=None) -> bool:
