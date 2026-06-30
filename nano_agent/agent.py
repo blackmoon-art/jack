@@ -327,6 +327,15 @@ class Agent:
                 )
                 if can_direct:
                     self._emit("text", {"text": "🎨 正在生成图表..."})
+                    # geometry 类型需要 labels 关键词来选择演示图
+                    if tool_params.get("chart_type") == "geometry" and "labels" not in tool_params:
+                        # 从最后一条 user 消息提取任务文本作为 labels
+                        last_user = next(
+                            (m.get("content", "") for m in reversed(messages)
+                             if m.get("role") == "user"), ""
+                        )
+                        if last_user:
+                            tool_params["labels"] = last_user[:200]
                     import json as _json
                     tool_call = {"name": tool_name, "arguments": tool_params, "id": "routed_visual"}
                     messages.append({

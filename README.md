@@ -149,6 +149,59 @@ demo_1          demo_2          shared_AI       nanoAgent
                                     └───────────┘
 ```
 
+## 与 Claude Code 的对比
+
+为什么有了 Claude Code 还要自己写 Agent 框架？两者在架构层面有本质区别。
+
+### 对比总览
+
+| | Claude Code | nano_agent_plus |
+|---|:---:|:---:|
+| **核心循环** | 单一 ReAct 循环 | OODA 循环（ReAct + Orient 结构化理解层） |
+| **推理策略** | 1 种，统一处理 | 6 种，按任务难度自动匹配 |
+| **推理可见性** | Thinking 对用户不可见 | ReAct 策略显式输出 Thought，完全可审计 |
+| **工具结果处理** | 原始文本喂给模型 | Orient 解读后注入：`{interpretation, association, implication, confidence}` |
+| **失败恢复** | 重试靠模型重新想出方案 | Reflexion 反思重试 + ToT 多路探索 + Meta 自动升级 |
+| **记忆** | 上下文窗口 + 持久笔记 | 4 层：窗口(FIFO) / 持久文件 / FTS5 关键词检索 / 反思轨迹 |
+| **策略间通信** | 不存在（单一策略） | `pipeline_state` 共享字典：前序策略的探索成果不丢弃 |
+| **任务匹配** | 所有任务同一路径 | auto 模式：关键词 + LLM 分类，简单任务流式秒出 |
+| **安全** | 沙箱执行 | 三道防线：`shlex+白名单` / 路径沙箱 / `ast` 安全解析 |
+| **部署形态** | 终端 CLI + IDE 插件 | FastAPI + SSE 流式 + Web 聊天界面 |
+
+### 同一个任务，不同的执行路径
+
+```
+任务: "设计一个高性能缓存方案"
+
+Claude Code (单兵):
+  [思考] → [搜索方案] → [写代码] → [返回]
+  一条路走到底
+
+nano_agent_plus (策略总部):
+  ① Meta 分析: complexity=7, domain=creative → 选 ToT
+  ② ToT: 生成 3 个候选 → 评分
+      A: LRU+TTL 两级缓存 (9分)
+      B: Redis 分布式缓存 (7分)
+      C: Bloom Filter (3分) → 跳过
+  ③ 执行 A → 不够好 → 升级到 PlanExecute
+  ④ PlanExecute: 从 pipeline_state 读到 A 方案
+      → 以 A 为基础做细粒度执行
+      → 不重复探索
+```
+
+### 差异化价值
+
+Claude Code 是**单兵作战的高手** — 效率高、擅长专注地搞定一件事。
+
+nano_agent_plus 是**策略总部的参谋** — 动手前先问"这个任务值得多深地思考？"：
+- 简单问答 → 流式秒出，不浪费
+- 多步任务 → 分解执行，不乱抓
+- 质量关键 → 反思重试，不妥协
+- 方案不确定 → 多路探索，不回退同一思路
+- 策略失灵 → Meta 自动升级，不撞南墙
+
+**一句话：Claude Code 是万能扳手，nano_agent_plus 是一套可组合的工具箱。**
+
 ## 快速开始
 
 ```bash
