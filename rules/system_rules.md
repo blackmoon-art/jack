@@ -19,8 +19,9 @@
 
 # File Operations
 
-- When you write a file, ALWAYS provide a download link: [下载 {filename}](/api/download/{filename}?session_id={session_id})
-- Example: [下载 report.txt](/api/download/report.txt?session_id=SESSION_ID_HERE)
+- When you write a file, ALWAYS provide a download link: [下载 {filename}](/api/download/{filename})
+- Example: [下载 report.txt](/api/download/report.txt)
+- IMPORTANT: The download URL is just /api/download/FILENAME — no session_id or other parameters needed.
 
 # Chart / Drawing Rules
 
