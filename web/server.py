@@ -14,7 +14,7 @@ import time as _time
 import uuid
 from pathlib import Path
 from queue import Empty, Queue
-from threading import Thread
+from threading import Semaphore, Thread
 from typing import Optional
 
 # Ensure project root in path
@@ -141,6 +141,10 @@ sessions: dict[str, dict] = {}
 # Session 淘汰配置
 _MAX_SESSIONS = 100          # 最大会话数
 _SESSION_TTL_SECONDS = 7200  # 2 小时未访问则可淘汰
+
+# Agent 并发上限 — 防止内存爆 (每 Agent ~8MB 线程栈 + LLM 响应)
+_MAX_CONCURRENT_AGENTS = int(os.getenv("MAX_CONCURRENT_AGENTS", "10"))
+_agent_slots = Semaphore(_MAX_CONCURRENT_AGENTS)
 
 # ── 使用次数限制 ──────────────────────────────────────
 
@@ -297,6 +301,11 @@ def agent_stream(task: str, strategy: str, session_id: str,
     def on_event(event_type: str, data: dict):
         queue.put({"event": event_type, "data": data})
 
+    # ── 并发控制：拿不到槽位就拒绝，防止线程数爆炸 ──
+    if not _agent_slots.acquire(timeout=60):
+        yield f"event: error\ndata: {json.dumps({'text': 'Server busy. Please try again later.'})}\n\n"
+        return
+
     # 在后台线程运行 agent
     last_item = None
     cancelled = {"value": False}  # mutable flag for thread
@@ -311,6 +320,8 @@ def agent_stream(task: str, strategy: str, session_id: str,
                 logger.exception(f"Agent run failed: {e}")
                 last_item = {"event": "error", "data": {"text": str(e)}}
                 queue.put(last_item)
+        finally:
+            _agent_slots.release()
 
     thread = Thread(target=run, daemon=True)
     thread.start()
