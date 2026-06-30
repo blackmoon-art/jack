@@ -60,13 +60,12 @@ class Agent:
                               refl_file, lt_db, rx_db,
                               max_lines=self.config.memory_max_lines)
         self.orient_engine = Orient(self.config, self.llm)
-        self._strategy_instance = None
         self._last_orientation: Optional[dict] = None  # 最近一次 Orient 结果
-        self._on_event = None
         self._emit_lock = threading.Lock()  # 保护 _emit 回调的线程安全
         self._local = threading.local()  # 每 request 独立的运行时状态
         self._local.on_event = None
         self._local.model_override = None
+        self._local.strategy_instance = None
         self._local.visual_routed = False
         self._local.prompt_cache = None  # system prompt 缓存 (per-request)
         self._local.prompt_cache_key = ()
@@ -147,7 +146,7 @@ class Agent:
         ctx = self._make_strategy_context()
         kwargs.setdefault("memory", self.memory)
         s = strategy_cls(ctx.config, ctx.llm, ctx.tools, context=ctx, **kwargs)
-        self._strategy_instance = s
+        self._local.strategy_instance = s
         return s.run(task, self._agent_loop)
 
     def _auto_select_strategy(self, task: str) -> str:
@@ -407,8 +406,9 @@ class Agent:
                                   info["result"], info["success"])
             else:
                 # 并行执行 — 委托给策略实例（BaseStrategy.execute_tools_parallel 是唯一实现）
-                if self._strategy_instance:
-                    self._strategy_instance.execute_tools_parallel(
+                strategy_inst = self._local.strategy_instance
+                if strategy_inst:
+                    strategy_inst.execute_tools_parallel(
                         response["tool_calls"], messages,
                         tool_callback=tool_callback)
                 else:
