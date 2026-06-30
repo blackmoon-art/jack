@@ -532,6 +532,12 @@ async def upload_file(file: UploadFile = FastAPIFile(...), session_id: str = For
     if not file.filename:
         return JSONResponse({"error": "No file selected"}, status_code=400)
 
+    # 大小限制：防止磁盘被撑爆
+    max_size = int(os.getenv("MAX_UPLOAD_SIZE", str(50 * 1024 * 1024)))  # 默认 50MB
+    content_length = file.size or 0
+    if content_length > max_size:
+        return JSONResponse({"error": f"File too large ({content_length/1024/1024:.1f}MB, max {max_size/1024/1024:.0f}MB)"}, status_code=413)
+
     # 确定目标目录（get_or_create_session 内部加锁，不可嵌套持有 _sessions_lock，否则死锁）
     session_id = get_or_create_session(session_id)
     with _sessions_lock:
