@@ -1,6 +1,7 @@
 """高级图表: heatmap, radar, bubble, function, regression, wireframe, waveform, contour。"""
 
 import logging
+import re
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -136,6 +137,9 @@ class AdvancedCharts:
                 pass
             # 去掉可能的前缀
             expr = item.strip().strip("`'\"")
+            # LLM 写法兼容: x^2 → x**2, 2x → 2*x
+            expr = expr.replace("^", "**")
+            expr = re.sub(r"(\d)([a-zA-Z])", r"\1*\2", expr)
             err = _check_forbidden(expr)
             if err:
                 raise ValueError(err)
