@@ -102,13 +102,44 @@ class PlanExecuteStrategy(BaseStrategy):
         - 最终输出由 LLM 整合，不是拼接
         - 执行过程发送事件（Web UI 可见）
         - 成功的步骤跳过评估，减少 LLM 调用
+        - 从 pipeline_state 读取前序策略的产物（如 ToT 候选方案）
         """
         logger.info(f"{'='*60}")
         logger.info(f"[Plan-Execute] Task: {task}")
         logger.info(f"{'='*60}")
 
+        # ── 读取 pipeline_state：复用前序策略的探索成果 ──
+        ps = self._pipeline_state
+        enriched_task = task
+        if ps:
+            tot = ps.get("tot", {})
+            candidates = tot.get("candidates", [])
+            if candidates:
+                best_c = max(candidates, key=lambda c: c.get("score", 0))
+                logger.info(f"[Plan:Pipeline] Found {len(candidates)} ToT candidates. "
+                            f"Best (score {best_c.get('score')}/10): {best_c.get('approach', '')[:80]}")
+                self.emit("text", {
+                    "text": f"📎 复用前序探索: {len(candidates)} 个候选方案, "
+                            f"最佳 {best_c.get('score')}/10"
+                })
+                enriched_task = (
+                    f"{task}\n\n"
+                    f"[Context from previous exploration: {len(candidates)} approaches were evaluated. "
+                    f"Best candidate (score {best_c.get('score')}/10): {best_c.get('approach', '')}. "
+                    f"Risks identified: {best_c.get('risks', '')}. "
+                    f"Use this as the foundation for your plan — don't re-explore from scratch.]"
+                )
+
+            reflexion = ps.get("reflexion", {})
+            lessons = reflexion.get("lessons", [])
+            if lessons:
+                enriched_task += (
+                    f"\n[Lessons from previous attempts: {'; '.join(lessons[:3])}]"
+                )
+                logger.info(f"[Plan:Pipeline] Found {len(lessons)} reflexion lessons")
+
         # Phase 1: Plan
-        steps = self.create_plan(task)
+        steps = self.create_plan(enriched_task)
         logger.info(f"[Plan] Created {len(steps)} steps:")
         for i, s in enumerate(steps, 1):
             logger.info(f"  {i}. {s}")
@@ -118,7 +149,7 @@ class PlanExecuteStrategy(BaseStrategy):
         # 简单任务短路：1 步直接执行
         if len(steps) == 1:
             logger.info("[Plan] Single step — executing directly")
-            messages = self.build_messages(task, include_memory=True)
+            messages = self.build_messages(enriched_task, include_memory=True)
             result, _ = agent_loop_fn(messages)
             return result
 
@@ -178,6 +209,17 @@ class PlanExecuteStrategy(BaseStrategy):
                             logger.info(f"[Revise] Adjusted ({len(steps)} steps)")
 
             step_idx += 1
+
+        # ── 写入 pipeline_state：PlanExecute 的步骤结果供后续策略使用 ──
+        if ps is not None:
+            ps["plan"] = {
+                "steps": [
+                    {"step": s, "result": r[:500]}
+                    for s, r in zip(steps, results)
+                ],
+                "completed_steps": step_idx,
+                "total_steps": len(steps),
+            }
 
         # Phase 5: LLM 整合最终输出（不是拼接）
         summary_msg = [{

@@ -77,7 +77,7 @@ class DefaultStrategy(BaseStrategy):
             if len(tool_calls) == 1:
                 self.execute_tool(tool_calls[0], messages)
             else:
-                self._execute_tools_parallel(tool_calls, messages)
+                self.execute_tools_parallel(tool_calls, messages)
 
             return agent_loop_fn(messages)[0]
 
@@ -153,7 +153,7 @@ class DefaultStrategy(BaseStrategy):
     def _get_visual_tool_names(self) -> set[str]:
         """动态从 ToolRegistry 获取视觉工具名，不再硬编码。"""
         names = set()
-        for name in self.tools._tools:
+        for name in self.tools.get_tool_names():
             if name.startswith(_VISUAL_TOOL_PREFIXES):
                 names.add(name)
         return names
@@ -212,9 +212,4 @@ class DefaultStrategy(BaseStrategy):
             )
         return result
 
-    def _execute_tools_parallel(self, tool_calls: list, messages: list):
-        """并行执行多个独立的工具调用。
 
-        委托给 BaseStrategy.execute_tools_parallel，避免代码重复。
-        """
-        self.execute_tools_parallel(tool_calls, messages)

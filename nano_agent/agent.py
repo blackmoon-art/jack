@@ -266,21 +266,6 @@ class Agent:
             f"[Orient] implication={orientation.get('implication', '')[:200]}"
         )
 
-    def _execute_tools_parallel_inline(
-        self,
-        tool_calls: list[dict],
-        messages: list[dict],
-        tool_callback: Optional[Callable] = None,
-    ):
-        """并行执行多个工具，追加结果到 messages，执行批量 Orient。
-
-        委托给 BaseStrategy.execute_tools_parallel，避免代码重复。
-        """
-        from .strategies.base import BaseStrategy
-        # 构建临时 BaseStrategy 实例以复用并行逻辑
-        helper = BaseStrategy(context=self._make_strategy_context())
-        helper.execute_tools_parallel(tool_calls, messages, tool_callback=tool_callback)
-
     # ── 核心循环 (O-O-D-A) ─────────────────────────────
 
     def _try_visual_route(self, messages: list) -> Optional[tuple]:
@@ -394,20 +379,25 @@ class Agent:
             # ── Act: 执行工具 ──
             if len(response["tool_calls"]) == 1:
                 tc = response["tool_calls"][0]
-                info = self.execute_tool(tc, messages, enable_orient=False)
-                # ── Orient: 显式解读阶段 ──
-                enriched = self._enrich_with_orient(info["result"])
-                if enriched != info["result"]:
-                    messages[-1]["content"] = enriched
-                    info["content"] = enriched
+                # enable_orient=True: execute_tool 内部统一处理 Orient，
+                # 不再在 _agent_loop 中硬编码 Orient 逻辑。
+                info = self.execute_tool(tc, messages, enable_orient=True)
                 if tool_callback:
                     tool_callback(info["name"], tc.get("arguments", {}),
                                   info["result"], info["success"])
             else:
-                # 并行执行工具（内联实现，避免依赖 BaseStrategy）
-                self._execute_tools_parallel_inline(
-                    response["tool_calls"], messages,
-                    tool_callback=tool_callback)
+                # 并行执行 — 委托给策略实例（BaseStrategy.execute_tools_parallel 是唯一实现）
+                if self._strategy_instance:
+                    self._strategy_instance.execute_tools_parallel(
+                        response["tool_calls"], messages,
+                        tool_callback=tool_callback)
+                else:
+                    # 兜底：策略实例不存在时（不应该发生）
+                    from .strategies.base import BaseStrategy
+                    helper = BaseStrategy(context=self._make_strategy_context())
+                    helper.execute_tools_parallel(
+                        response["tool_calls"], messages,
+                        tool_callback=tool_callback)
 
 
         logger.warning(f"Max iterations ({self.config.max_iterations}) reached, "

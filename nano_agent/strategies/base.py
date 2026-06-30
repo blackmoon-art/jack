@@ -67,6 +67,7 @@ class BaseStrategy:
             self._orient_fn = ctx.orient_fn
             self._model_override = ctx.model_override
             self._system_prompt_fn = ctx.system_prompt_fn  # Agent._system_prompt
+            self._pipeline_state = ctx.pipeline_state   # Meta 策略的跨策略共享状态
         else:
             # 旧式: 向后兼容
             self.config = config
@@ -79,6 +80,7 @@ class BaseStrategy:
             self._orient_fn: Optional[Callable] = None
             self._model_override: Optional[str] = None
             self._system_prompt_fn: Optional[Callable[[], str]] = None
+            self._pipeline_state: dict = {}             # 独立空 dict，不做跨策略共享
 
     def emit(self, event_type: str, data: dict):
         """发送事件给回调（如果已设置）。静默失败。"""
@@ -148,8 +150,8 @@ class BaseStrategy:
                                 tool_callback: Optional[Callable] = None) -> dict[int, dict]:
         """并行执行多个工具，追加结果到 messages，执行批量 Orient。
 
-        共享逻辑：agent.py 的 _agent_loop 和 default.py 的 _execute_tools_parallel
-        都调用此方法，避免代码重复。
+        所有并行工具执行统一走此方法：_agent_loop 和 DefaultStrategy 都调用它。
+        Agent 通过 self._strategy_instance.execute_tools_parallel() 访问。
 
         返回 {idx: info_dict}，info 含 name/result/content/success/_tool_msg。
         """
@@ -204,7 +206,9 @@ class BaseStrategy:
             if enriched and enriched != combined:
                 orient_part = enriched[len(combined):].strip() if enriched.startswith(combined) else enriched
                 if orient_part and messages:
-                    messages[-1]["content"] += f"\n\n{orient_part}"
+                    last = messages[-1]
+                    if isinstance(last, dict) and "content" in last:
+                        last["content"] += f"\n\n{orient_part}"
 
         return results
 

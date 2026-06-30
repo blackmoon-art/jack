@@ -201,6 +201,24 @@ class TreeOfThoughtStrategy(BaseStrategy):
         logger.info(f"[ToT:Evaluate] Scoring candidates...")
         candidates = self.score_candidates(task, candidates)
 
+        # ── 写入 pipeline_state，供后续策略（如 PlanExecute）复用 ──
+        ps = self._pipeline_state
+        if ps is not None:
+            ps["tot"] = {
+                "candidates": [
+                    {
+                        "approach": c.get("approach", ""),
+                        "score": c.get("score", 0),
+                        "confidence": c.get("confidence", 0),
+                        "risks": c.get("risks", ""),
+                        "verdict": c.get("verdict", ""),
+                    }
+                    for c in candidates
+                ],
+                "best_index": 0,
+            }
+            logger.info(f"[ToT:Pipeline] Wrote {len(candidates)} candidates to pipeline_state")
+
         # Phase 3: Execute best-first with backtracking
         best_overall_result = ""
         best_overall_score = -1
@@ -265,6 +283,13 @@ class TreeOfThoughtStrategy(BaseStrategy):
         # Phase 5: Summary
         logger.info(f"[ToT:Summary] Explored {len(self._explored_paths)} paths. "
               f"Best score: {best_overall_score}/10")
+
+        # 更新 pipeline_state 中的 path 探索记录
+        ps = self._pipeline_state
+        if ps is not None and "tot" in ps:
+            ps["tot"]["explored_paths"] = self._explored_paths
+            ps["tot"]["best_overall_score"] = best_overall_score
+
         return best_overall_result
 
     def get_explored_paths(self) -> list[dict]:

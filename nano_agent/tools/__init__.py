@@ -143,6 +143,14 @@ class ToolRegistry:
         """返回所有工具的 OpenAI tool schema 列表（缓存）。"""
         return self._cached_schemas
 
+    def get_tool_names(self) -> list[str]:
+        """返回所有已注册工具的名称列表。替代 _tools 私有属性访问。"""
+        return list(self._tools.keys())
+
+    def has_tool(self, name: str) -> bool:
+        """检查工具是否已注册。"""
+        return name in self._tools
+
     def execute(self, name: str, arguments: dict) -> Observation:
         """执行指定工具，返回结构化 Observation。"""
         if name not in self._tools:

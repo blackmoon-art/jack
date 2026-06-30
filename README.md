@@ -815,15 +815,13 @@ nano_agent_plus/
 
 ---
 
-### 🔴 代码质量（优先修复）
+### 🔴 代码质量（已全部修复 ✅ 2026-06-30）
 
-| # | 问题 | 位置 | 影响 |
+| # | 问题 | 位置 | 修复 |
 |---|------|------|------|
-| 1 | **并行工具执行代码重复** | `agent.py:269` vs `base.py:146` | 两个几乎相同的实现（`_execute_tools_parallel_inline` 和 `execute_tools_parallel`），修改时容易不同步 |
-| 2 | **访问私有属性** | `default.py:156` 访问 `self.tools._tools` | 破坏了 ToolRegistry 封装，内部结构变化就会崩溃 |
-| 3 | **`messages[-1]` 无边界检查** | `base.py:207`, `agent.py:307` | messages 为空时直接 `IndexError`，边界条件未处理 |
-
-**建议：** 优先修复这 3 项，改动小、收益明确。将并行工具执行统一到一处（如 ToolRegistry），给 ToolRegistry 加 `get_tool_names()` 公开方法，给 `messages[-1]` 访问加非空检查。
+| ~~1~~ | ~~**并行工具执行代码重复**~~ | ~~`agent.py:269` vs `base.py:146`~~ | ✅ 删除 `_execute_tools_parallel_inline`，Agent/DefaultStrategy 统一调用 `BaseStrategy.execute_tools_parallel` |
+| ~~2~~ | ~~**访问私有属性**~~ | ~~`default.py:156`~~ | ✅ ToolRegistry 新增 `get_tool_names()` / `has_tool()` 公开 API |
+| ~~3~~ | ~~**`messages[-1]` 无边界检查**~~ | ~~`base.py:207`~~ | ✅ 加 `isinstance(last, dict) and "content" in last` 防御检查 |
 
 ---
 
@@ -831,10 +829,10 @@ nano_agent_plus/
 
 | # | 建议 | 说明 |
 |---|------|------|
-| 4 | **统一并行工具执行** | 将 `agent.py` 和 `base.py` 中的重复代码提取到 ToolRegistry，Strategy 和 Agent 都调用同一个实现 |
-| 5 | **ToolRegistry 增加公开 API** | 添加 `get_tool_names()` / `has_tool()` 等方法替代 `_tools` 私有属性访问 |
-| 6 | **Orient 做成可选中间件** | 目前 Orient 硬编码在 Agent 循环中，可改为 hook/中间件模式，让策略自由决定是否及如何做 Orient |
-| 7 | **策略间通信机制** | Meta 策略目前创建新的 StrategyContext 调用子策略。如果子策略间能共享中间结果（如 ToT 产生的候选方案给 PlanExecute 用），会更强大 |
+| ~~4~~ | ~~**统一并行工具执行**~~ | ✅ **已解决**: 并行工具执行统一到 `BaseStrategy.execute_tools_parallel`，Agent 通过 `self._strategy_instance` 访问 |
+| ~~5~~ | ~~**ToolRegistry 增加公开 API**~~ | ✅ **已解决**: 添加 `get_tool_names()` / `has_tool()`，消除私有属性访问 |
+| ~~6~~ | ~~**Orient 做成可选中间件**~~ | ✅ **已解决**: `_agent_loop` 单工具路径改用 `enable_orient=True`，Orient 统一由 `execute_tool` 处理，不再硬编码 |
+| 7 | ~~**策略间通信机制**~~ | ✅ **已解决 (2026-06-30)**: StrategyContext 新增 `pipeline_state` 共享字典，Meta 策略创建一次共享上下文，子策略通过 `pipeline_state` 读写中间结果 |
 | 8 | **Agent 类拆分** | `agent.py` ~520 行承担 5 个职责：组件装配、任务编排、事件分发、核心循环、Prompt 构建。可拆出 `AgentLoop` 和 `PromptBuilder`，agent.py 只保留编排 |
 
 ---
@@ -872,6 +870,8 @@ nano_agent_plus/
 - **#4 Per-request 状态隔离**: `Agent` 用 `threading.local` 存储 `on_event` / `model_override` / `visual_routed`，同一 Agent 实例的并发请求不再互相覆盖。
 - **#5 Reflexion 简单任务跳过**: `_is_simple_task()` 检测纯推理/知识类任务 (<100 字 + 关键词)，跳过反思循环，1 次 LLM 调用完成 (原 4-7 次)。
 - **#6 Memory FTS5 中文分词改进**: `LongTermMemory.search` 和 `search_lessons` 用 CJK 二字滑窗 (bigram) + 英文整词分词替代无效的 `query.split()`，中文搜索召回率大幅提升。
+- **#7 策略间 Pipeline 通信**: `StrategyContext` 新增 `pipeline_state` 共享字典。Meta 策略创建一次共享上下文，所有子策略通过 `pipeline_state` 读写中间结果，避免重复探索。ToT 写入候选方案 → PlanExecute 读取并以此为基制定计划，改造前后对比：原来 ToT 探索的 3 个候选方案全部丢弃，PlanExecute 从零开始；现在 PlanExecute 直接复用最佳候选方案作为计划基础，跳过重复推理。改动 ~100 行，向后兼容。
+- **#8 代码质量 & 架构改进 (3 合 1)**: (a) 统一并行工具执行 — 删除 `agent.py` 的 `_execute_tools_parallel_inline` 和 `default.py` 的薄包装，所有路径统一调用 `BaseStrategy.execute_tools_parallel`；(b) ToolRegistry 公开 API — 新增 `get_tool_names()` / `has_tool()`，消除 `_tools` 私有属性访问；(c) Orient 去硬编码 — `_agent_loop` 单工具路径改用 `enable_orient=True`，Orient 统一由 `execute_tool` 处理。净减 ~25 行。
 
 ### 2026-06-23 (上午重构)
 

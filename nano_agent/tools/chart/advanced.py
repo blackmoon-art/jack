@@ -372,7 +372,9 @@ class AdvancedCharts:
             label = label_sets[i][0] if i < len(label_sets) and label_sets[i] else f"CH{i+1}"
             first_val = str(ds[0]).strip().lower()
             if first_val in wave_types:
-                analog_channels.append((i, ds, label))
+                if len(ds) >= 3:  # 需要至少 type,freq,amp
+                    analog_channels.append((i, ds, label))
+                # 参数不足的模拟通道直接丢弃，不留空行
             else:
                 digital_channels.append((i, ds, label))
 
@@ -502,13 +504,16 @@ class AdvancedCharts:
                 for i, lv in enumerate(levels):
                     y_norm = (lv - l_min) / l_range
                     y_val = base_y + y_norm * row_height
-                    if l_range <= 1:  # 真正的二值信号: max-min <= 1
-                        # 低电平离散值标注在底部
-                        if y_norm < 0.3:
-                            ax.text(i + 0.5, y_val - 0.12, str(lv),
-                                    color=color, fontsize=7, ha="center", alpha=0.6)
-                    ax.text(i + 0.5, y_val + 0.04, str(lv),
-                            color=color, fontsize=7, ha="center", alpha=0.6)
+                    # 二值信号标注 0/1，多值信号标注实际值
+                    is_binary = len(set(levels)) <= 2
+                    if is_binary and y_norm < 0.5:
+                        # 低电平标注在下方
+                        ax.text(i + 0.5, y_val - 0.12, str(lv),
+                                color=color, fontsize=7, ha="center", alpha=0.6)
+                    else:
+                        # 高电平/多值标注在上方
+                        ax.text(i + 0.5, y_val + 0.04, str(lv),
+                                color=color, fontsize=7, ha="center", alpha=0.6)
 
             ax.set_xlabel("Clock cycle / Time", color=fg)
 

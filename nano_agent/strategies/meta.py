@@ -147,6 +147,19 @@ class MetaStrategy(BaseStrategy):
         logger.info(f"[Meta] Selected: {strategy_name} {strategy_params}")
         self.emit("text", {"text": f"📊 复杂度: {analysis['complexity']}/10 → 策略: {strategy_name}"})
 
+        # ── 创建共享上下文（整个流水线复用）──
+        # 子策略通过 ctx.pipeline_state 共享中间结果，
+        # 避免 ToT 探索的候选方案被 PlanExecute 重复计算。
+        from .context import StrategyContext
+        shared_ctx = StrategyContext(
+            config=self.config, llm=self.llm, tools=self.tools,
+            memory=self.memory, emit=self._emit,
+            execute_tool=self._execute_tool, agent_loop=self._agent_loop,
+            orient_fn=self._orient_fn, model_override=self._model_override,
+            system_prompt_fn=self._system_prompt_fn,
+            pipeline_state={"meta": {"attempts": []}},
+        )
+
         # ── ④ ⑤ 执行 + 失败重试 ──
         best_result = ""
         best_score = -1
@@ -157,26 +170,58 @@ class MetaStrategy(BaseStrategy):
         for attempt in range(self.max_retries):
             logger.info(f"[Meta Attempt {attempt+1}/{self.max_retries}] strategy={current_strategy}")
 
-            # 重试时注入前序失败教训
+            # 重试时注入前序失败教训 + 前序策略的中间产物
             sub_task = task
-            if attempt > 0 and last_eval.get("issues"):
-                sub_task = (
-                    f"{task}\n\n"
-                    f"[Previous attempt scored {best_score}/10. "
-                    f"Issues: {json.dumps(last_eval.get('issues', []))}. "
-                    f"Suggestion: {last_eval.get('suggestion', '')} "
-                    f"Please try a different approach.]"
-                )
+            extra_context = ""
+            if attempt > 0:
+                # 收集前序策略留下的产物
+                ps = shared_ctx.pipeline_state
+                tot = ps.get("tot", {})
+                candidates = tot.get("candidates", [])
+                if candidates:
+                    best_c = max(candidates, key=lambda c: c.get("score", 0))
+                    extra_context += (
+                        f"[Previous strategy explored {len(candidates)} approaches. "
+                        f"Best (score {best_c.get('score')}/10): {best_c.get('approach', '')}] "
+                    )
+                reflexion = ps.get("reflexion", {})
+                lessons = reflexion.get("lessons", [])
+                if lessons:
+                    extra_context += (
+                        f"[Lessons from previous attempts: {'; '.join(lessons[:3])}] "
+                    )
 
-            # 实例化并执行子策略（而非直接调 agent_loop_fn）
+                if last_eval.get("issues"):
+                    extra_context += (
+                        f"[Previous attempt scored {best_score}/10. "
+                        f"Issues: {json.dumps(last_eval.get('issues', []))}. "
+                        f"Suggestion: {last_eval.get('suggestion', '')} "
+                        f"Please try a different approach.]"
+                    )
+
+                if extra_context:
+                    sub_task = f"{task}\n\n{extra_context}"
+
+            # 实例化并执行子策略（共享 pipeline_state）
             result = self._dispatch_sub_strategy(
-                current_strategy, sub_task, agent_loop_fn, **current_params)
+                current_strategy, sub_task, agent_loop_fn,
+                shared_ctx=shared_ctx, **current_params)
             logger.info(f"[Meta Result] {result[:300]}...")
 
             # ── ⑤ 反馈评估 ──
             evaluation = self.evaluate_result(task, result, analysis)
             score = evaluation.get("score", 5)
             logger.info(f"[Meta Eval] status={evaluation['status']} score={score}/10")
+
+            # 记录到 pipeline
+            shared_ctx.pipeline_state["meta"]["attempts"].append({
+                "strategy": current_strategy,
+                "score": score,
+                "artifacts_available": [
+                    k for k in shared_ctx.pipeline_state
+                    if k != "meta" and shared_ctx.pipeline_state.get(k)
+                ],
+            })
 
             # 保留最佳
             if score > best_score:
@@ -215,8 +260,14 @@ class MetaStrategy(BaseStrategy):
         return best_result
 
     def _dispatch_sub_strategy(self, strategy_name: str, task: str,
-                                agent_loop_fn, **params) -> str:
-        """实例化并运行子策略，替代直接调 agent_loop_fn。"""
+                                agent_loop_fn, shared_ctx=None, **params) -> str:
+        """实例化并运行子策略。
+
+        Args:
+            shared_ctx: 共享 StrategyContext。Meta 流水线创建一次，
+                        所有子策略复用，通过 pipeline_state 共享中间结果。
+                        为 None 时创建新 context（兼容非 Meta 调用）。
+        """
         from . import STRATEGY_REGISTRY
         from .context import StrategyContext
 
@@ -225,7 +276,8 @@ class MetaStrategy(BaseStrategy):
         if sub_cls is type(self):
             sub_cls = STRATEGY_REGISTRY["default"]
 
-        ctx = StrategyContext(
+        # 优先复用共享上下文，否则创建新的（向后兼容）
+        ctx = shared_ctx or StrategyContext(
             config=self.config, llm=self.llm, tools=self.tools,
             memory=self.memory, emit=self._emit,
             execute_tool=self._execute_tool, agent_loop=self._agent_loop,

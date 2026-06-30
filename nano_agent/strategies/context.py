@@ -41,3 +41,27 @@ class StrategyContext:
     # ── Prompt 构建 ──
     system_prompt_fn: Optional[Callable[[], str]] = None
     """构建 system prompt 的函数（委托到 Agent._system_prompt）"""
+
+    # ── 跨策略通信 ──
+    pipeline_state: dict = field(default_factory=dict)
+    """跨策略共享状态。Meta 策略初始化一次，所有子策略通过同一个
+    StrategyContext 读写中间结果，避免重复探索。
+
+    约定（按策略名命名，避免冲突）:
+      pipeline_state["tot"]       — Tree-of-Thought: candidates, explored_paths
+      pipeline_state["plan"]      — PlanExecute: steps, step_results
+      pipeline_state["reflexion"] — Reflexion: lessons
+      pipeline_state["meta"]      — Meta 策略自己的评估/选择记录
+
+    示例:
+      # ToT 写入候选方案
+      ctx.pipeline_state["tot"] = {
+          "candidates": [{"approach": "...", "score": 9}, ...],
+          "best_index": 0,
+      }
+
+      # PlanExecute 读取
+      tot = ctx.pipeline_state.get("tot", {})
+      for c in tot.get("candidates", []):
+          ...
+    """
