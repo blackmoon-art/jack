@@ -559,7 +559,8 @@ class AdvancedCharts:
         expr = expr.replace("⁺", "**+")
         expr = expr.replace("^", "**")
         expr = re.sub(r"(\d)([a-zA-Z])", r"\1*\2", expr)
-        expr = re.sub(r"([a-zA-Z])([a-zA-Z])", r"\1*\2", expr)
+        # 隐式乘法 XY→X*Y，但不拆分已知函数名 (sin/cos/exp/log/abs/sqrt/tan/pi)
+        expr = re.sub(r"(?<![a-zA-Z])([a-zA-Z])([a-zA-Z])(?![a-zA-Z])", r"\1*\2", expr)
         err = _check_forbidden(expr)
         if err:
             logger.warning(err)
