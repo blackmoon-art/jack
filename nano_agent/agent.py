@@ -314,6 +314,7 @@ class Agent:
         response = None  # 防止 max_iterations=0 时 NameError
 
         # ── 视觉路由预检：首次进入 agent_loop 时注入 hint ──
+        route_exclude = []
         if not getattr(self._local, 'visual_routed', False):
             self._local.visual_routed = True
             route = self._try_visual_route(messages)
@@ -351,7 +352,17 @@ class Agent:
                 else:
                     # 需要 LLM 生成内容 → 注入 hint 到最后一个 user 消息
                     params_hint = f" (params hint: {tool_params})" if tool_params else ""
-                    hint = f"\n[Visual hint: Use the '{tool_name}' tool{params_hint}. Generate appropriate content.]"
+                    hint = (
+                        f"\n[Visual hint: Use the '{tool_name}' tool{params_hint}."
+                        f" Generate appropriate content.]"
+                        f"\nIMPORTANT: Do NOT use generate_chart, mermaid_chart, draw_circuit,"
+                        f" or any other visual tool for this task. Only use '{tool_name}'."
+                    )
+                    # 排除其他视觉工具，避免 LLM 选错
+                    _ALL_VISUAL = {"generate_chart", "mermaid_chart", "draw_circuit",
+                                   "create_ppt", "ai_image", "image_analyze"}
+                    route_exclude = [t for t in _ALL_VISUAL if t != tool_name]
+                    schemas = [s for s in schemas if s["function"]["name"] not in route_exclude]
                     if messages and messages[-1].get("role") == "user":
                         messages[-1]["content"] += hint
 
