@@ -137,9 +137,13 @@ class Shell:
             "> /etc/", "> /var/", "> /sys/", "> /proc/",
             ">> /etc/", ">> /var/", ">> /sys/", ">> /proc/",
         )
-        cmd_lower = command.lower()
+        # 标准化空白字符（防空格绕过：sudo  apt 不匹配 "sudo"）
+        import re as _re
+        cmd_normalized = _re.sub(r'\s+', ' ', command.lower())
         for danger in _DANGEROUS_INNER:
-            if danger in cmd_lower:
+            # 同样标准化 danger pattern（含空格的模式如 "pip install"）
+            danger_norm = _re.sub(r'\s+', ' ', danger)
+            if danger_norm in cmd_normalized:
                 return Observation.error(
                     "bash",
                     f"Blocked: dangerous pattern '{danger.strip()}' detected in command",
