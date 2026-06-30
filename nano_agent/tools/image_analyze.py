@@ -46,7 +46,8 @@ class ImageAnalyzer:
         _ensure_dotenv()
 
         # 1. MiniCPM-V 本地模型 (优先，已内置，中文最强)
-        _model_dir = Path(__file__).parent.parent.parent / "web" / "models" / "MiniCPM-V-2_6"
+        _model_dir = Path(os.getenv("LOCAL_VISION_MODEL", "") or
+                          Path(__file__).parent.parent.parent / "web" / "models" / "MiniCPM-V-2_6")
         if (_model_dir / "config.json").exists():
             try:
                 import torch  # noqa: F401
@@ -55,7 +56,7 @@ class ImageAnalyzer:
             except ImportError:
                 logger.warning("MiniCPM-V model found but torch not installed. Run: pip install torch transformers")
 
-        # 3. Ollama 本地视觉模型
+        # 2. Ollama 本地视觉模型
         if shutil.which("ollama"):
             model = os.getenv("VISION_MODEL", os.getenv("OLLAMA_VISION_MODEL", "minicpm-v:8b"))
             base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1")
@@ -65,7 +66,7 @@ class ImageAnalyzer:
             else:
                 logger.warning(f"Ollama running but model '{model}' not installed. Skipping.")
 
-        # 4. Google Gemini (免费)
+        # 3. Google Gemini (免费)
         gemini_key = os.getenv("GEMINI_API_KEY", "")
         if gemini_key:
             base_url = "https://generativelanguage.googleapis.com/v1beta/openai/"
@@ -73,7 +74,7 @@ class ImageAnalyzer:
             logger.info(f"Vision provider: Google Gemini (free) — {model}")
             return ("openai", gemini_key, base_url, model)
 
-        # 5. 专用 Vision API Key (OpenAI 兼容)
+        # 4. 专用 Vision API Key (OpenAI 兼容)
         vision_key = os.getenv("VISION_API_KEY", "")
         if vision_key:
             base_url = os.getenv("VISION_BASE_URL", "https://api.openai.com/v1")
@@ -81,7 +82,7 @@ class ImageAnalyzer:
             logger.info(f"Vision provider: OpenAI-compatible ({model})")
             return ("openai", vision_key, base_url, model)
 
-        # 6. Anthropic Claude (原生 vision)
+        # 5. Anthropic Claude (原生 vision)
         anthropic_key = os.getenv("ANTHROPIC_API_KEY", "")
         if anthropic_key:
             base_url = os.getenv("ANTHROPIC_BASE_URL") or None
@@ -89,7 +90,7 @@ class ImageAnalyzer:
             logger.info(f"Vision provider: Anthropic ({model})")
             return ("anthropic", anthropic_key, base_url, model)
 
-        # 7. Tesseract 本地 OCR (免费，离线)
+        # 6. Tesseract 本地 OCR (免费，离线)
         if shutil.which("tesseract"):
             logger.info("Vision provider: Tesseract OCR (local, offline, free)")
             return ("tesseract", "", "", "tesseract")
@@ -185,8 +186,8 @@ class ImageAnalyzer:
 
             img = Image.open(io.BytesIO(image_data))
 
-            # MiniCPM-V 要求文本中包含 <image> 标签标记图片位置
-            if "<image>" not in question.lower():
+            # MiniCPM-V 要求文本中包含 (<image>./</image>) 标签标记图片位置
+            if "(<image>./</image>)" not in question:
                 question = f"(<image>./</image>)\n{question}"
 
             inputs = processor(images=img, text=question, return_tensors="pt").to(device)
