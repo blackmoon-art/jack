@@ -155,7 +155,7 @@ class ImageAnalyzer:
             if model_path in _vision_cache:
                 return _vision_cache[model_path]
 
-            from transformers import AutoModel, AutoProcessor
+            from transformers import AutoModel, AutoProcessor, AutoTokenizer
             import torch
 
             device = "mps" if torch.backends.mps.is_available() else "cpu"
@@ -167,6 +167,19 @@ class ImageAnalyzer:
             )
             model = model.to(device).eval()
             processor = AutoProcessor.from_pretrained(model_path, trust_remote_code=True, local_files_only=True)
+
+            # transformers≥5.x 的 AutoTokenizer 不再遵守 tokenizer_config.json 的
+            # auto_map，导致加载的是 TokenizersBackend 而非 MiniCPMVTokenizerFast，
+            # 缺失 im_start_id/im_end_id 等属性。显式加载自定义 tokenizer 修复。
+            if not hasattr(processor.tokenizer, "im_start_id"):
+                import sys as _sys
+                _sys.path.insert(0, model_path)
+                from tokenization_minicpmv_fast import MiniCPMVTokenizerFast
+                custom_tok = MiniCPMVTokenizerFast.from_pretrained(
+                    model_path, trust_remote_code=True, local_files_only=True
+                )
+                processor.tokenizer = custom_tok
+                logger.info("MiniCPM-V tokenizer patched: MiniCPMVTokenizerFast")
 
             cached = {"model": model, "processor": processor, "device": device}
             _vision_cache[model_path] = cached
@@ -191,8 +204,10 @@ class ImageAnalyzer:
                 question = f"(<image>./</image>)\n{question}"
 
             inputs = processor(images=img, text=question, return_tensors="pt").to(device)
+            # processor 返回的 image_sizes 不被模型 generate() 接受，需移除
+            inputs.pop("image_sizes", None)
             with torch.no_grad():
-                result = model.generate(**inputs, max_new_tokens=512)
+                result = model.generate(**inputs, max_new_tokens=512, tokenizer=processor.tokenizer)
             answer = processor.decode(result[0], skip_special_tokens=True)
 
             logger.info(f"MiniCPM-V inference done ({device})")
