@@ -84,6 +84,7 @@ class DefaultStrategy(BaseStrategy):
                 messages.append({
                     "role": "assistant",
                     "content": "",
+                    "reasoning_content": "",  # DeepSeek reasoner 要求必须存在该字段
                     "tool_calls": [{
                         "id": "routed_visual",
                         "type": "function",
