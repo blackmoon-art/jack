@@ -5,10 +5,13 @@ import numpy as np
 from matplotlib.patches import Polygon
 
 
-def _draw_demo_geometry(ax, label_sets, colors, fg):
-    """无用户数据时，根据 label 关键词画演示几何图。"""
+def _draw_demo_geometry(ax, label_sets, colors, fg, title=""):
+    """无用户数据时，根据 label 或 title 关键词画演示几何图。"""
     label_text = label_sets[0][0] if label_sets and label_sets[0] else ""
     label_lower = label_text.lower()
+    # labels 无匹配时，回退到 title 中的关键词
+    if not label_lower:
+        label_lower = title.lower()
 
     if any(kw in label_lower for kw in ("pythagoras", "勾股", "pythagorean")):
         # 勾股定理：3-4-5 直角三角形 + 三个正方形
@@ -62,7 +65,7 @@ class SpecialCharts:
     """特殊图表 — 几何证明图、形状绘制、简笔猫。"""
 
     @staticmethod
-    def draw_geometry(ax, data, label_sets, is_dark):
+    def draw_geometry(ax, data, label_sets, is_dark, title=""):
         """2D 几何证明图 — 勾股定理、三角形、多边形等。"""
         fg = "#e0e0e0" if is_dark else "#333"
         bg = "#1a1a2e" if is_dark else "#fafafa"
@@ -74,9 +77,9 @@ class SpecialCharts:
         ax.tick_params(colors=fg, labelsize=9)
 
         # 有 data 时：始终画用户提供的坐标，不长度歧视
-        # 无 data 时：根据 label 关键词画演示几何图（勾股定理、相似三角形等）
+        # 无 data 时：根据 label/title 关键词画演示几何图
         if not data:
-            _draw_demo_geometry(ax, label_sets, colors, fg)
+            _draw_demo_geometry(ax, label_sets, colors, fg, title=title)
         else:
             shapes = [s.strip() for s in data.split(";") if s.strip()]
             for i, shape in enumerate(shapes):

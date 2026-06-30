@@ -142,7 +142,7 @@ class Chart:
 
         elif chart_type in self._SPECIAL_TYPES:
             if chart_type == "geometry":
-                SpecialCharts.draw_geometry(ax, raw_data, label_sets, is_dark)
+                SpecialCharts.draw_geometry(ax, raw_data, label_sets, is_dark, title=title)
             elif chart_type in ("draw", "cat"):
                 SpecialCharts.draw_shapes(ax, raw_labels, is_dark, is_cat=(chart_type == "cat"))
 
