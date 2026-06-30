@@ -160,7 +160,7 @@ class TreeOfThoughtStrategy(BaseStrategy):
         simple_patterns = [
             "证明", "计算", "翻译", "解释", "什么是", "为什么",
             "prove", "calculate", "explain", "what is", "why",
-            "总结", "分析", "比较",
+            "总结",
         ]
         # "写" 太宽泛（写信/写代码都不是简单任务），需要组合词
         if len(task) < 100:

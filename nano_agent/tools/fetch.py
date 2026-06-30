@@ -43,9 +43,12 @@ class Fetch:
                            "172.24.", "172.25.", "172.26.", "172.27.", "172.28.",
                            "172.29.", "172.30.", "172.31.")):
             return "Error: Access to internal network is blocked"
-        # 0.0.0.0/8 段（含八进制/十六进制绕过变体）
+        # 0.0.0.0/8 段（含八进制/十六进制绕过变体如 0x7f000001）
         if host.startswith("0") and host != "0":
             return "Error: Access to reserved network is blocked"
+        # 十六进制 IP 绕过（0x7f000001 → 127.0.0.1）
+        if host.startswith("0x") or host.startswith("0X"):
+            return "Error: Access to loopback is blocked"
         try:
             req = urllib.request.Request(url, headers={
                 "User-Agent": (
