@@ -439,6 +439,9 @@ async def clear_session(session_id: str):
 
 @app.get("/api/health")
 async def health():
+    # 每小时触发一次 chart 清理
+    if _time.time() - _last_chart_cleanup > 3600:
+        cleanup_old_charts()
     return {
         "status": "ok",
         "sessions": len(sessions),
@@ -473,15 +476,22 @@ async def fox_icon():
 CHARTS_DIR = STATIC_DIR / "charts"
 CHARTS_DIR.mkdir(exist_ok=True)
 _MAX_CHART_FILES = 200  # 最多保留的图片数量
+_last_chart_cleanup = _time.time()
 
 
 def cleanup_old_charts():
-    """启动时清理旧图表文件，保留最新的 N 个。"""
+    """启动时 + 运行时定期清理旧图表，保留最新的 N 个。"""
+    global _last_chart_cleanup
     try:
-        files = sorted(CHARTS_DIR.glob("*"), key=lambda f: f.stat().st_mtime, reverse=True)
+        patterns = ("*.png", "*.pptx", "*.jpg", "*.jpeg")
+        all_files = []
+        for pat in patterns:
+            all_files.extend(CHARTS_DIR.glob(pat))
+        files = sorted(all_files, key=lambda f: f.stat().st_mtime, reverse=True)
         for f in files[_MAX_CHART_FILES:]:
             f.unlink()
-            logger.info(f"Cleaned up old chart: {f.name}")
+            logger.info(f"Cleaned up old file: {f.name}")
+        _last_chart_cleanup = _time.time()
     except Exception as e:
         logger.warning(f"Chart cleanup failed: {e}")
 
