@@ -503,12 +503,18 @@ async def serve_chart(filename: str):
                 "gif": "image/gif", "webp": "image/webp", "svg": "image/svg+xml",
                 "pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
                 "pdf": "application/pdf",
-                "mp3": "audio/mpeg", "wav": "audio/wav"}
+                "mp3": "audio/mpeg", "wav": "audio/wav",
+                "html": "text/html; charset=utf-8", "csv": "text/csv",
+                "json": "application/json", "txt": "text/plain; charset=utf-8",
+                "md": "text/markdown"}
     media_type = mime_map.get(ext, "application/octet-stream")
-    # 非图片文件强制下载
+    # 非图片文件强制下载（HTML 除外，直接在浏览器打开）
     headers = {"Cache-Control": "public, max-age=86400"}
     if ext not in ("png", "jpg", "jpeg", "gif", "webp", "svg"):
-        headers["Content-Disposition"] = f'attachment; filename="{filename}"'
+        if ext == "html":
+            pass  # HTML 直接在浏览器渲染
+        else:
+            headers["Content-Disposition"] = f'attachment; filename="{filename}"'
     return FileResponse(filepath, media_type=media_type, headers=headers)
 
 

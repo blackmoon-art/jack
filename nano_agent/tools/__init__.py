@@ -68,7 +68,7 @@ class ToolRegistry:
         self.public_mode = public_mode
 
         # 实例化子模块
-        self._file_ops = FileOps(self.sandbox, work_dir, public_mode=public_mode)
+        self._file_ops = FileOps(self.sandbox, work_dir, public_mode=public_mode, charts_dir=charts_dir)
         self._shell = Shell(work_dir, bash_timeout, public_mode=public_mode,
                             output_limit=bash_output_limit)
         self._search = Search(brave_api_key=brave_api_key)

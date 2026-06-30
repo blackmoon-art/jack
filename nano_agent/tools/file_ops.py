@@ -38,10 +38,11 @@ class FileOps:
          ["pattern"]),
     ]
 
-    def __init__(self, sandbox: PathSandbox, work_dir: str, public_mode: bool = False):
+    def __init__(self, sandbox: PathSandbox, work_dir: str, public_mode: bool = False, charts_dir: str = ""):
         self.sandbox = sandbox
         self.work_dir = work_dir
         self.public_mode = public_mode
+        self.charts_dir = charts_dir or work_dir
 
     def get_tools(self) -> list:
         """返回当前模式允许的工具列表。公网模式下只暴露只读工具。"""
@@ -74,7 +75,24 @@ class FileOps:
         safe.parent.mkdir(parents=True, exist_ok=True)
         try:
             safe.write_text(content, encoding="utf-8")
-            return Observation.ok("write_file", f"Wrote {len(content)} bytes to {path}")
+            result = f"Wrote {len(content)} bytes to {path}"
+            # 可下载文件（html/pptx/pdf 等）同时复制到 charts_dir 并返回 Web URL
+            import os as _os
+            ext = _os.path.splitext(path)[1].lower().lstrip('.')
+            _DOWNLOADABLE = {"html", "pptx", "pdf", "csv", "json", "txt", "md", "mp3", "wav"}
+            if ext in _DOWNLOADABLE and self.charts_dir != self.work_dir:
+                import shutil as _sh, time as _t
+                basename = _os.path.basename(path)
+                # ASCII 安全文件名
+                import re as _re
+                safe_name = _re.sub(r'[^a-zA-Z0-9._-]', '_', basename)
+                if safe_name == basename or not safe_name.strip('_.'):
+                    safe_name = f"file_{int(_t.time())}.{ext}"
+                dest = _os.path.join(self.charts_dir, safe_name)
+                _sh.copy2(str(safe), dest)
+                url = f"/charts/{safe_name}"
+                result += f"\n[Download]({url})"
+            return Observation.ok("write_file", result)
         except OSError as e:
             return Observation.error("write_file", str(e))
 
