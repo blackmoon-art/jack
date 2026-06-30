@@ -203,6 +203,17 @@ class PPT:
             filename = f"ppt_{ts}.pptx"
         if not filename.endswith(".pptx"):
             filename += ".pptx"
+        # 强制 ASCII 文件名，避免 URL 编码问题
+        import re as _re
+        import unicodedata as _ud
+        safe = _ud.normalize('NFKD', filename).encode('ascii', 'ignore').decode('ascii')
+        safe = _re.sub(r'[^a-zA-Z0-9._-]', '_', safe)
+        if not safe.endswith('.pptx'):
+            safe += '.pptx'
+        if safe == '.pptx' or safe == '_.pptx':
+            from datetime import datetime as _dt
+            safe = f"ppt_{_dt.now().strftime('%Y%m%d_%H%M%S')}.pptx"
+        filename = safe
         filepath = os.path.join(self.charts_dir, filename)
         prs.save(filepath)
         url = f"/charts/{filename}"
