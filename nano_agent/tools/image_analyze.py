@@ -250,7 +250,7 @@ class ImageAnalyzer:
         """Check if a model is actually installed in Ollama via /api/tags."""
         import urllib.request
         try:
-            tags_url = base_url.rstrip("/").removesuffix("/v1") + "/api/tags"
+            tags_url = base_url.rstrip("/").replace("/v1", "") + "/api/tags"
             with urllib.request.urlopen(tags_url, timeout=3) as resp:
                 data = json.loads(resp.read())
             installed = [m.get("name", "") for m in data.get("models", [])]
