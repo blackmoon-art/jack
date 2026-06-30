@@ -541,6 +541,9 @@ class AdvancedCharts:
     @classmethod
     def _safe_eval_2d(cls, expr: str, X: np.ndarray, Y: np.ndarray) -> np.ndarray | None:
         """安全求值 2D 数学表达式 Z = f(X, Y)。失败返回 None。"""
+        # LLM 写法兼容: X^2 → X**2, 2X → 2*X
+        expr = expr.replace("^", "**")
+        expr = re.sub(r"(\d)([a-zA-Z])", r"\1*\2", expr)
         err = _check_forbidden(expr)
         if err:
             logger.warning(err)
