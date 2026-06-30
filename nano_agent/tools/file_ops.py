@@ -79,7 +79,8 @@ class FileOps:
             # 可下载文件（html/pptx/pdf 等）同时复制到 charts_dir 并返回 Web URL
             import os as _os
             ext = _os.path.splitext(path)[1].lower().lstrip('.')
-            _DOWNLOADABLE = {"html", "pptx", "pdf", "csv", "json", "txt", "md", "mp3", "wav"}
+            _DOWNLOADABLE = {"html", "pptx", "pdf", "csv", "json", "txt", "md", "mp3", "wav",
+                     "py", "js", "ts", "sh", "css", "xml", "yml", "yaml", "sql", "java", "c", "cpp", "go", "rs"}
             if ext in _DOWNLOADABLE and self.charts_dir != self.work_dir:
                 import shutil as _sh, time as _t
                 basename = _os.path.basename(path)

@@ -506,7 +506,13 @@ async def serve_chart(filename: str):
                 "mp3": "audio/mpeg", "wav": "audio/wav",
                 "html": "text/html; charset=utf-8", "csv": "text/csv",
                 "json": "application/json", "txt": "text/plain; charset=utf-8",
-                "md": "text/markdown"}
+                "md": "text/markdown",
+                "py": "text/x-python", "js": "text/javascript", "ts": "text/typescript",
+                "sh": "text/x-shellscript", "css": "text/css",
+                "xml": "text/xml", "yml": "text/yaml", "yaml": "text/yaml",
+                "sql": "text/x-sql", "java": "text/x-java",
+                "c": "text/x-c", "cpp": "text/x-c++",
+                "go": "text/x-go", "rs": "text/x-rust"}
     media_type = mime_map.get(ext, "application/octet-stream")
     # 非图片文件强制下载（HTML 除外，直接在浏览器打开）
     headers = {"Cache-Control": "public, max-age=86400"}
