@@ -95,15 +95,22 @@ class LongTermMemory:
     def search(self, query: str, top_k: int = 3) -> list[dict]:
         """全文检索相关记忆。返回最相关的 top_k 条。
 
-        Returns:
-            [{"task": str, "result": str, "score": float, "created_at": str}]
+        中文查询使用二字滑窗分词（CJK bigram），英文用整词。
         """
         if not self.db_path:
             return []
         try:
-            # 转义特殊字符，用 OR 连接查询词（更宽松匹配）
-            words = query.replace('"', '').split()
-            safe_query = " OR ".join(w for w in words if len(w) > 1)[:200]
+            import re as _re
+            # 英文整词 + CJK 二字滑窗
+            ascii_words = _re.findall(r'[a-zA-Z][a-zA-Z0-9]+', query)
+            cjk_chars = _re.findall(r'[\u4e00-\u9fff]', query)
+            cjk_bigrams = [cjk_chars[i] + cjk_chars[i+1]
+                           for i in range(len(cjk_chars) - 1)]
+            tokens = ascii_words + cjk_bigrams
+            # 用 OR 连接，转义双引号
+            safe_query = " OR ".join(
+                w.replace('"', '""') for w in tokens if len(w) > 1
+            )[:200]
             if not safe_query:
                 return []
             rows = self._conn.execute(
@@ -279,15 +286,30 @@ class ReflexionTrace:
             return []
 
     def search_lessons(self, query: str, top_k: int = 5) -> list[str]:
-        """搜索与 query 相关的教训（简单 LIKE 匹配）。"""
+        """搜索与 query 相关的教训。CJK 二字滑窗 + 英文整词 LIKE 匹配。"""
         if not self.db_path:
             return []
         try:
+            import re as _re
+            # 提取关键词 token
+            ascii_words = _re.findall(r'[a-zA-Z][a-zA-Z0-9]+', query)
+            cjk_chars = _re.findall(r'[\u4e00-\u9fff]', query)
+            cjk_bigrams = [cjk_chars[i] + cjk_chars[i+1]
+                           for i in range(len(cjk_chars) - 1)]
+            tokens = ascii_words + cjk_bigrams
+            if not tokens:
+                # Fallback: 加载最近的
+                return self.load_lessons(top_k)
+            # 用 AND 缩小范围
+            conditions = " AND ".join(
+                f"lesson LIKE '%{t.replace(chr(39), chr(39)+chr(39))[:50]}%'"
+                for t in tokens[:6]  # 最多 6 个 token
+            )
             rows = self._conn.execute(
-                """SELECT lesson FROM lesson
-                   WHERE lesson LIKE ?
+                f"""SELECT lesson FROM lesson
+                   WHERE {conditions}
                    ORDER BY created_at DESC LIMIT ?""",
-                (f"%{query[:100]}%", top_k)
+                (top_k,)
             ).fetchall()
             return [r["lesson"] for r in rows]
         except Exception as e:

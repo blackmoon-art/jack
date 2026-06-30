@@ -43,6 +43,13 @@ class ReflexionStrategy(BaseStrategy):
                      '质量', '审查', 'review', '检查', '验证', '确保')
     auto_priority = 2
 
+    # 简单任务模式：跳过评估和反思，直接执行一次
+    _SIMPLE_PATTERNS = (
+        "证明", "计算", "翻译", "解释", "什么是", "为什么",
+        "prove", "calculate", "explain", "what is", "why",
+        "总结", "分析", "比较", "总结",
+    )
+
     def __init__(self, config: Config, llm: LLM, tools: ToolRegistry,
                  max_retries: int = None, **kwargs):
         super().__init__(config, llm, tools, **kwargs)
@@ -202,17 +209,29 @@ class ReflexionStrategy(BaseStrategy):
 
     # ── 主循环 ────────────────────────────────────────────
 
+    def _is_simple_task(self, task: str) -> bool:
+        """判断是否为简单任务（纯推理/知识/计算，不需要多轮反思）。"""
+        if len(task) < 100:
+            task_lower = task.lower()
+            return any(p in task_lower for p in self._SIMPLE_PATTERNS)
+        return False
+
     def run(self, task: str, agent_loop_fn) -> str:
         """
         执行 Reflexion 策略。
 
-        Args:
-            task: 用户任务
-            agent_loop_fn: 核心循环 f(messages, exclude_tools) -> (text, messages)
+        简单任务（纯推理/知识/计算）直接执行一次，跳过反思循环。
         """
         logger.info(f"{'='*60}")
         logger.info(f"[Reflexion] Task: {task}")
         logger.info(f"{'='*60}")
+
+        # 简单任务短路：执行一次即可
+        if self._is_simple_task(task):
+            logger.info("[Reflexion] Simple task detected — skipping reflection loop")
+            messages = self.build_messages(task, include_memory=True)
+            result, _ = agent_loop_fn(messages)
+            return result
 
         # 启动轨迹记录
         self._start_trace(task)

@@ -64,6 +64,10 @@ class Agent:
         self._last_orientation: Optional[dict] = None  # 最近一次 Orient 结果
         self._on_event = None
         self._emit_lock = threading.Lock()  # 保护 _emit 回调的线程安全
+        self._local = threading.local()  # 每 request 独立的运行时状态
+        self._local.on_event = None
+        self._local.model_override = None
+        self._local.visual_routed = False
         self._current_orient_fn: Optional[Callable] = None  # 当前任务的 Orient 函数（绑定原始任务）
         self._prompt_cache: Optional[str] = None  # system prompt 缓存
         self._prompt_cache_key: tuple = ()
@@ -75,21 +79,19 @@ class Agent:
             model_override: Optional[str] = None,
             **strategy_kwargs) -> str:
         """
-        执行用户任务。
+        执行用户任务。线程安全：同一 Agent 实例可被多线程并发调用。
 
         Args:
             task:     用户输入的任务描述
             strategy: 推理策略 (default | react | plan-execute | reflexion | tree-of-thought)
             on_event: 可选事件回调 f(event_type, data)
-                      event_type: "text" | "tool_call" | "tool_result" | "orient" | "done"
-            model_override: 单次请求的模型覆盖（不修改 Agent 实例状态，线程安全）
-            **strategy_kwargs: 传递给策略的额外参数
-
-        Returns:
-            Agent 的最终回复文本
+            model_override: 单次请求的模型覆盖
         """
-        self._on_event = on_event
-        self._model_override = model_override  # 请求级模型覆盖
+        # 每 request 独立的状态，不修改实例属性
+        # 用 threading.local 避免并发请求互相覆盖
+        self._local.on_event = on_event
+        self._local.model_override = model_override
+        self._local.visual_routed = False
         self._emit("text", {"text": f"Task: {task}\nStrategy: {strategy}"})
 
         # auto 模式：LLM 根据用户意图自动选策略
@@ -115,16 +117,17 @@ class Agent:
         self._emit("done", {"text": final})
         self.memory.save_context(task, final)
         self.memory.save_persistent(task, final)
-        self._on_event = None
+        self._local.on_event = None
         self._current_orient_fn = None
         return final
 
     def _emit(self, event_type: str, data: dict):
-        """发送事件给回调。线程安全：并行工具执行时多线程同时调用。"""
-        if self._on_event:
+        """发送事件给回调。线程安全。"""
+        on_event = getattr(self._local, 'on_event', None)
+        if on_event:
             with self._emit_lock:
                 try:
-                    self._on_event(event_type, data)
+                    on_event(event_type, data)
                 except Exception as e:
                     logger.warning(f"Event callback error ({event_type}): {e}")
 
@@ -134,7 +137,7 @@ class Agent:
             config=self.config, llm=self.llm, tools=self.tools, memory=self.memory,
             emit=self._emit, execute_tool=self.execute_tool,
             agent_loop=self._agent_loop, orient_fn=self._current_orient_fn,
-            model_override=self._model_override,
+            model_override=getattr(self._local, 'model_override', None),
             system_prompt_fn=self._system_prompt,
         )
 
@@ -183,7 +186,7 @@ class Agent:
             resp = self.llm.chat(
                 messages=[{"role": "user", "content": prompt}],
                 tools=[], system="Reply with only one word.",
-                model=self._model_override,
+                model=getattr(self._local, "model_override", None),
             )
             name = resp["text"].strip().lower()
             if name in STRATEGY_REGISTRY:
@@ -341,7 +344,24 @@ class Agent:
                         "content": f"[Orient Summary] {orient_part}",
                     })
 
-    # ── 核心循环 (O-O-D-A) ──────────────────────────────
+    # ── 核心循环 (O-O-D-A) ─────────────────────────────
+
+    def _try_visual_route(self, messages: list) -> Optional[tuple]:
+        """从消息列表中提取原始任务，尝试视觉路由。
+
+        扫描 messages 找到最后的 user 消息内容，用 route_visual 匹配。
+        """
+        from .visual_router import route_visual
+        # 找最后一个非 hint 的 user 消息
+        for msg in reversed(messages):
+            if msg.get("role") == "user":
+                content = msg.get("content", "")
+                # 去掉注入的 hint 再匹配
+                if "[Visual hint:" in content:
+                    content = content.split("[Visual hint:")[0].strip()
+                if content:
+                    return route_visual(content)
+        return None
 
     def _agent_loop(self, messages: list, exclude_tools: Optional[list] = None,
                     system_prompt: Optional[str] = None,
@@ -352,6 +372,9 @@ class Agent:
         Agent 核心循环：O-O-D-A
 
         Observe (工具返回) → Orient (解读) → Decide (LLM) → Act (执行工具)
+
+        视觉路由：首次调用时检查 route_visual，命中则注入 hint 引导 LLM 选对工具。
+        所有策略（Default/ReAct/Plan-Execute/Reflexion/ToT）均受益。
 
         system_prompt: 覆盖默认 prompt。策略可通过此参数注入专属 prompt。
 
@@ -368,13 +391,45 @@ class Agent:
         prompt = system_prompt or self._system_prompt()
         response = None  # 防止 max_iterations=0 时 NameError
 
+        # ── 视觉路由预检：首次进入 agent_loop 时注入 hint ──
+        if not getattr(self._local, 'visual_routed', False):
+            self._local.visual_routed = True
+            route = self._try_visual_route(messages)
+            if route:
+                tool_name, tool_params = route
+                # 直接可执行的 chart 类型（无需 data）
+                _NO_DATA = {"geometry", "wireframe", "contour", "cat"}
+                can_direct = (
+                    tool_name == "generate_chart"
+                    and tool_params.get("chart_type", "") in _NO_DATA
+                )
+                if can_direct:
+                    self._emit("text", {"text": "🎨 正在生成图表..."})
+                    import json as _json
+                    tool_call = {"name": tool_name, "arguments": tool_params, "id": "routed_visual"}
+                    messages.append({
+                        "role": "assistant", "content": "",
+                        "tool_calls": [{
+                            "id": "routed_visual", "type": "function",
+                            "function": {"name": tool_name,
+                                          "arguments": _json.dumps(tool_params, ensure_ascii=False)},
+                        }],
+                    })
+                    self.execute_tool(tool_call, messages)
+                else:
+                    # 需要 LLM 生成内容 → 注入 hint 到最后一个 user 消息
+                    params_hint = f" (params hint: {tool_params})" if tool_params else ""
+                    hint = f"\n[Visual hint: Use the '{tool_name}' tool{params_hint}. Generate appropriate content.]"
+                    if messages and messages[-1].get("role") == "user":
+                        messages[-1]["content"] += hint
+
         for _ in range(self.config.max_iterations):
             # ── Decide: LLM 决策 ──
             response = self.llm.chat(
                 messages=messages,
                 tools=schemas,
                 system=prompt,
-                model=self._model_override,
+                model=getattr(self._local, "model_override", None),
             )
 
             assistant_msg: dict[str, Any] = {"role": "assistant", "content": response["text"]}
@@ -447,7 +502,7 @@ class Agent:
             orientation = self.orient_engine.orient(
                 observation, task or "complete the current task",
                 memory_context, rules,
-                model=self._model_override,
+                model=getattr(self._local, "model_override", None),
             )
             self._last_orientation = orientation
             return orientation

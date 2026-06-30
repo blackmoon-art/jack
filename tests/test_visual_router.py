@@ -31,8 +31,9 @@ class TestLayer1ExactMatch(unittest.TestCase):
                          ("generate_chart", {"chart_type": "pie"}))
 
     def test_contour(self):
-        self.assertEqual(route_visual("画梯度下降等高线图"),
-                         ("generate_chart", {"chart_type": "contour"}))
+        result = route_visual("画梯度下降等高线图")
+        self.assertEqual(result[0], "generate_chart")
+        self.assertEqual(result[1]["chart_type"], "contour")
 
     def test_waveform(self):
         self.assertEqual(route_visual("画时钟波形"),

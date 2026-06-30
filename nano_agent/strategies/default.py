@@ -16,7 +16,7 @@ from typing import Optional
 from ..config import Config
 from ..llm import LLM
 from ..tools import ToolRegistry
-from ..visual_router import route_visual, is_visual_request, get_all_visual_keywords
+from ..visual_router import is_visual_request, get_all_visual_keywords
 from .base import BaseStrategy
 
 logger = logging.getLogger("nano_agent.strategies.default")
@@ -26,9 +26,6 @@ _VISUAL_TOOL_PREFIXES = (
     "mermaid", "generate_", "chart", "draw", "circuit", "diagram", "ai_image",
     "stock_chart",
 )
-
-# chart_type 中无需 data 参数的类型 — Phase 0 可安全直接执行
-_CHART_NO_DATA_TYPES = {"geometry", "wireframe", "contour", "cat"}
 
 
 class DefaultStrategy(BaseStrategy):
@@ -53,57 +50,13 @@ class DefaultStrategy(BaseStrategy):
         """
         执行默认策略：
 
-        0. 视觉路由：关键词命中 → 直接构造 tool_call，跳过 LLM 选择
         1. 流式 LLM 调用（带 tools）
         2. 纯文本 → 边生成边推送，检查是否需要画图
         3. LLM 要调工具 → 中断流式，切到 agent_loop 继续
+        （视觉路由已下沉到 Agent._agent_loop，所有策略统一受益）
         """
         logger.info(f"[Default] Task: {task}")
         messages = self.build_messages(task, include_memory=True)
-
-        # ── Phase 0: 视觉工具智能路由 ──
-        route = route_visual(task)
-        if route:
-            tool_name, tool_params = route
-            logger.info(f"[Router] Hit: {task[:40]} -> {tool_name}({tool_params})")
-
-            # 判断是否可以直接执行（route 提供了全部必需参数）
-            can_direct = (
-                tool_name == "generate_chart"
-                and tool_params.get("chart_type", "") in _CHART_NO_DATA_TYPES
-            )
-
-            if can_direct:
-                # generate_chart 无需 data 的类型 → 直接执行
-                self.emit("text", {"text": "🎨 正在生成图表..."})
-                tool_call = {
-                    "name": tool_name,
-                    "arguments": tool_params,
-                    "id": "routed_visual",
-                }
-                messages.append({
-                    "role": "assistant",
-                    "content": "",
-                    "reasoning_content": "",  # DeepSeek reasoner 要求必须存在该字段
-                    "tool_calls": [{
-                        "id": "routed_visual",
-                        "type": "function",
-                        "function": {
-                            "name": tool_name,
-                            "arguments": json.dumps(tool_params, ensure_ascii=False),
-                        },
-                    }],
-                })
-                self.execute_tool(tool_call, messages)
-                return agent_loop_fn(messages)[0]
-            else:
-                # 需要 LLM 生成 content/params → 在 task 消息注入工具提示
-                # 让 Phase 1 流式调用时 LLM 自然选择正确工具
-                params_hint = f" (params hint: {tool_params})" if tool_params else ""
-                hint = f"\n[Visual hint: Use the '{tool_name}' tool{params_hint}. Generate appropriate content.]"
-                if messages and messages[-1].get("role") == "user":
-                    messages[-1]["content"] += hint
-                # 落到 Phase 1
 
         # ── Phase 1: 流式调用 LLM ──
         system_prompt = self._get_system_prompt()
@@ -130,8 +83,7 @@ class DefaultStrategy(BaseStrategy):
 
         # ── Phase 3: 纯文本回答 — 检查是否需要画图 ──
         if self._should_force_visual(task, self.memory):
-            return self._force_visual(task, full_text, messages, agent_loop_fn,
-                                      route_hint=route)
+            return self._force_visual(task, full_text, messages, agent_loop_fn)
 
         if not full_text.strip():
             return agent_loop_fn(messages)[0]
@@ -207,26 +159,15 @@ class DefaultStrategy(BaseStrategy):
         return names
 
     def _force_visual(self, task: str, full_text: str, messages: list,
-                      agent_loop_fn, route_hint: Optional[tuple[str, dict]] = None) -> str:
-        """强制让 LLM 调用绘图工具。包含代码兜底。
-
-        Args:
-            route_hint: Phase 0 路由命中时的 (tool_name, params)，用于缩小工具范围。
-        """
-        hint_tool = route_hint[0] if route_hint else None
-        logger.info(f"VISUAL: '{task[:50]}' (hint: {hint_tool or 'none'})")
+                      agent_loop_fn) -> str:
+        """强制让 LLM 调用绘图工具。包含代码兜底。"""
+        logger.info(f"VISUAL: '{task[:50]}'")
         self.emit("text", {"text": "🔧 正在生成图片..."})
 
         # 确定目标工具集合
-        if hint_tool:
-            # Route 已识别具体工具 → 精准引导
-            tool_hint = hint_tool
-            _target_tools = {hint_tool}
-        else:
-            # 未命中 route → 给全部视觉工具
-            visual_tools = self._get_visual_tool_names()
-            tool_hint = ", ".join(sorted(visual_tools)) if visual_tools else "generate_chart, mermaid_chart"
-            _target_tools = visual_tools
+        visual_tools = self._get_visual_tool_names()
+        tool_hint = ", ".join(sorted(visual_tools)) if visual_tools else "generate_chart, mermaid_chart"
+        _target_tools = visual_tools
 
         # 构建上下文
         ctx = ""
