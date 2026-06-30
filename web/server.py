@@ -596,6 +596,17 @@ async def download_file(filename: str, session_id: str = ""):
                 except ValueError:
                     continue
 
+    # 也搜 charts 目录（PPT、图表等工具生成的静态文件）
+    if filepath is None:
+        charts_dir = STATIC_DIR / "charts"
+        fp = (charts_dir / filename).resolve()
+        try:
+            fp.relative_to(charts_dir.resolve())
+            if fp.exists():
+                filepath = fp
+        except ValueError:
+            pass
+
     if filepath is None:
         return JSONResponse({"error": "File not found"}, status_code=404)
 
