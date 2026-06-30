@@ -24,6 +24,7 @@
 
 # Chart / Drawing Rules
 
+- ONLY create charts/diagrams when the user explicitly asks for one (画/图/chart/draw/plot/diagram). Do NOT proactively create charts even if data is involved — use text/tables instead unless asked.
 - Read the tool's `chart_type` descriptions carefully before choosing. Each type has a distinct purpose.
 - NEVER output Chart.js/D3.js/HTML/SVG/JS code. The frontend cannot render them.
 - Always include the returned ![title](url) markdown in your response so users see the image.
