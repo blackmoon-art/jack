@@ -560,23 +560,37 @@ async def upload_file(file: UploadFile = FastAPIFile(...), session_id: str = For
 async def download_file(filename: str, session_id: str = ""):
     """从会话工作目录下载文件到用户本地。
 
-    安全：session_id 必传，不允许跨 session 访问其他用户文件。
+    session_id 可选：指定则只搜该 session；不指定则搜所有 session。
     """
-    if not session_id:
-        return JSONResponse({"error": "session_id is required"}, status_code=400)
+    import shutil as _shutil
+    filepath = None
 
     with _sessions_lock:
-        if session_id not in sessions:
-            return JSONResponse({"error": "Session not found"}, status_code=404)
-        work_dir = Path(sessions[session_id]["agent"].config.work_dir)
+        if session_id:
+            if session_id not in sessions:
+                return JSONResponse({"error": "Session not found"}, status_code=404)
+            work_dir = Path(sessions[session_id]["agent"].config.work_dir)
+            fp = (work_dir / filename).resolve()
+            try:
+                fp.relative_to(work_dir.resolve())
+                if fp.exists():
+                    filepath = fp
+            except ValueError:
+                pass
+        else:
+            # 搜索所有 session
+            for sid, s in sessions.items():
+                work_dir = Path(s["agent"].config.work_dir)
+                fp = (work_dir / filename).resolve()
+                try:
+                    fp.relative_to(work_dir.resolve())
+                    if fp.exists():
+                        filepath = fp
+                        break
+                except ValueError:
+                    continue
 
-    filepath = (work_dir / filename).resolve()
-    try:
-        filepath.relative_to(work_dir.resolve())
-    except ValueError:
-        return JSONResponse({"error": "Access denied"}, status_code=403)
-
-    if not filepath.exists():
+    if filepath is None:
         return JSONResponse({"error": "File not found"}, status_code=404)
 
     return FileResponse(
