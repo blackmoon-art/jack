@@ -95,6 +95,19 @@ class SpecialCharts:
                     ax.plot(x, y, 'o', color=color, markersize=4)
                     ax.text(x + 0.1, y + 0.1, f"{j+1}", color=fg, fontsize=8)
 
+            # Polygon patches 不触发 autoscale，手动计算边界
+            all_pts = []
+            for shape in shapes:
+                pts_str = [p.strip() for p in shape.split(",")]
+                pts = [(float(pts_str[j]), float(pts_str[j+1]))
+                       for j in range(0, len(pts_str) - 1, 2) if len(pts_str) > j + 1]
+                all_pts.extend(pts)
+            if all_pts:
+                xs = [p[0] for p in all_pts]
+                ys = [p[1] for p in all_pts]
+                margin = max(max(xs) - min(xs), max(ys) - min(ys)) * 0.15 + 0.5
+                ax.set_xlim(min(xs) - margin, max(xs) + margin)
+                ax.set_ylim(min(ys) - margin, max(ys) + margin)
             ax.autoscale_view()
 
         ax.spines["top"].set_visible(False)
@@ -144,8 +157,8 @@ class SpecialCharts:
             except (ValueError, IndexError):
                 continue
 
-        ax.set_xlim(-5, 5)
-        ax.set_ylim(-5, 5)
+        # 自适应坐标范围，不写死 [-5,5]
+        ax.autoscale_view()
         ax.set_aspect("equal")
 
     @staticmethod
