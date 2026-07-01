@@ -24,82 +24,11 @@
 """
 
 import logging
-import math
 import re
 from datetime import datetime
 from pathlib import Path
 
 logger = logging.getLogger("nano_agent.tools.circuit")
-
-
-# ── IEEE 逻辑门形状工厂 ────────────────────────────────
-
-def _make_ieee_gate(gate_type: str, label: str, elm_module):
-    """用 schemdraw Segment 构建标准 IEEE 逻辑门形状。
-
-    返回一个已配置好形状和锚点的 schemdraw Element。
-    锚点: in1, in2 (输入), out (输出), start (左中点), end (右中点)
-    """
-    from schemdraw.segments import Segment, SegmentArc, SegmentCircle
-
-    w, h = 1.6, 1.0  # 放大门尺寸，引脚间距更清晰
-    gate = elm_module.Element()
-
-    # ── AND/NAND: D-shape ──
-    if gate_type in ("and_gate", "nand_gate"):
-        gate.segments.append(Segment([(0, h/2), (0, -h/2)]))
-        gate.segments.append(SegmentArc((0, 0), width=w*0.85, height=h,
-                                         theta1=-90, theta2=90))
-        gate.anchors['in1'] = (0, h/3)
-        gate.anchors['in2'] = (0, -h/3)
-        bx, by = w * 0.7, 0
-
-    # ── OR/NOR/XOR/XNOR: shield shape ──
-    elif gate_type in ("or_gate", "nor_gate", "xor_gate", "xnor_gate"):
-        n = 12
-        pts_left, pts_right = [], []
-        for i in range(n + 1):
-            t = -0.5 + i / n
-            x = -0.15 + 0.45 * (1 - (2*t)**2)
-            pts_left.append((x, t * h))
-            x2 = 0.55 - 0.35 * (1 - (2*t)**2)
-            pts_right.append((x2, t * h))
-        gate.segments.append(Segment(pts_left))
-        gate.segments.append(Segment(list(reversed(pts_right))))
-        if gate_type in ("xor_gate", "xnor_gate"):
-            pts_extra = [(-0.25 + 0.15 * (1-(2*t)**2), t * h)
-                         for t in [j/12 - 0.5 for j in range(13)]]
-            gate.segments.append(Segment(pts_extra))
-        gate.anchors['in1'] = (-0.25, h/3)
-        gate.anchors['in2'] = (-0.25, -h/3)
-        bx, by = 0.65, 0
-
-    # ── NOT/Buffer: triangle ──
-    elif gate_type in ("not_gate", "buffer"):
-        gate.segments.append(Segment([(-w/3, h/2), (-w/3, -h/2), (w/3, 0),
-                                       (-w/3, h/2)]))
-        gate.anchors['in1'] = (-w/3, 0)
-        gate.anchors['in2'] = (-w/3, 0)
-        bx, by = w/3, 0
-
-    else:
-        gate.segments.append(Segment([(0, h/2), (0, -h/2), (w, -h/2), (w, h/2), (0, h/2)]))
-        gate.anchors['in1'] = (0, h/3)
-        gate.anchors['in2'] = (0, -h/3)
-        bx, by = w, 0
-
-    # 输出气泡 (NAND/NOR/XNOR/NOT)
-    if gate_type in ("nand_gate", "nor_gate", "xnor_gate", "not_gate"):
-        gate.segments.append(SegmentCircle((bx + 0.12, by), 0.08))
-        gate.anchors['out'] = (bx + 0.2, by)
-    else:
-        gate.anchors['out'] = (bx, by)
-
-    gate.anchors['start'] = (gate.anchors.get('in1', (-w/3, 0))[0], 0)
-    gate.anchors['end'] = gate.anchors['out']
-    gate.params['label'] = label
-    gate.params['lblloc'] = 'center'
-    return gate
 
 
 # ── 元件分组 ──────────────────────────────────────────
@@ -109,7 +38,7 @@ _COMMON_COMPS = ("line", "wire", "open", "dot")
 _DIGITAL_COMPS = (
     # 逻辑门
     "and_gate", "or_gate", "not_gate", "nand_gate", "nor_gate",
-    "xor_gate", "xnor_gate", "buffer",
+    "xor_gate", "xnor_gate", "buffer", "buf",
     # 触发器 / 时序
     "dff", "jkff", "latch", "register", "shift_reg",
     # 功能块
@@ -389,6 +318,7 @@ class Circuit:
                 "not_gate": (_GATE_FACTORY, {}), "nand_gate": (_GATE_FACTORY, {}),
                 "nor_gate": (_GATE_FACTORY, {}), "xor_gate": (_GATE_FACTORY, {}),
                 "xnor_gate": (_GATE_FACTORY, {}), "buffer": (_GATE_FACTORY, {}),
+                "buf": (_GATE_FACTORY, {}),
                 "dff": (_BLOCK_FACTORY, {}), "jkff": (_BLOCK_FACTORY, {}),
                 "ram": (_BLOCK_FACTORY, {}), "counter": (_BLOCK_FACTORY, {}),
                 "comparator": (_BLOCK_FACTORY, {}), "gray_code": (_BLOCK_FACTORY, {}),
@@ -669,6 +599,24 @@ class Circuit:
 
     # ── 元件放置 ──────────────────────────────────────
 
+    # ── schemdraw.logic 原生门映射 ────────────────────
+    _NATIVE_GATES = {
+        "and_gate": "And", "nand_gate": "Nand",
+        "or_gate": "Or", "nor_gate": "Nor",
+        "xor_gate": "Xor", "xnor_gate": "Xnor",
+        "not_gate": "Not", "buffer": "Buf", "buf": "Buf",
+    }
+
+    @classmethod
+    def _make_native_gate(cls, name: str, label: str, elm):
+        """使用 schemdraw.logic 原生 IEEE 逻辑门。"""
+        import schemdraw.logic as logic
+        cls_name = cls._NATIVE_GATES.get(name, "And")
+        gate_cls = getattr(logic, cls_name)
+        if label:
+            return gate_cls().label(label)
+        return gate_cls()
+
     @staticmethod
     def _make_box(label_text: str, elm):
         try: return elm.Box().label(label_text)
@@ -708,13 +656,8 @@ class Circuit:
 
         try:
             if comp_cls == _GATE_FACTORY:
-                # IEEE 标准逻辑门形状
-                gate_label = value if value else name.upper()
-                gate = _make_ieee_gate(name, gate_label, elm)
-                if direction != "right":
-                    dir_method = getattr(gate, direction, None)
-                    if dir_method is not None:
-                        gate = dir_method()
+                gate_label = value if value else ""
+                gate = self._make_native_gate(name, gate_label, elm)
                 if last is not None:
                     gate = gate.at(self._get_anchor(last))
                 d.add(gate); return gate
