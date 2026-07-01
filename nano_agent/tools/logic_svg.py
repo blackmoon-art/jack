@@ -136,11 +136,12 @@ class LogicSVG:
     # ── SVG 渲染 ───────────────────────────────────
 
     W, H = 80, 50       # 门尺寸
-    IX, IY = 2, 8       # 输入引脚间距
-    PIN = 8             # 引脚突出长度
+    IX, IY = 2, 10      # 输入引脚间距
+    PIN = 10            # 引脚突出长度
     PORT_W, PORT_H = 48, 28  # 端口尺寸
-    COL_GAP = 100       # 列间距
-    ROW_GAP = 72        # 行间距
+    COL_GAP = 120       # 列间距
+    ROW_GAP = 80        # 行间距
+    WIRE_SPREAD = 12    # 多线时的垂直展开距离
     COLORS = {
         "bg": "#1a1a2e", "fg": "#e0e0e0", "grid": "#333",
         "gate_fill": "#2a2a4e", "gate_stroke": "#7c3aed",
@@ -152,6 +153,8 @@ class LogicSVG:
 
     def _render(self, gates, inputs, outputs, title="") -> str:
         """布局 + 渲染 SVG。"""
+        LogicSVG._wire_seq = 0  # 重置连线序号
+
         # ── 布局：拓扑排序 + 分层 ──
         # 构建 name → 生成它的 gate index
         produced_by = {}
@@ -387,9 +390,13 @@ class LogicSVG:
 
     # ── 连线 ────────────────────────────────────────
 
+    _wire_seq = 0  # 全局连线序号，用于错开避免重叠
+
     def _draw_wire(self, svg, x1, y1, x2, y2):
-        """画正交连线（水平→垂直→水平）。"""
-        mid_x = (x1 + x2) / 2
+        """画正交连线（水平→垂直→水平），自动错开避免重叠。"""
+        LogicSVG._wire_seq += 1
+        spread = (LogicSVG._wire_seq % 5 - 2) * self.WIRE_SPREAD * 0.3
+        mid_x = (x1 + x2) / 2 + spread
         d = f"M{x1},{y1} L{mid_x},{y1} L{mid_x},{y2} L{x2},{y2}"
         ET.SubElement(svg, "path", {
             "d": d, "fill": "none", "stroke": self.COLORS["wire"],
