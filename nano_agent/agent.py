@@ -70,7 +70,7 @@ class Agent:
         self._local.prompt_cache = None  # system prompt 缓存 (per-request)
         self._local.prompt_cache_key = ()
         self._local.last_orientation = None  # 最近一次 Orient 结果 (per-request)
-        self._current_orient_fn: Callable | None = None  # 当前任务的 Orient 函数（绑定原始任务）
+        self._local.current_orient_fn = None  # 当前 Orient 函数 (per-request)
     # ── 主入口 ──────────────────────────────────────────
 
     def run(self, task: str, strategy: str = "default",
@@ -105,7 +105,7 @@ class Agent:
             raise ValueError(f"Unknown strategy: '{strategy}'. Available: {list(STRATEGY_REGISTRY.keys())}")
 
         # Orient: 从策略类元数据读取，不再硬编码策略名
-        self._current_orient_fn = (
+        self._local.current_orient_fn = (
             (lambda obs: self._orient(obs, task=task)) if strategy_cls.uses_orient else None
         )
 
@@ -119,7 +119,7 @@ class Agent:
         self.memory.save_context(task, final)
         self.memory.save_persistent(task, final)
         self._local.on_event = None
-        self._current_orient_fn = None
+        self._local.current_orient_fn = None
         return final
 
     def _emit(self, event_type: str, data: dict):
@@ -137,7 +137,7 @@ class Agent:
         return StrategyContext(
             config=self.config, llm=self.llm, tools=self.tools, memory=self.memory,
             emit=self._emit, execute_tool=self.execute_tool,
-            agent_loop=self._agent_loop, orient_fn=self._current_orient_fn,
+            agent_loop=self._agent_loop, orient_fn=getattr(self._local, 'current_orient_fn', None),
             model_override=getattr(self._local, 'model_override', None),
             system_prompt_fn=self._system_prompt,
         )
@@ -220,7 +220,7 @@ class Agent:
                      enable_orient: bool = True):
         """执行单个工具调用并追加结果到 messages。
 
-        orient_fn:       Orient 函数（覆盖 self._current_orient_fn）
+        orient_fn:       Orient 函数（覆盖 per-request current_orient_fn）
         enable_orient:   是否执行 Orient。策略可按需关闭（如 plan 阶段）。
         """
         name = tc["name"]
@@ -259,7 +259,7 @@ class Agent:
 
     def _enrich_with_orient(self, result_text: str, orient_fn=None) -> str:
         """对工具结果执行 Orient 解读，返回富化后的内容。OODA 的 Orient 阶段。"""
-        _fn = orient_fn or self._current_orient_fn
+        _fn = orient_fn or getattr(self._local, 'current_orient_fn', None)
         if not _fn:
             return result_text
         orientation = _fn(result_text)

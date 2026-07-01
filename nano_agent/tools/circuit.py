@@ -32,6 +32,7 @@
 """
 
 import logging
+import re
 from datetime import datetime
 from pathlib import Path
 
@@ -97,8 +98,14 @@ class Circuit:
          "- Multi-chain: `chain1 ; chain2`\n"
          "- Anchor refs: `N1.emitter -> ...` or `comp@base`\n"
          "- Direction: `up`, `down` change direction; `right` restores default\n"
+         "- Connect: `connect(N1, N2)` or `connect(N1.out, N2)` — wire between named nodes\n"
          "\n"
-         "**Filter example:**\n"
+         "**Active filter (Sallen-Key low-pass):**\n"
+         "`ac(Vin) -> resistor(R1) as n1 -> resistor(R2) as n2 ; "
+         "n2 -> opamp(OP1)@in1 ; n1 -> down -> capacitor(C1) as c1_out ; "
+         "n2 -> down -> capacitor(C2) -> ground ; "
+         "opamp(OP1)@out as op_out ; connect(op_out, c1_out)`  (feedback)\n"
+         "\n"
          "`ac(Vin) -> resistor(1k) as n1 -> capacitor(10n) -> ground ; n1 -> line -> open(Vout)`\n"
          "\n"
          "**Diff-amp example:**\n"
@@ -301,6 +308,22 @@ class Circuit:
     # ── 锚点引用解析 ────────────────────────────────────────
 
     @staticmethod
+    def _resolve_named_anchor(token: str, named: dict):
+        """解析 'N1' 或 'N1.emitter' → Anchor 坐标。"""
+        token = token.strip()
+        if "." in token:
+            base, anchor_name = token.split(".", 1)
+            base, anchor_name = base.strip(), anchor_name.strip()
+            if base in named:
+                try:
+                    return getattr(named[base], anchor_name)
+                except AttributeError:
+                    return Circuit._get_anchor(named[base])
+        if token in named:
+            return Circuit._get_anchor(named[token])
+        return None
+
+    @staticmethod
     def _parse_node_ref(first_token: str, named: dict):
         """解析链首的节点引用，支持锚点语法。
 
@@ -365,6 +388,17 @@ class Circuit:
                     named: dict, last, d, elm, direction: str):
         """绘制一条链。返回 (new_last, current_direction)。"""
         chain_desc = chain_desc.strip()
+
+        # ── connect(N1, N2): 两个命名节点间画连接线 ──
+        if chain_desc.startswith("connect("):
+            m = re.match(r'connect\(\s*(\S+?)\s*,\s*(\S+?)\s*\)', chain_desc)
+            if m:
+                a_str, b_str = m.group(1), m.group(2)
+                anchor_a = self._resolve_named_anchor(a_str, named)
+                anchor_b = self._resolve_named_anchor(b_str, named)
+                if anchor_a is not None and anchor_b is not None:
+                    d.add(elm.Line().at(anchor_a).to(anchor_b))
+                return last, direction
 
         # ── 检查链首：命名节点引用（可带锚点）──
         first_token = chain_desc.split()[0] if chain_desc else ""
