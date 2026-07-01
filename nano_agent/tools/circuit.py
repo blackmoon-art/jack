@@ -405,14 +405,18 @@ class Circuit:
             named: dict[str, object] = {}
             last = None
             direction = "right"
+            _input_usage: dict[int, int] = {}  # 多输入元件的输入追踪
 
             chains = self._split_chains(description)
             if not chains:
                 return "Error: no components in circuit description"
 
             for chain_desc in chains:
+                # 每条新链重置方向为 right，避免继承上一条链的方向
+                # （上一条链从 down 结束时，新链不应从 down 开始）
                 last, direction = self._draw_chain(
-                    chain_desc, comp_map, named, last, d, elm, direction, valid_names_str)
+                    chain_desc, comp_map, named, last, d, elm, "right",
+                    valid_names_str, _input_usage)
 
             ts = datetime.now().strftime("%Y%m%d_%H%M%S")
             prefix = {"digital": "digital", "analog": "analog", "block": "block"}
@@ -483,14 +487,43 @@ class Circuit:
 
     # ── 单链绘制 ──────────────────────────────────────
 
-    def _try_connect_node(self, part_data: str, named: dict, last, d, elm) -> tuple:
+    def _try_connect_node(self, part_data: str, named: dict, last, d, elm,
+                          _input_usage: dict | None = None) -> tuple:
+        """如果是节点引用，画线连接到该节点。返回 (new_last, was_handled)。
+
+        对于多输入元件（逻辑门等），自动追踪输入使用情况：
+          第一次连接 → in1, 第二次 → in2, 超出则回退到 start。
+        """
+        if _input_usage is None:
+            _input_usage = {}
+
         token = part_data.strip()
+
+        def _pick_anchor(elem):
+            """选择下一个可用的输入锚点（优先 in1→in2→start→_get_anchor）。"""
+            key = id(elem)
+            used = _input_usage.get(key, 0)
+            # 尝试 in1, in2, in3...
+            for n in range(1, used + 2):
+                anchor_name = f"in{n}"
+                try:
+                    anchor = getattr(elem, anchor_name)
+                    _input_usage[key] = n
+                    return anchor
+                except AttributeError:
+                    break
+            # 回退：使用 start（通用输入侧）或 _get_anchor
+            try:
+                return elem.start
+            except AttributeError:
+                return self._get_anchor(elem)
+
         if token in named:
-            elem = named[token]
-            anchor = self._get_anchor(elem)
+            anchor = _pick_anchor(named[token])
             if last is not None:
                 d.add(elm.Line().at(self._get_anchor(last)).to(anchor))
             return _AnchorRef(anchor), True
+
         if "." in token:
             base, anchor_name = token.split(".", 1)
             base, anchor_name = base.strip(), anchor_name.strip()
@@ -505,7 +538,7 @@ class Circuit:
 
     def _draw_chain(self, chain_desc: str, comp_map: dict,
                     named: dict, last, d, elm, direction: str,
-                    valid_names_str: str):
+                    valid_names_str: str, _input_usage: dict | None = None):
         chain_desc = chain_desc.strip()
 
         # connect(N1, N2): 两个命名节点间画连接线
@@ -527,6 +560,9 @@ class Circuit:
             last = ref_obj
             chain_desc = chain_desc[len(ref_token):].strip()
             if chain_desc.startswith("->"): chain_desc = chain_desc[2:].strip()
+        else:
+            # 链首不是节点引用 → 独立信号路径，重置 last
+            last = None
 
         if not chain_desc: return last, direction
 
@@ -537,7 +573,8 @@ class Circuit:
             if part_type == "direction":
                 direction = part_data
             elif part_type == "series":
-                ref_last, handled = self._try_connect_node(part_data, named, last, d, elm)
+                ref_last, handled = self._try_connect_node(
+                    part_data, named, last, d, elm, _input_usage)
                 if handled:
                     last = ref_last
                     continue
@@ -613,7 +650,9 @@ class Circuit:
         try: return getattr(last, anchor)
         except AttributeError:
             try: return last.center
-            except AttributeError: return (0, 0)
+            except AttributeError:
+                logger.warning(f"Anchor '{anchor}' not found on element, falling back to (0,0)")
+                return (0, 0)
 
     def _place_component(self, name: str, value: str, label_text: str,
                          last, d, elm, comp_map: dict,
@@ -633,6 +672,10 @@ class Circuit:
                 # IEEE 标准逻辑门形状
                 gate_label = value if value else name.upper()
                 gate = _make_ieee_gate(name, gate_label, elm)
+                if direction != "right":
+                    dir_method = getattr(gate, direction, None)
+                    if dir_method is not None:
+                        gate = dir_method()
                 if last is not None:
                     gate = gate.at(self._get_anchor(last))
                 d.add(gate); return gate
@@ -649,9 +692,22 @@ class Circuit:
                     box = box.at(self._get_anchor(last))
                 d.add(box); return box
 
-            if last is None: el_obj = comp_cls(**kwargs)
-            elif name in ("ground", "gnd"): el_obj = comp_cls(**kwargs).at(self._get_anchor(last))
-            elif comp_anchor: el_obj = comp_cls(**kwargs).anchor(comp_anchor).at(self._get_anchor(last))
+            if last is None:
+                el_obj = comp_cls(**kwargs)
+            elif name in ("ground", "gnd"):
+                el_obj = comp_cls(**kwargs)
+                if direction != "right":
+                    dir_method = getattr(el_obj, direction, None)
+                    if dir_method is not None:
+                        el_obj = dir_method()
+                el_obj = el_obj.at(self._get_anchor(last))
+            elif comp_anchor:
+                el_obj = comp_cls(**kwargs)
+                if direction != "right":
+                    dir_method = getattr(el_obj, direction, None)
+                    if dir_method is not None:
+                        el_obj = dir_method()
+                el_obj = el_obj.anchor(comp_anchor).at(self._get_anchor(last))
             else:
                 el_obj = comp_cls(**kwargs)
                 if direction != "right":
