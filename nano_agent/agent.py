@@ -50,7 +50,8 @@ class Agent:
                                    charts_dir=self.config.charts_dir,
                                    public_mode=self.config.public_mode,
                                    bash_output_limit=self.config.bash_output_limit,
-                                   fetch_max_chars=self.config.fetch_max_chars)
+                                   fetch_max_chars=self.config.fetch_max_chars,
+                                   enable_circuit=self.config.enable_circuit)
         # 记忆路径：默认放在 work_dir 下，避免 CWD 差异导致多份文件
         _wd = Path(self.config.work_dir)
         mem_file = self.config.memory_file or str(_wd / "agent_memory.md")

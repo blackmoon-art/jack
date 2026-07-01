@@ -60,7 +60,8 @@ class ToolRegistry:
                  brave_api_key: str = "", charts_dir: str = "",
                  public_mode: bool = False,
                  bash_output_limit: int = 50000,
-                 fetch_max_chars: int = 8000):
+                 fetch_max_chars: int = 8000,
+                 enable_circuit: bool = False):
         self.sandbox = PathSandbox(work_dir)
         self.bash_timeout = bash_timeout
         self.work_dir = work_dir
@@ -79,7 +80,7 @@ class ToolRegistry:
         self._chart = Chart(work_dir, charts_dir=charts_dir)
         self._diagram = Diagram(work_dir, charts_dir=charts_dir)
         self._ai_image = AIImage(work_dir, charts_dir=charts_dir)
-        self._circuit = Circuit(work_dir, charts_dir=charts_dir)
+        self._circuit = Circuit(work_dir, charts_dir=charts_dir) if enable_circuit else None
         self._image_analyze = ImageAnalyzer(work_dir)
         self._document_parse = DocumentParser(work_dir)
 
