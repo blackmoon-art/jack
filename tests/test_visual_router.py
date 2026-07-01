@@ -107,7 +107,7 @@ class TestLayer1ExactMatch(unittest.TestCase):
 
     def test_draw_circuit(self):
         result = route_visual("画电路原理图")
-        self.assertEqual(result[0], "draw_circuit")
+        self.assertEqual(result[0], "draw_analog")
 
     def test_ai_image(self):
         result = route_visual("画一只猫")

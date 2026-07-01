@@ -1,5 +1,10 @@
 """电路图工具 — 基于 schemdraw 渲染专业电路图。
 
+三个独立工具:
+  draw_digital — 数字逻辑电路 (门电路、触发器、同步器、FIFO 等)
+  draw_analog  — 模拟电路 (滤波器、放大器、运放电路等)
+  draw_block   — 系统框图 (RF 信号链、混合信号架构等)
+
 支持语法:
   - 串联: A -> B -> C
   - 并联: [branch1, branch2]  (分支在两端汇合)
@@ -9,21 +14,8 @@
   - 锚点连接: NODE_NAME.emitter -> component  (从晶体管的发射极继续)
             component@anchor  (以指定锚点连接新元件)
   - 方向控制: up, down  (改变后续元件绘制方向, right 恢复默认)
+  - 连接线: connect(N1, N2)  (两个命名节点间画连接线)
   - 编号元件: r1→resistor, c2→capacitor, led1→LED (自动匹配)
-
-滤波器示例:
-  RC 低通: ac(Vin) -> resistor(1k) as n1 -> capacitor(10n) -> ground ; n1 -> line -> open(Vout)
-
-差分放大器示例:
-  ac(Vin+) -> npn(Q1)@base as q1 ;
-  ac(Vin-) -> npn(Q2)@base as q2 ;
-  q1.emitter -> line -> q2.emitter ;
-  q1.emitter -> down -> isource(1mA) -> ground ;
-  q1.collector -> up -> resistor(10k) as rc1 -> line -> v(VCC) ;
-  q2.collector -> up -> resistor(10k) as rc2 -> line -> v(VCC) ;
-  rc1.end -> wire -> rc2.end ;
-  q1.collector -> right -> open(Vout+) ;
-  q2.collector -> right -> open(Vout-)
 
 元件锚点:
   npn/pnp/transistor: base, emitter, collector
@@ -39,46 +31,72 @@ from pathlib import Path
 logger = logging.getLogger("nano_agent.tools.circuit")
 
 
-# ── 合法元件名（公开给 LLM）─────────────────────────────
-_VALID_COMPONENT_NAMES = (
-    # 基础无源元件
+# ── 元件分组 ──────────────────────────────────────────
+
+_COMMON_COMPS = ("line", "wire", "open", "dot")
+
+_DIGITAL_COMPS = (
+    # 逻辑门
+    "and_gate", "or_gate", "not_gate", "nand_gate", "nor_gate",
+    "xor_gate", "xnor_gate", "buffer",
+    # 触发器 / 时序
+    "dff", "jkff", "latch", "register", "shift_reg",
+    # 功能块
+    "ram", "counter", "comparator", "gray_code",
+    "mux", "decoder", "encoder", "tristate", "alu",
+    # 端口
+    "port", "terminal",
+) + _COMMON_COMPS
+
+_ANALOG_COMPS = (
+    # 电源 / 信号源
     "ac", "v", "battery", "source", "signal",
-    "resistor", "r",
-    "capacitor", "c",
-    "inductor", "l",
-    "diode", "d",
-    "led",
-    "switch", "spst",
-    "ground", "gnd",
-    "antenna",
-    # 有源元件
-    "opamp",
-    "transistor", "npn", "pnp",
     "isource", "current_source",
-    # 信号处理框图元件 (方块图/系统框图)
+    # 无源元件
+    "resistor", "r", "capacitor", "c", "inductor", "l",
+    "diode", "d", "led",
+    # 有源元件
+    "opamp", "transistor", "npn", "pnp",
+    # 开关 / 负载
+    "switch", "spst", "ground", "gnd",
+    "fuse", "lamp", "motor", "speaker", "microphone", "antenna",
+    # 端口
+    "port", "terminal", "open",
+) + _COMMON_COMPS
+
+_BLOCK_COMPS = (
+    # RF / 信号链
     "mixer", "lna", "amp", "amplifier",
-    "adc", "dac",
-    "oscillator", "lo",
+    "adc", "dac", "oscillator", "lo",
     "filter_box", "filter",
-    "block", "port", "terminal",
     "combiner", "splitter", "rf",
-    # 数字逻辑门 (渲染为带标签方块)
+    # 通用
+    "block", "port", "terminal",
+    # 基础元件 (框图也可用)
+    "resistor", "r", "capacitor", "c", "inductor", "l",
+    "opamp", "ground", "gnd", "ac", "v", "battery",
+    # 数字 (框图也可用)
     "and_gate", "or_gate", "not_gate", "nand_gate", "nor_gate",
     "xor_gate", "xnor_gate", "buffer", "dff", "jkff",
-    # 数字功能块
     "ram", "counter", "comparator", "gray_code",
     "mux", "decoder", "encoder", "latch", "register",
-    "tristate", "alu", "shift_reg",
-    # 连接 / 装饰
+    "tristate", "alu", "shift_reg", "npn", "pnp",
+    "diode", "led", "isource", "antenna",
     "fuse", "lamp", "motor", "speaker", "microphone",
-    "line", "wire", "open", "dot",
-)
+    "switch", "spst",
+) + _COMMON_COMPS
 
-_VALID_NAMES_STR = ", ".join(sorted(set(_VALID_COMPONENT_NAMES)))
 
-# ── 方向伪元件 ────────────────────────────────────────
+def _names_str(comps):
+    return ", ".join(sorted(set(comps)))
+
+_DIGITAL_NAMES_STR = _names_str(_DIGITAL_COMPS)
+_ANALOG_NAMES_STR = _names_str(_ANALOG_COMPS)
+_BLOCK_NAMES_STR = _names_str(_BLOCK_COMPS)
+
+# ── 共享常量 ──────────────────────────────────────────
 _DIRECTIONS = {"up", "down", "left", "right"}
-_BLOCK_FACTORY = "__block__"  # sentinel for block diagram box elements
+_BLOCK_FACTORY = "__block__"
 
 
 class _AnchorRef:
@@ -89,58 +107,98 @@ class _AnchorRef:
 
 class Circuit:
     TOOLS = [
-        ("draw_circuit",
-         "Draw professional circuit diagrams and signal-processing block diagrams. "
-         "For: analog circuits (filters, amplifiers), digital circuits (logic gates, "
-         "flip-flops), RF/signal chains (block diagrams), wiring layouts.\n"
+        ("draw_digital",
+         "Draw digital logic circuit diagrams. "
+         "For: logic gates, flip-flops, synchronizers, FIFO, counters, adders, "
+         "multiplexers, decoders, state machines.\n"
          "\n"
-         "**Valid components:** " + _VALID_NAMES_STR + "\n"
-         "Block-diagram elements (LNA, mixer, ADC, amp, filter_box, etc.) draw as labeled boxes.\n"
+         "**Valid components:** " + _DIGITAL_NAMES_STR + "\n"
+         "\n"
+         "**Syntax:** Series `A->B->C`, Parallel `[b1,b2]`, "
+         "Named nodes `comp(val) as N1`, Multi-chain `;`, "
+         "Connect `connect(N1,N2)`.\n"
+         "\n"
+         "**2-stage synchronizer:**\n"
+         "`port(async_in) -> dff(FF1) -> dff(FF2) -> port(synced) ; "
+         "port(clk) -> dff(FF1) ; port(clk) -> dff(FF2)`\n"
+         "\n"
+         "**Half-adder:**\n"
+         "`port(A) -> xor_gate as g1 ; port(B) -> g1 ; "
+         "g1 -> port(Sum) ; port(A) -> and_gate as g2 ; port(B) -> g2 ; "
+         "g2 -> port(Carry)`",
+         "draw_digital",
+         {"description": {"type": "string",
+                          "description":
+                          "Digital circuit. Valid names: " + _DIGITAL_NAMES_STR + ". "
+                          "Synchronizer: 'port(in) -> dff(FF1) -> dff(FF2) -> port(out)'"},
+          "title": {"type": "string", "description": "Circuit title"}},
+         ["description"]),
+
+        ("draw_analog",
+         "Draw analog circuit diagrams. "
+         "For: filters (RC/LC/RLC), amplifiers (op-amp, transistor), "
+         "differential pairs, power supplies, sensor circuits.\n"
+         "\n"
+         "**Valid components:** " + _ANALOG_NAMES_STR + "\n"
          "Numbered variants (r1, c2, led1, etc.) auto-match to base names.\n"
          "\n"
-         "**Syntax:**\n"
-         "- Series: `A -> B -> C`\n"
-         "- Parallel: `[branch1, branch2]`\n"
-         "- Named nodes: `comp(val) as N1`\n"
-         "- Multi-chain: `chain1 ; chain2`\n"
-         "- Anchor refs: `N1.emitter -> ...` or `comp@base`\n"
-         "- Direction: `up`, `down` change direction; `right` restores default\n"
-         "- Connect: `connect(N1, N2)` or `connect(N1.out, N2)` — wire between named nodes\n"
+         "**Syntax:** Series `A->B->C`, Parallel `[b1,b2]`, "
+         "Named nodes `comp(val) as N1`, Multi-chain `;`, "
+         "Anchor refs `N1.emitter->` or `comp@base`, "
+         "Directions `up/down`, Connect `connect(N1,N2)`.\n"
+         "npn anchors: base/emitter/collector; opamp: in1/in2/out.\n"
          "\n"
-         "**Active filter (Sallen-Key low-pass):**\n"
+         "**RC low-pass filter:**\n"
+         "`ac(Vin) -> resistor(1k) as n1 -> capacitor(10n) -> ground ; "
+         "n1 -> line -> open(Vout)`\n"
+         "\n"
+         "**Active filter (Sallen-Key):**\n"
          "`ac(Vin) -> resistor(R1) as n1 -> resistor(R2) as n2 ; "
          "n2 -> opamp(OP1)@in1 ; n1 -> down -> capacitor(C1) as c1_out ; "
          "n2 -> down -> capacitor(C2) -> ground ; "
-         "opamp(OP1)@out as op_out ; connect(op_out, c1_out)`  (feedback)\n"
+         "opamp(OP1)@out as op_out ; connect(op_out, c1_out)`\n"
          "\n"
-         "**Digital logic (half-adder):**\n"
-         "`port(A) -> xor_gate as g1 ; port(B) -> g1 ; "
-         "g1 -> port(Sum) ; port(A) -> and_gate as g2 ; port(B) -> g2 ; "
-         "g2 -> port(Carry)`\n"
-         "\n"
-         "\n"
-         "**Diff-amp example:**\n"
+         "**Differential amplifier:**\n"
          "`ac(Vin+) -> npn(Q1)@base as q1 ; ac(Vin-) -> npn(Q2)@base as q2 ; "
          "q1.emitter -> line -> q2.emitter ; "
          "q1.emitter -> down -> isource(1mA) -> ground ; "
-         "q1.collector -> up -> resistor(10k) as rc1 -> line -> v(VCC) ; "
-         "q2.collector -> up -> resistor(10k) as rc2 -> line -> v(VCC) ; "
-         "rc1.end -> wire -> rc2.end`\n"
-         "\n"
-         "**Signal chain block diagram (e.g. FMCW radar IF):**\n"
-         "`rf(RF_in) -> lna(LNA) -> mixer as m1 ; "
-         "lo(f0) -> down -> m1 ; "
-         "m1 -> amp(IF_Amp) -> filter_box(LPF) -> adc(ADC) -> port(DSP)`",
-         "draw_circuit",
+         "q1.collector -> up -> resistor(10k) -> line -> v(VCC) ; "
+         "q2.collector -> up -> resistor(10k) -> line -> v(VCC)`",
+         "draw_analog",
          {"description": {"type": "string",
                           "description":
-                          "Circuit or block diagram description. "
-                          "Valid names: " + _VALID_NAMES_STR + ". "
-                          "Block elements (mixer,lna,amp,adc,filter_box etc) auto-draw as labeled boxes. "
-                          "Series with '->', parallel with '[b1,b2]', named nodes with 'as N1', "
-                          "multi-chain with ';', directions with up/down/left/right. "
-                          "Signal chain: 'rf(In) -> lna(LNA) -> mixer as m1 ; lo(f0) -> m1 ; m1 -> filter_box(LPF) -> adc(ADC) -> port(Out)'"},
-          "title": {"type": "string", "description": "Circuit title (optional)"}},
+                          "Analog circuit. Valid names: " + _ANALOG_NAMES_STR + ". "
+                          "Filter: 'ac(Vin)->r(1k) as n1->c(10n)->gnd ; n1->line->open(Vout)'"},
+          "title": {"type": "string", "description": "Circuit title"}},
+         ["description"]),
+
+        ("draw_block",
+         "Draw system block diagrams and signal-processing chain diagrams. "
+         "For: RF signal chains, mixed-signal architectures, communication systems, "
+         "radar IF processing, audio processing pipelines.\n"
+         "\n"
+         "**Valid components:** " + _BLOCK_NAMES_STR + "\n"
+         "Block elements (LNA, mixer, ADC, etc.) render as labeled boxes.\n"
+         "Also includes all basic analog and digital components.\n"
+         "\n"
+         "**Syntax:** Series `A->B->C`, Multi-chain `;`, Directions `up/down`.\n"
+         "\n"
+         "**FMCW radar IF chain:**\n"
+         "`rf(RF_in) -> lna(LNA) -> mixer as m1 ; lo(f0) -> m1 ; "
+         "m1 -> amp(IF_Amp) -> filter_box(LPF) -> adc(ADC) -> port(DSP)`\n"
+         "\n"
+         "**Async FIFO:**\n"
+         "`port(wr_clk) -> counter(WrPtr) -> gray_code(WrGray) ; "
+         "port(rd_clk) -> counter(RdPtr) -> gray_code(RdGray) ; "
+         "port(wr_data) -> ram(DPRAM) ; "
+         "WrGray -> dff(Sync1) -> dff(Sync2) as synced ; "
+         "synced -> comparator -> port(empty)`",
+         "draw_block",
+         {"description": {"type": "string",
+                          "description":
+                          "Block diagram. Valid names: " + _BLOCK_NAMES_STR + ". "
+                          "RF chain: 'rf(In)->lna->mixer as m1 ; lo(f0)->m1 ; m1->filter_box->adc->port(Out)'"},
+          "title": {"type": "string", "description": "Diagram title"}},
          ["description"]),
     ]
 
@@ -152,11 +210,24 @@ class Circuit:
             self.charts_dir = web_static / "charts"
         self.charts_dir.mkdir(parents=True, exist_ok=True)
 
-    # ── 元件名解析 ──────────────────────────────────────────
+    # ── 三个公开入口 ──────────────────────────────────
+
+    def draw_digital(self, description: str, title: str = "") -> str:
+        """绘制数字逻辑电路。"""
+        return self._draw(description, title, "digital")
+
+    def draw_analog(self, description: str, title: str = "") -> str:
+        """绘制模拟电路。"""
+        return self._draw(description, title, "analog")
+
+    def draw_block(self, description: str, title: str = "") -> str:
+        """绘制系统框图。"""
+        return self._draw(description, title, "block")
+
+    # ── 元件名解析 ──────────────────────────────────────
 
     @staticmethod
     def _resolve_comp_name(name: str, comp_map: dict):
-        """解析元件名，支持编号后缀（r1→r, c2→c）和别名。"""
         if name in comp_map:
             return comp_map[name]
         stripped = name.rstrip("0123456789")
@@ -166,126 +237,92 @@ class Circuit:
 
     @staticmethod
     def _parse_comp(comp_str: str) -> tuple:
-        """解析单个元件字符串。
-
-        'resistor(100Ω) as N1'  → ('resistor', '100Ω', 'resistor(100Ω)', 'N1', None)
-        'npn(Q1)@base as q1'    → ('npn', 'Q1', 'npn(Q1)', 'q1', 'base')
-        'ground'                → ('ground', '', 'ground', None, None)
-        """
         node_name = None
         comp_anchor = None
         c = comp_str.strip()
-
-        # 提取 as NAME 后缀
         if " as " in c:
             c, node_name = c.rsplit(" as ", 1)
             c, node_name = c.strip(), node_name.strip()
-
-        # 提取 @anchor 后缀
         if "@" in c:
             c, comp_anchor = c.rsplit("@", 1)
             c, comp_anchor = c.strip(), comp_anchor.strip()
-
         if "(" in c and ")" in c:
             n = c.split("(")[0].strip().lower()
             v = c[c.index("(") + 1:c.index(")")].strip()
             return n, v, c, node_name, comp_anchor
         return c.lower(), "", c, node_name, comp_anchor
 
-    # ── 主入口 ──────────────────────────────────────────────
+    # ── 核心渲染引擎 ──────────────────────────────────
 
-    def draw_circuit(self, description: str, title: str = "") -> str:
-        """用 schemdraw 绘制电路图。"""
+    def _draw(self, description: str, title: str, comp_set: str) -> str:
+        """统一渲染引擎，按 comp_set 过滤可用元件。"""
         import schemdraw
         import schemdraw.elements as elm
         from schemdraw import Drawing
+
+        # 选择元件集
+        if comp_set == "digital":
+            allowed = set(_DIGITAL_COMPS)
+            valid_names_str = _DIGITAL_NAMES_STR
+        elif comp_set == "analog":
+            allowed = set(_ANALOG_COMPS)
+            valid_names_str = _ANALOG_NAMES_STR
+        else:
+            allowed = set(_BLOCK_COMPS)
+            valid_names_str = _BLOCK_NAMES_STR
 
         try:
             d = Drawing(show=False)
             if title:
                 d.config(fontsize=14)
 
-            comp_map = {
-                # 基础元件
-                "battery": (elm.Battery, {}),
-                "v": (elm.SourceV, {}),
-                "source": (elm.SourceV, {}),
-                "signal": (elm.SourceV, {}),
+            # 元件映射表（所有类型共用）
+            full_map = {
+                "battery": (elm.Battery, {}), "v": (elm.SourceV, {}),
+                "source": (elm.SourceV, {}), "signal": (elm.SourceV, {}),
                 "ac": (self._get_ac_source(elm), {}),
-                "resistor": (elm.Resistor, {}),
-                "r": (elm.Resistor, {}),
-                "capacitor": (elm.Capacitor, {}),
-                "c": (elm.Capacitor, {}),
-                "inductor": (elm.Inductor, {}),
-                "l": (elm.Inductor, {}),
-                "diode": (elm.Diode, {}),
-                "d": (elm.Diode, {}),
-                "led": (elm.LED, {}),
-                "switch": (elm.Switch, {}),
-                "spst": (elm.Switch, {}),
-                "ground": (elm.Ground, {}),
-                "gnd": (elm.Ground, {}),
-                "antenna": (elm.Antenna, {}),
-                # 有源元件
+                "resistor": (elm.Resistor, {}), "r": (elm.Resistor, {}),
+                "capacitor": (elm.Capacitor, {}), "c": (elm.Capacitor, {}),
+                "inductor": (elm.Inductor, {}), "l": (elm.Inductor, {}),
+                "diode": (elm.Diode, {}), "d": (elm.Diode, {}),
+                "led": (elm.LED, {}), "switch": (elm.Switch, {}),
+                "spst": (elm.Switch, {}), "ground": (elm.Ground, {}),
+                "gnd": (elm.Ground, {}), "antenna": (elm.Antenna, {}),
                 "opamp": (elm.Opamp, {}),
-                "transistor": (elm.BjtNpn, {}),
-                "npn": (elm.BjtNpn, {}),
-                "pnp": (elm.BjtPnp, {}),
-                "isource": (elm.SourceI, {}),
+                "transistor": (elm.BjtNpn, {}), "npn": (elm.BjtNpn, {}),
+                "pnp": (elm.BjtPnp, {}), "isource": (elm.SourceI, {}),
                 "current_source": (elm.SourceI, {}),
-                # 信号处理框图元件 (BLOCK_FACTORY sentinel → _make_box)
-                "mixer":       (_BLOCK_FACTORY, {}),
-                "lna":         (_BLOCK_FACTORY, {}),
-                "amp":         (_BLOCK_FACTORY, {}),
-                "amplifier":   (_BLOCK_FACTORY, {}),
-                "adc":         (_BLOCK_FACTORY, {}),
-                "dac":         (_BLOCK_FACTORY, {}),
-                "oscillator":  (_BLOCK_FACTORY, {}),
-                "lo":          (_BLOCK_FACTORY, {}),
-                "filter_box":  (_BLOCK_FACTORY, {}),
-                "filter":      (_BLOCK_FACTORY, {}),
-                "block":       (_BLOCK_FACTORY, {}),
-                "port":        (_BLOCK_FACTORY, {}),
-                "terminal":    (_BLOCK_FACTORY, {}),
-                "combiner":    (_BLOCK_FACTORY, {}),
-                "splitter":    (_BLOCK_FACTORY, {}),
-                "rf":          (_BLOCK_FACTORY, {}),
-                # 数字逻辑门 (框图渲染)
-                "and_gate":    (_BLOCK_FACTORY, {}),
-                "or_gate":     (_BLOCK_FACTORY, {}),
-                "not_gate":    (_BLOCK_FACTORY, {}),
-                "nand_gate":   (_BLOCK_FACTORY, {}),
-                "nor_gate":    (_BLOCK_FACTORY, {}),
-                "xor_gate":    (_BLOCK_FACTORY, {}),
-                "xnor_gate":   (_BLOCK_FACTORY, {}),
-                "buffer":      (_BLOCK_FACTORY, {}),
-                "dff":         (_BLOCK_FACTORY, {}),
-                "jkff":        (_BLOCK_FACTORY, {}),
-                "ram":         (_BLOCK_FACTORY, {}),
-                "counter":     (_BLOCK_FACTORY, {}),
-                "comparator":  (_BLOCK_FACTORY, {}),
-                "gray_code":   (_BLOCK_FACTORY, {}),
-                "mux":         (_BLOCK_FACTORY, {}),
-                "decoder":     (_BLOCK_FACTORY, {}),
-                "encoder":     (_BLOCK_FACTORY, {}),
-                "latch":       (_BLOCK_FACTORY, {}),
-                "register":    (_BLOCK_FACTORY, {}),
-                "tristate":    (_BLOCK_FACTORY, {}),
-                "alu":         (_BLOCK_FACTORY, {}),
-                "shift_reg":   (_BLOCK_FACTORY, {}),
-                # 连接 / 装饰
-                "fuse": (elm.Fuse, {}),
-                "lamp": (elm.Lamp, {}),
-                "motor": (elm.Motor, {}),
-                "speaker": (elm.Speaker, {}),
+                "fuse": (elm.Fuse, {}), "lamp": (elm.Lamp, {}),
+                "motor": (elm.Motor, {}), "speaker": (elm.Speaker, {}),
                 "microphone": (elm.Mic, {}),
-                "line": (elm.Line, {}),
-                "wire": (elm.Line, {}),
-                "open": (elm.Dot, {}),
-                "dot": (elm.Dot, {}),
+                "line": (elm.Line, {}), "wire": (elm.Line, {}),
+                "open": (elm.Dot, {}), "dot": (elm.Dot, {}),
+                # 框图/数字元件
+                "mixer": (_BLOCK_FACTORY, {}), "lna": (_BLOCK_FACTORY, {}),
+                "amp": (_BLOCK_FACTORY, {}), "amplifier": (_BLOCK_FACTORY, {}),
+                "adc": (_BLOCK_FACTORY, {}), "dac": (_BLOCK_FACTORY, {}),
+                "oscillator": (_BLOCK_FACTORY, {}), "lo": (_BLOCK_FACTORY, {}),
+                "filter_box": (_BLOCK_FACTORY, {}), "filter": (_BLOCK_FACTORY, {}),
+                "block": (_BLOCK_FACTORY, {}), "port": (_BLOCK_FACTORY, {}),
+                "terminal": (_BLOCK_FACTORY, {}), "combiner": (_BLOCK_FACTORY, {}),
+                "splitter": (_BLOCK_FACTORY, {}), "rf": (_BLOCK_FACTORY, {}),
+                "and_gate": (_BLOCK_FACTORY, {}), "or_gate": (_BLOCK_FACTORY, {}),
+                "not_gate": (_BLOCK_FACTORY, {}), "nand_gate": (_BLOCK_FACTORY, {}),
+                "nor_gate": (_BLOCK_FACTORY, {}), "xor_gate": (_BLOCK_FACTORY, {}),
+                "xnor_gate": (_BLOCK_FACTORY, {}), "buffer": (_BLOCK_FACTORY, {}),
+                "dff": (_BLOCK_FACTORY, {}), "jkff": (_BLOCK_FACTORY, {}),
+                "ram": (_BLOCK_FACTORY, {}), "counter": (_BLOCK_FACTORY, {}),
+                "comparator": (_BLOCK_FACTORY, {}), "gray_code": (_BLOCK_FACTORY, {}),
+                "mux": (_BLOCK_FACTORY, {}), "decoder": (_BLOCK_FACTORY, {}),
+                "encoder": (_BLOCK_FACTORY, {}), "latch": (_BLOCK_FACTORY, {}),
+                "register": (_BLOCK_FACTORY, {}), "tristate": (_BLOCK_FACTORY, {}),
+                "alu": (_BLOCK_FACTORY, {}), "shift_reg": (_BLOCK_FACTORY, {}),
             }
 
-            named: dict[str, object] = {}  # NAME → schemdraw element
+            # 过滤：只保留 allowed 集中的元件
+            comp_map = {k: v for k, v in full_map.items() if k in allowed}
+
+            named: dict[str, object] = {}
             last = None
             direction = "right"
 
@@ -295,17 +332,17 @@ class Circuit:
 
             for chain_desc in chains:
                 last, direction = self._draw_chain(
-                    chain_desc, comp_map, named, last, d, elm, direction)
+                    chain_desc, comp_map, named, last, d, elm, direction, valid_names_str)
 
             ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-            filename = f"circuit_{ts}.png"
+            prefix = {"digital": "digital", "analog": "analog", "block": "block"}
+            filename = f"{prefix.get(comp_set, 'circuit')}_{ts}.png"
             filepath = self.charts_dir / filename
-
             d.save(str(filepath))
             logger.info(f"Circuit saved: {filename}")
 
             img_url = f"/charts/{filename}"
-            title_alt = title or "Circuit"
+            title_alt = title or comp_set.title()
             return f"![{title_alt}]({img_url})\n{img_url}"
 
         except ImportError:
@@ -314,116 +351,84 @@ class Circuit:
             logger.exception(f"Circuit drawing failed: {e}")
             return f"Error drawing circuit: {e}"
 
-    # ── 链拆分 ──────────────────────────────────────────────
+    # ── 链拆分 ────────────────────────────────────────
 
     @staticmethod
     def _split_chains(description: str) -> list:
-        """按 ; 拆分链路，括号内分号不误拆。"""
         chains = []
         current = ""
         depth = 0
         for ch in description:
             if ch == ";" and depth == 0:
                 c = current.strip()
-                if c:
-                    chains.append(c)
+                if c: chains.append(c)
                 current = ""
             else:
-                if ch == "[":
-                    depth += 1
-                elif ch == "]":
-                    depth = max(0, depth - 1)
+                if ch == "[": depth += 1
+                elif ch == "]": depth = max(0, depth - 1)
                 current += ch
         c = current.strip()
-        if c:
-            chains.append(c)
+        if c: chains.append(c)
         return chains
 
-    # ── 锚点引用解析 ────────────────────────────────────────
+    # ── 锚点引用解析 ──────────────────────────────────
 
     @staticmethod
     def _resolve_named_anchor(token: str, named: dict):
-        """解析 'N1' 或 'N1.emitter' → Anchor 坐标。"""
         token = token.strip()
         if "." in token:
             base, anchor_name = token.split(".", 1)
             base, anchor_name = base.strip(), anchor_name.strip()
             if base in named:
-                try:
-                    return getattr(named[base], anchor_name)
-                except AttributeError:
-                    return Circuit._get_anchor(named[base])
+                try: return getattr(named[base], anchor_name)
+                except AttributeError: return Circuit._get_anchor(named[base])
         if token in named:
             return Circuit._get_anchor(named[token])
         return None
 
     @staticmethod
     def _parse_node_ref(first_token: str, named: dict):
-        """解析链首的节点引用，支持锚点语法。
-
-        'N1'         → (element, None)
-        'N1.emitter' → (AnchorRef, None)
-        返回 (last_obj, remaining_prefix_to_strip) 或 (None, None)
-        """
         token = first_token.rstrip("->").strip()
-        if not token:
-            return None, None
-
+        if not token: return None, None
         if "." in token:
             node_name, anchor_name = token.split(".", 1)
             if node_name in named:
                 elem = named[node_name]
-                try:
-                    anchor = getattr(elem, anchor_name)
-                except AttributeError:
-                    anchor = elem.end
+                try: anchor = getattr(elem, anchor_name)
+                except AttributeError: anchor = elem.end
                 return _AnchorRef(anchor), token
         elif token in named:
             return named[token], token
         return None, None
 
-    # ── 单链绘制 ────────────────────────────────────────────
+    # ── 单链绘制 ──────────────────────────────────────
 
-    def _try_connect_node(self, part_data: str, named: dict,
-                          last, d, elm) -> tuple:
-        """如果是节点引用，画线连接到该节点。返回 (new_last, was_handled)。
-
-        支持:
-          - 简单引用: n2 → 连线到 n2.end (或 .center)
-          - 锚点引用: q2.emitter → 连线到 q2 的 emitter 锚点
-        """
+    def _try_connect_node(self, part_data: str, named: dict, last, d, elm) -> tuple:
         token = part_data.strip()
-
-        # 检查: 整个 token 是否就是命名节点 (如 n2)
         if token in named:
             elem = named[token]
             anchor = self._get_anchor(elem)
             if last is not None:
                 d.add(elm.Line().at(self._get_anchor(last)).to(anchor))
             return _AnchorRef(anchor), True
-
-        # 检查: token 包含 . 且 base 在 named 中 (如 q2.emitter)
         if "." in token:
             base, anchor_name = token.split(".", 1)
             base, anchor_name = base.strip(), anchor_name.strip()
             if base in named:
                 elem = named[base]
-                try:
-                    anchor = getattr(elem, anchor_name)
-                except AttributeError:
-                    anchor = self._get_anchor(elem)
+                try: anchor = getattr(elem, anchor_name)
+                except AttributeError: anchor = self._get_anchor(elem)
                 if last is not None:
                     d.add(elm.Line().at(self._get_anchor(last)).to(anchor))
                 return _AnchorRef(anchor), True
-
         return None, False
 
     def _draw_chain(self, chain_desc: str, comp_map: dict,
-                    named: dict, last, d, elm, direction: str):
-        """绘制一条链。返回 (new_last, current_direction)。"""
+                    named: dict, last, d, elm, direction: str,
+                    valid_names_str: str):
         chain_desc = chain_desc.strip()
 
-        # ── connect(N1, N2): 两个命名节点间画连接线 ──
+        # connect(N1, N2): 两个命名节点间画连接线
         if chain_desc.startswith("connect("):
             m = re.match(r'connect\(\s*(\S+?)\s*,\s*(\S+?)\s*\)', chain_desc)
             if m:
@@ -434,258 +439,189 @@ class Circuit:
                     d.add(elm.Line().at(anchor_a).to(anchor_b))
                 return last, direction
 
-        # ── 检查链首：命名节点引用（可带锚点）──
+        # 链首：命名节点引用（可带锚点）
         first_token = chain_desc.split()[0] if chain_desc else ""
         ref_obj, ref_token = self._parse_node_ref(first_token, named)
         if ref_obj is not None:
             last = ref_obj
             chain_desc = chain_desc[len(ref_token):].strip()
-            if chain_desc.startswith("->"):
-                chain_desc = chain_desc[2:].strip()
+            if chain_desc.startswith("->"): chain_desc = chain_desc[2:].strip()
 
-        if not chain_desc:
-            return last, direction
+        if not chain_desc: return last, direction
 
-        # ── 解析组件列表 ──────────────────────────────
         parts = self._parse_parts(chain_desc)
-        if not parts:
-            return last, direction
+        if not parts: return last, direction
 
         for part_type, part_data in parts:
             if part_type == "direction":
                 direction = part_data
             elif part_type == "series":
-                # ── 尝试中链节点引用 (如 q2.emitter, n2) ──
-                ref_last, handled = self._try_connect_node(
-                    part_data, named, last, d, elm)
+                ref_last, handled = self._try_connect_node(part_data, named, last, d, elm)
                 if handled:
                     last = ref_last
                     continue
-
                 n, v, lbl, node_name, comp_anchor = self._parse_comp(part_data)
                 el_obj = self._place_component(
-                    n, v, lbl, last, d, elm, comp_map, direction, comp_anchor)
+                    n, v, lbl, last, d, elm, comp_map, direction, comp_anchor, valid_names_str)
                 last = el_obj
-                if node_name:
-                    named[node_name] = el_obj
+                if node_name: named[node_name] = el_obj
             elif part_type == "parallel":
-                last = self._draw_parallel(part_data, comp_map, named,
-                                           last, d, elm, direction)
+                last = self._draw_parallel(part_data, comp_map, named, last, d, elm, direction, valid_names_str)
 
         return last, direction
 
-    # ── 组件列表解析 ────────────────────────────────────────
+    # ── 组件列表解析 ──────────────────────────────────
 
     @staticmethod
     def _parse_parts(description: str) -> list:
-        """解析串联/并联组件 + 方向伪元件。返回 [(type, data), ...]"""
         parts = []
         remaining = description.strip()
         while remaining:
             remaining = remaining.strip()
             if remaining.startswith("["):
-                depth = 0
-                end = -1
+                depth = 0; end = -1
                 for idx, ch in enumerate(remaining):
-                    if ch == "[":
-                        depth += 1
+                    if ch == "[": depth += 1
                     elif ch == "]":
                         depth -= 1
-                        if depth == 0:
-                            end = idx
-                            break
-                if end < 0:
-                    break
+                        if depth == 0: end = idx; break
+                if end < 0: break
                 bracket_content = remaining[1:end]
                 branches = Circuit._split_branches(bracket_content)
                 parts.append(("parallel", branches))
                 remaining = remaining[end + 1:]
-                if remaining.startswith("->"):
-                    remaining = remaining[2:]
+                if remaining.startswith("->"): remaining = remaining[2:]
             elif "->" in remaining:
                 idx = remaining.index("->")
                 part = remaining[:idx].strip()
                 if part:
-                    if part.lower() in _DIRECTIONS:
-                        parts.append(("direction", part.lower()))
-                    else:
-                        parts.append(("series", part))
+                    if part.lower() in _DIRECTIONS: parts.append(("direction", part.lower()))
+                    else: parts.append(("series", part))
                 remaining = remaining[idx + 2:]
             else:
                 part = remaining.strip()
                 if part:
-                    if part.lower() in _DIRECTIONS:
-                        parts.append(("direction", part.lower()))
-                    else:
-                        parts.append(("series", part))
+                    if part.lower() in _DIRECTIONS: parts.append(("direction", part.lower()))
+                    else: parts.append(("series", part))
                 break
         return parts
 
     @staticmethod
     def _split_branches(content: str) -> list:
-        """在顶层逗号处拆分并联分支（哨兵逗号确保末尾分支被收集）。"""
         branches = []
-        depth = 0
-        current = ""
+        depth = 0; current = ""
         for ch in content + ",":
-            if ch == "[":
-                depth += 1
-            elif ch == "]":
-                depth = max(0, depth - 1)
+            if ch == "[": depth += 1
+            elif ch == "]": depth = max(0, depth - 1)
             if ch == "," and depth == 0:
                 b = current.strip()
-                if b:
-                    branches.append(b)
+                if b: branches.append(b)
                 current = ""
-            else:
-                current += ch
+            else: current += ch
         return branches
 
-    # ── 元件放置 ────────────────────────────────────────────
+    # ── 元件放置 ──────────────────────────────────────
 
     @staticmethod
     def _make_box(label_text: str, elm):
-        """创建框图方块元件。尝试 schemdraw Box，回退到带标签的线。"""
-        try:
-            return elm.Box().label(label_text)
-        except AttributeError:
-            return elm.Line().label(f"[{label_text}]")
+        try: return elm.Box().label(label_text)
+        except AttributeError: return elm.Line().label(f"[{label_text}]")
 
     @staticmethod
     def _get_anchor(last, anchor: str = "end"):
-        """安全获取元件的锚点。回退链：anchor → center → (0,0)。"""
-        try:
-            return getattr(last, anchor)
+        try: return getattr(last, anchor)
         except AttributeError:
-            try:
-                return last.center
-            except AttributeError:
-                return (0, 0)
+            try: return last.center
+            except AttributeError: return (0, 0)
 
     def _place_component(self, name: str, value: str, label_text: str,
                          last, d, elm, comp_map: dict,
-                         direction: str = "right",
-                         comp_anchor: str = None):
-        """放置单个元件，返回元件对象。"""
-        comp_cls, kwargs = self._resolve_comp_name(name, comp_map)
+                         direction: str = "right", comp_anchor: str = None,
+                         valid_names_str: str = ""):
+        if name not in comp_map:
+            return elm.Line().label(f"[?{name}]")
 
-        if comp_cls is None:
-            raise ValueError(
-                f"Unknown component '{name}'. Valid names: {_VALID_NAMES_STR}"
-            )
+        comp_cls, kwargs = comp_map[name]
 
-        kwargs = dict(kwargs)
-        if value:
-            kwargs["label"] = value
+        if value: kwargs = dict(kwargs); kwargs["label"] = value
 
         try:
-            # 框图元件：用 _make_box 创建带标签方块
             if comp_cls == _BLOCK_FACTORY:
                 box_label = value if value else name.upper()
                 box_label = box_label.replace("_", " ").title()
                 box = self._make_box(box_label, elm)
-                if last is not None:
-                    box = box.at(self._get_anchor(last))
-                d.add(box)
-                return box
+                if last is not None: box = box.at(self._get_anchor(last))
+                d.add(box); return box
 
-            if last is None:
-                el = comp_cls(**kwargs)
-            elif name in ("ground", "gnd"):
-                el = comp_cls(**kwargs).at(self._get_anchor(last))
-            elif comp_anchor:
-                # @anchor: 以指定锚点连接到 last
-                el = comp_cls(**kwargs).anchor(comp_anchor).at(self._get_anchor(last))
+            if last is None: el_obj = comp_cls(**kwargs)
+            elif name in ("ground", "gnd"): el_obj = comp_cls(**kwargs).at(self._get_anchor(last))
+            elif comp_anchor: el_obj = comp_cls(**kwargs).anchor(comp_anchor).at(self._get_anchor(last))
             else:
-                el = comp_cls(**kwargs)
-                # 把方向应用到元件自身，而不是创建新的方向线段
-                # e.g. el.down() 设置电容向下摆放，而非用 elm.down() 覆盖元件
+                el_obj = comp_cls(**kwargs)
                 if direction != "right":
-                    dir_method = getattr(el, direction, None)
-                    if dir_method is not None:
-                        el = dir_method()
-                el = el.at(self._get_anchor(last))
-            d.add(el)
-            return el
+                    dir_method = getattr(el_obj, direction, None)
+                    if dir_method is not None: el_obj = dir_method()
+                el_obj = el_obj.at(self._get_anchor(last))
+            d.add(el_obj); return el_obj
         except Exception as e:
             logger.warning(f"Failed to add {name}: {e}")
             fallback_anchor = self._get_anchor(last) if last else (0, 0)
-            el = elm.Element().label(f"${label_text}$").right().at(fallback_anchor)
-            d.add(el)
-            return el
+            el_obj = elm.Element().label(f"${label_text}$").right().at(fallback_anchor)
+            d.add(el_obj); return el_obj
 
-    # ── 并联分支绘制 ────────────────────────────────────────
+    # ── 并联分支绘制 ──────────────────────────────────
 
     def _draw_parallel(self, branches: list, comp_map: dict,
-                       named: dict, last, d, elm, direction: str) -> object:
-        """绘制并联分支组，返回汇合后的 last 元件。"""
-        if not last:
-            last = elm.Line()
-            d.add(last)
-
+                       named: dict, last, d, elm, direction: str,
+                       valid_names_str: str):
+        if not last: last = elm.Line(); d.add(last)
         split_point = last.end
         d.add(elm.Dot().at(split_point))
-
         branch_ends = []
 
         for bi, branch_str in enumerate(branches):
             branch_comps = [c.strip() for c in branch_str.split("->") if c.strip()]
             if bi == 0:
                 draw_dir = getattr(elm, direction)
-                first_line = draw_dir().at(split_point)
-                d.add(first_line)
+                first_line = draw_dir().at(split_point); d.add(first_line)
                 br_last = first_line
                 for comp_str in branch_comps:
                     n, v, lbl, node_name, comp_anchor = self._parse_comp(comp_str)
-                    br_last = self._place_component(
-                        n, v, lbl, br_last, d, elm, comp_map, direction, comp_anchor)
-                    if node_name:
-                        named[node_name] = br_last
-                branch_ends.append(br_last.end)
-                last = br_last
+                    br_last = self._place_component(n, v, lbl, br_last, d, elm, comp_map, direction, comp_anchor, valid_names_str)
+                    if node_name: named[node_name] = br_last
+                branch_ends.append(br_last.end); last = br_last
             else:
                 offset = 0.6 * bi
-                d.add(elm.Line().at(split_point).up(offset))
-                d.add(elm.Dot())
+                d.add(elm.Line().at(split_point).up(offset)); d.add(elm.Dot())
                 draw_dir = getattr(elm, direction)
-                br_start = draw_dir()
-                d.add(br_start)
+                br_start = draw_dir(); d.add(br_start)
                 br_last = br_start
                 for comp_str in branch_comps:
                     n, v, lbl, node_name, comp_anchor = self._parse_comp(comp_str)
-                    br_last = self._place_component(
-                        n, v, lbl, br_last, d, elm, comp_map, direction, comp_anchor)
-                    if node_name:
-                        named[node_name] = br_last
+                    br_last = self._place_component(n, v, lbl, br_last, d, elm, comp_map, direction, comp_anchor, valid_names_str)
+                    if node_name: named[node_name] = br_last
                 branch_ends.append(br_last.end)
-                d.add(elm.Line().down(offset))
-                d.add(elm.Dot())
+                d.add(elm.Line().down(offset)); d.add(elm.Dot())
 
         if len(branch_ends) > 1:
             max_x = max(pt[0] for pt in branch_ends)
             main_y = branch_ends[0][1]
             join_point = (max_x + 0.5, main_y)
             for bi, end_pt in enumerate(branch_ends):
-                if bi > 0:
-                    d.add(elm.Line().at(end_pt).to(join_point))
+                if bi > 0: d.add(elm.Line().at(end_pt).to(join_point))
             d.add(elm.Dot().at(join_point))
             draw_dir = getattr(elm, direction)
-            last_line = draw_dir().at(join_point)
-            d.add(last_line)
+            last_line = draw_dir().at(join_point); d.add(last_line)
             last = last_line
-
         return last
 
-    # ── 辅助 ─────────────────────────────────────────────────
+    # ── 辅助 ───────────────────────────────────────────
 
     @staticmethod
     def _get_ac_source(elm):
-        """获取 AC 正弦源元件，兼容不同版本的 schemdraw。"""
-        try:
-            return elm.SourceSin
+        try: return elm.SourceSin
         except AttributeError:
             try:
                 from schemdraw.elements.sources import SourceSin
                 return SourceSin
-            except ImportError:
-                return elm.SourceV
+            except ImportError: return elm.SourceV
