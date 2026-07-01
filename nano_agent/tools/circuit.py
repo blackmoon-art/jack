@@ -528,6 +528,23 @@ class Circuit:
         try: return elm.Box().label(label_text)
         except AttributeError: return elm.Line().label(f"[{label_text}]")
 
+    # IEEE 逻辑门符号映射
+    _GATE_LABELS = {
+        "and_gate": "AND", "nand_gate": "NAND",
+        "or_gate": "OR", "nor_gate": "NOR",
+        "xor_gate": "XOR", "xnor_gate": "XNOR",
+        "not_gate": "NOT", "buffer": "BUF",
+    }
+
+    @classmethod
+    def _make_gate(cls, name: str, label: str, elm):
+        """绘制逻辑门符号（纯文本标签，XML 安全）。"""
+        gate_label = label if label else cls._GATE_LABELS.get(name, name.upper())
+        try:
+            return elm.Box().label(gate_label)
+        except AttributeError:
+            return elm.Line().label(f"[{gate_label}]")
+
     @staticmethod
     def _get_anchor(last, anchor: str = "end"):
         try: return getattr(last, anchor)
@@ -550,9 +567,13 @@ class Circuit:
 
         try:
             if comp_cls == _BLOCK_FACTORY:
-                box_label = value if value else name.upper()
-                box_label = box_label.replace("_", " ").title()
-                box = self._make_box(box_label, elm)
+                # 逻辑门用专用 IEEE 符号，其他框图元件用普通方框
+                if name in self._GATE_LABELS:
+                    box = self._make_gate(name, value, elm)
+                else:
+                    box_label = value if value else name.upper()
+                    box_label = box_label.replace("_", " ").title()
+                    box = self._make_box(box_label, elm)
                 if direction != "right":
                     dir_method = getattr(box, direction, None)
                     if dir_method is not None:
