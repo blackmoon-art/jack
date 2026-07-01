@@ -306,30 +306,30 @@ class LogicSVG:
                 "stroke": self.COLORS["gate_stroke"], "stroke-width": "1.5",
             })
         elif shape == "or":
-            # Shield shape
+            # Shield shape — 输入(左)隆起，输出(右)尖锐
             r = self.W * 0.6
-            d = (f"M{x + self.W * 0.15},{y} "
-                 f"Q{x + self.W},{y} {x + self.W * 0.15},{cy} "
-                 f"Q{x + self.W},{y + self.H} {x + self.W * 0.15},{y + self.H} "
-                 f"Q{x - r},{cy} {x + self.W * 0.15},{y} Z")
+            d = (f"M{x + self.W * 0.85},{y} "
+                 f"Q{x},{y} {x + self.W * 0.85},{cy} "
+                 f"Q{x},{y + self.H} {x + self.W * 0.85},{y + self.H} "
+                 f"Q{x + self.W + r},{cy} {x + self.W * 0.85},{y} Z")
             ET.SubElement(g, "path", {
                 "d": d, "fill": self.COLORS["gate_fill"],
                 "stroke": self.COLORS["gate_stroke"], "stroke-width": "1.5",
             })
         elif shape == "xor":
-            # OR + extra input curve
+            # OR-like + 额外输入弧线
             r = self.W * 0.6
-            d = (f"M{x + self.W * 0.25},{y} "
-                 f"Q{x + self.W},{y} {x + self.W * 0.15},{cy} "
-                 f"Q{x + self.W},{y + self.H} {x + self.W * 0.25},{y + self.H} "
-                 f"Q{x - r},{cy} {x + self.W * 0.25},{y} Z")
+            d = (f"M{x + self.W * 0.75},{y} "
+                 f"Q{x},{y} {x + self.W * 0.85},{cy} "
+                 f"Q{x},{y + self.H} {x + self.W * 0.75},{y + self.H} "
+                 f"Q{x + self.W + r},{cy} {x + self.W * 0.75},{y} Z")
             ET.SubElement(g, "path", {
                 "d": d, "fill": self.COLORS["gate_fill"],
                 "stroke": self.COLORS["gate_stroke"], "stroke-width": "1.5",
             })
-            # Extra XOR curve
-            ed = (f"M{x + self.W * 0.1},{y} "
-                  f"Q{x - r * 0.7},{cy} {x + self.W * 0.1},{y + self.H}")
+            # Extra XOR curve on input side
+            ed = (f"M{x + self.W * 0.9},{y} "
+                  f"Q{x + self.W + r * 0.7},{cy} {x + self.W * 0.9},{y + self.H}")
             ET.SubElement(g, "path", {
                 "d": ed, "fill": "none",
                 "stroke": self.COLORS["gate_stroke"], "stroke-width": "1.2",
