@@ -40,6 +40,7 @@ logger = logging.getLogger("nano_agent.tools.circuit")
 
 # ── 合法元件名（公开给 LLM）─────────────────────────────
 _VALID_COMPONENT_NAMES = (
+    # 基础无源元件
     "ac", "v", "battery", "source", "signal",
     "resistor", "r",
     "capacitor", "c",
@@ -49,9 +50,18 @@ _VALID_COMPONENT_NAMES = (
     "switch", "spst",
     "ground", "gnd",
     "antenna",
+    # 有源元件
     "opamp",
     "transistor", "npn", "pnp",
     "isource", "current_source",
+    # 信号处理框图元件 (方块图/系统框图)
+    "mixer", "lna", "amp", "amplifier",
+    "adc", "dac",
+    "oscillator", "lo",
+    "filter_box", "filter",
+    "block", "port", "terminal",
+    "combiner", "splitter", "rf",
+    # 连接 / 装饰
     "fuse", "lamp", "motor", "speaker", "microphone",
     "line", "wire", "open", "dot",
 )
@@ -60,6 +70,7 @@ _VALID_NAMES_STR = ", ".join(sorted(set(_VALID_COMPONENT_NAMES)))
 
 # ── 方向伪元件 ────────────────────────────────────────
 _DIRECTIONS = {"up", "down", "left", "right"}
+_BLOCK_FACTORY = "__block__"  # sentinel for block diagram box elements
 
 
 class _AnchorRef:
@@ -71,11 +82,12 @@ class _AnchorRef:
 class Circuit:
     TOOLS = [
         ("draw_circuit",
-         "Draw professional circuit diagrams with proper electrical symbols. "
-         "For: circuit schematics, electronic diagrams, filter circuits, "
-         "differential amplifiers, wiring layouts.\n"
+         "Draw professional circuit diagrams and signal-processing block diagrams. "
+         "For: circuit schematics, filter circuits, differential amplifiers, "
+         "RF/signal chains (block diagrams), wiring layouts.\n"
          "\n"
          "**Valid components:** " + _VALID_NAMES_STR + "\n"
+         "Block-diagram elements (LNA, mixer, ADC, amp, filter_box, etc.) draw as labeled boxes.\n"
          "Numbered variants (r1, c2, led1, etc.) auto-match to base names.\n"
          "\n"
          "**Syntax:**\n"
@@ -84,7 +96,6 @@ class Circuit:
          "- Named nodes: `comp(val) as N1`\n"
          "- Multi-chain: `chain1 ; chain2`\n"
          "- Anchor refs: `N1.emitter -> ...` or `comp@base`\n"
-         "  (npn anchors: base/emitter/collector; opamp: in1/in2/out/vdd/vss; all: start/end)\n"
          "- Direction: `up`, `down` change direction; `right` restores default\n"
          "\n"
          "**Filter example:**\n"
@@ -96,15 +107,21 @@ class Circuit:
          "q1.emitter -> down -> isource(1mA) -> ground ; "
          "q1.collector -> up -> resistor(10k) as rc1 -> line -> v(VCC) ; "
          "q2.collector -> up -> resistor(10k) as rc2 -> line -> v(VCC) ; "
-         "rc1.end -> wire -> rc2.end`",
+         "rc1.end -> wire -> rc2.end`\n"
+         "\n"
+         "**Signal chain block diagram (e.g. FMCW radar IF):**\n"
+         "`rf(RF_in) -> lna(LNA) -> mixer as m1 ; "
+         "lo(f0) -> down -> m1 ; "
+         "m1 -> amp(IF_Amp) -> filter_box(LPF) -> adc(ADC) -> port(DSP)`",
          "draw_circuit",
          {"description": {"type": "string",
                           "description":
-                          "Circuit description. See tool description for full syntax. "
+                          "Circuit or block diagram description. "
                           "Valid names: " + _VALID_NAMES_STR + ". "
-                          "Anchors for npn: base/emitter/collector; opamp: in1/in2/out. "
-                          "Directions: up/down/left/right. "
-                          "Filter: 'ac(Vin) -> r(1k) as n1 -> c(10n) -> ground ; n1 -> line -> open(Vout)'"},
+                          "Block elements (mixer,lna,amp,adc,filter_box etc) auto-draw as labeled boxes. "
+                          "Series with '->', parallel with '[b1,b2]', named nodes with 'as N1', "
+                          "multi-chain with ';', directions with up/down/left/right. "
+                          "Signal chain: 'rf(In) -> lna(LNA) -> mixer as m1 ; lo(f0) -> m1 ; m1 -> filter_box(LPF) -> adc(ADC) -> port(Out)'"},
           "title": {"type": "string", "description": "Circuit title (optional)"}},
          ["description"]),
     ]
@@ -171,6 +188,7 @@ class Circuit:
                 d.config(fontsize=14)
 
             comp_map = {
+                # 基础元件
                 "battery": (elm.Battery, {}),
                 "v": (elm.SourceV, {}),
                 "source": (elm.SourceV, {}),
@@ -190,12 +208,31 @@ class Circuit:
                 "ground": (elm.Ground, {}),
                 "gnd": (elm.Ground, {}),
                 "antenna": (elm.Antenna, {}),
+                # 有源元件
                 "opamp": (elm.Opamp, {}),
                 "transistor": (elm.BjtNpn, {}),
                 "npn": (elm.BjtNpn, {}),
                 "pnp": (elm.BjtPnp, {}),
                 "isource": (elm.SourceI, {}),
                 "current_source": (elm.SourceI, {}),
+                # 信号处理框图元件 (BLOCK_FACTORY sentinel → _make_box)
+                "mixer":       (_BLOCK_FACTORY, {}),
+                "lna":         (_BLOCK_FACTORY, {}),
+                "amp":         (_BLOCK_FACTORY, {}),
+                "amplifier":   (_BLOCK_FACTORY, {}),
+                "adc":         (_BLOCK_FACTORY, {}),
+                "dac":         (_BLOCK_FACTORY, {}),
+                "oscillator":  (_BLOCK_FACTORY, {}),
+                "lo":          (_BLOCK_FACTORY, {}),
+                "filter_box":  (_BLOCK_FACTORY, {}),
+                "filter":      (_BLOCK_FACTORY, {}),
+                "block":       (_BLOCK_FACTORY, {}),
+                "port":        (_BLOCK_FACTORY, {}),
+                "terminal":    (_BLOCK_FACTORY, {}),
+                "combiner":    (_BLOCK_FACTORY, {}),
+                "splitter":    (_BLOCK_FACTORY, {}),
+                "rf":          (_BLOCK_FACTORY, {}),
+                # 连接 / 装饰
                 "fuse": (elm.Fuse, {}),
                 "lamp": (elm.Lamp, {}),
                 "motor": (elm.Motor, {}),
@@ -439,12 +476,23 @@ class Circuit:
     # ── 元件放置 ────────────────────────────────────────────
 
     @staticmethod
+    def _make_box(label_text: str, elm):
+        """创建框图方块元件。尝试 schemdraw Box，回退到带标签的线。"""
+        try:
+            return elm.Box().label(label_text)
+        except AttributeError:
+            return elm.Line().label(f"[{label_text}]")
+
+    @staticmethod
     def _get_anchor(last, anchor: str = "end"):
-        """安全获取元件的锚点。晶体管等多元件没有 .end，回退到 .center。"""
+        """安全获取元件的锚点。回退链：anchor → center → (0,0)。"""
         try:
             return getattr(last, anchor)
         except AttributeError:
-            return last.center  # fallback for multi-terminal elements
+            try:
+                return last.center
+            except AttributeError:
+                return (0, 0)
 
     def _place_component(self, name: str, value: str, label_text: str,
                          last, d, elm, comp_map: dict,
@@ -460,12 +508,19 @@ class Circuit:
 
         kwargs = dict(kwargs)
         if value:
-            if name == "open":
-                kwargs["label"] = value if value else "○"
-            else:
-                kwargs["label"] = value
+            kwargs["label"] = value
 
         try:
+            # 框图元件：用 _make_box 创建带标签方块
+            if comp_cls == _BLOCK_FACTORY:
+                box_label = value if value else name.upper()
+                box_label = box_label.replace("_", " ").title()
+                box = self._make_box(box_label, elm)
+                if last is not None:
+                    box = box.at(self._get_anchor(last))
+                d.add(box)
+                return box
+
             if last is None:
                 el = comp_cls(**kwargs)
             elif name in ("ground", "gnd"):
