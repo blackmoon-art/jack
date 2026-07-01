@@ -397,6 +397,14 @@ class Circuit:
 
     # ── 元件放置 ────────────────────────────────────────────
 
+    @staticmethod
+    def _get_anchor(last, anchor: str = "end"):
+        """安全获取元件的锚点。晶体管等多元件没有 .end，回退到 .center。"""
+        try:
+            return getattr(last, anchor)
+        except AttributeError:
+            return last.center  # fallback for multi-terminal elements
+
     def _place_component(self, name: str, value: str, label_text: str,
                          last, d, elm, comp_map: dict,
                          direction: str = "right",
@@ -420,10 +428,10 @@ class Circuit:
             if last is None:
                 el = comp_cls(**kwargs)
             elif name in ("ground", "gnd"):
-                el = comp_cls(**kwargs).at(last.end)
+                el = comp_cls(**kwargs).at(self._get_anchor(last))
             elif comp_anchor:
                 # @anchor: 以指定锚点连接到 last
-                el = comp_cls(**kwargs).anchor(comp_anchor).at(last.end)
+                el = comp_cls(**kwargs).anchor(comp_anchor).at(self._get_anchor(last))
             else:
                 el = comp_cls(**kwargs)
                 # 把方向应用到元件自身，而不是创建新的方向线段
@@ -432,13 +440,13 @@ class Circuit:
                     dir_method = getattr(el, direction, None)
                     if dir_method is not None:
                         el = dir_method()
-                el = el.at(last.end)
+                el = el.at(self._get_anchor(last))
             d.add(el)
             return el
         except Exception as e:
             logger.warning(f"Failed to add {name}: {e}")
-            el = elm.Element().label(f"${label_text}$").right().at(
-                last.end if last else (0, 0))
+            fallback_anchor = self._get_anchor(last) if last else (0, 0)
+            el = elm.Element().label(f"${label_text}$").right().at(fallback_anchor)
             d.add(el)
             return el
 
