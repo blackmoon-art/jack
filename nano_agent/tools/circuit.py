@@ -188,11 +188,11 @@ class Circuit:
          "m1 -> amp(IF_Amp) -> filter_box(LPF) -> adc(ADC) -> port(DSP)`\n"
          "\n"
          "**Async FIFO:**\n"
-         "`port(wr_clk) -> counter(WrPtr) -> gray_code(WrGray) ; "
-         "port(rd_clk) -> counter(RdPtr) -> gray_code(RdGray) ; "
+         "`port(wr_clk) -> counter(WrPtr) -> gray_code as WrGray ; "
+         "port(rd_clk) -> counter(RdPtr) -> gray_code as RdGray ; "
          "port(wr_data) -> ram(DPRAM) ; "
          "WrGray -> dff(Sync1) -> dff(Sync2) as synced ; "
-         "synced -> comparator -> port(empty)`",
+         "synced -> comparator(CMP) -> port(empty)`",
          "draw_block",
          {"description": {"type": "string",
                           "description":
@@ -440,7 +440,8 @@ class Circuit:
                 return last, direction
 
         # 链首：命名节点引用（可带锚点）
-        first_token = chain_desc.split()[0] if chain_desc else ""
+        # 先按 -> 或空格分割取第一个 token，处理无空格箭头如 q1.emitter->line
+        first_token = chain_desc.split("->")[0].strip().split()[0] if chain_desc else ""
         ref_obj, ref_token = self._parse_node_ref(first_token, named)
         if ref_obj is not None:
             last = ref_obj

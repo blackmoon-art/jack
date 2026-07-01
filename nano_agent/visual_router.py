@@ -126,10 +126,12 @@ _EXACT_ROUTES: list[tuple[str, str, dict]] = [
      "draw_digital", {}),
     # 模拟电路
     ("模拟电路|analog.*circuit|"
-     "滤波器|filter.*circuit|运放电路|放大电路|有源滤波|无源滤波|"
+     "滤波器|filter.*circuit|运放|运放电路|放大电路|有源滤波|无源滤波|"
+     "sallen.key|multiple.feedback|状态变量|biquad|"
      "低通|高通|带通|带阻|频率响应|"
      "差分放大|差分对|diff.*pair|differential.*amp|"
-     "rc.*filter|lc.*filter|rlc|passive.*filter|active.*filter",
+     "rc.*filter|lc.*filter|rlc|passive.*filter|active.*filter|"
+     "low.pass|high.pass|band.pass|lowpass|highpass",
      "draw_analog", {}),
     # 系统框图 / 信号链 (RF、混合信号等)
     ("系统框图|block.*diagram|信号链|signal.*chain|rf.*chain|"
