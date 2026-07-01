@@ -40,8 +40,11 @@ def _env_int(key: str, default: int) -> int:
         return default
 
 
-def _env_bool(key: str) -> bool:
-    return _env(key, "").lower() in ("1", "true", "yes")
+def _env_bool(key: str, default: bool = False) -> bool:
+    val = _env(key, "").lower()
+    if not val:
+        return default
+    return val in ("1", "true", "yes")
 
 
 @dataclass
@@ -80,7 +83,8 @@ class Config:
     max_tokens: int = field(default_factory=lambda: _env_int("AGENT_MAX_TOKENS", 8000))
     agent_timeout: int = field(default_factory=lambda: _env_int("AGENT_TIMEOUT", 300))
     chart_verify: bool = field(default_factory=lambda: _env_bool("AGENT_CHART_VERIFY"))
-    enable_circuit: bool = field(default_factory=lambda: _env_bool("AGENT_ENABLE_CIRCUIT"))
+    enable_analog_circuit: bool = field(default_factory=lambda: _env_bool("AGENT_ENABLE_ANALOG_CIRCUIT", True))
+    enable_digital_circuit: bool = field(default_factory=lambda: _env_bool("AGENT_ENABLE_DIGITAL_CIRCUIT"))
     bash_timeout: int = field(default_factory=lambda: _env_int("AGENT_BASH_TIMEOUT", 120))
     work_dir: str = field(default_factory=lambda: _env("AGENT_WORK_DIR", str(Path.cwd())))
     charts_dir: str = field(default_factory=lambda: _env(

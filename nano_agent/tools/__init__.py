@@ -61,7 +61,8 @@ class ToolRegistry:
                  public_mode: bool = False,
                  bash_output_limit: int = 50000,
                  fetch_max_chars: int = 8000,
-                 enable_circuit: bool = False):
+                 enable_analog_circuit: bool = True,
+                 enable_digital_circuit: bool = False):
         self.sandbox = PathSandbox(work_dir)
         self.bash_timeout = bash_timeout
         self.work_dir = work_dir
@@ -80,7 +81,9 @@ class ToolRegistry:
         self._chart = Chart(work_dir, charts_dir=charts_dir)
         self._diagram = Diagram(work_dir, charts_dir=charts_dir)
         self._ai_image = AIImage(work_dir, charts_dir=charts_dir)
-        self._circuit = Circuit(work_dir, charts_dir=charts_dir) if enable_circuit else None
+        self._circuit = Circuit(work_dir, charts_dir=charts_dir)
+        self._enable_analog = enable_analog_circuit
+        self._enable_digital = enable_digital_circuit
         self._image_analyze = ImageAnalyzer(work_dir)
         self._document_parse = DocumentParser(work_dir)
 
@@ -106,6 +109,14 @@ class ToolRegistry:
             else:
                 tools_def = getattr(cls, 'TOOLS', [])
             for name, desc, method_name, properties, required in tools_def:
+                # 电路工具按类型过滤
+                if attr_name == "_circuit":
+                    if name == "draw_digital" and not self._enable_digital:
+                        continue
+                    if name == "draw_analog" and not self._enable_analog:
+                        continue
+                    if name == "draw_block" and not self._enable_analog:
+                        continue
                 func = getattr(instance, method_name)
                 self._register(name, desc, func, properties, required=required)
 
