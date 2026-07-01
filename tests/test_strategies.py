@@ -41,6 +41,19 @@ class MockLLM:
             return resp
         return dict(self._default)
 
+    def chat_json_with_retry(self, messages, max_retries=2, system="",
+                              model=None, tools=None):
+        """委托给 chat() + clean_json_response()，与 LLM.chat_json_with_retry 行为一致。"""
+        for attempt in range(max_retries + 1):
+            response = self.chat(messages=messages, tools=tools or [], system=system,
+                                  model=model)
+            text = self.clean_json_response(response["text"])
+            try:
+                return json.loads(text)
+            except json.JSONDecodeError:
+                if attempt >= max_retries:
+                    return None
+
     @staticmethod
     def clean_json_response(text: str) -> str:
         """清理 markdown 代码块包裹。"""

@@ -11,7 +11,6 @@ Default 策略 — 标准 agent loop，带流式快速路径。
 
 import json
 import logging
-from typing import Optional
 
 from ..config import Config
 from ..llm import LLM
@@ -104,7 +103,7 @@ class DefaultStrategy(BaseStrategy):
         )
 
     def _stream_to_first_decision(self, messages: list, system_prompt: str,
-                                  schemas: list) -> tuple[str, Optional[list], str]:
+                                  schemas: list) -> tuple[str, list | None, str]:
         """流式调用 LLM，边生成边推送。返回 (累积文本, tool_calls 或 None, reasoning_content)。"""
         full_text = ""
         reasoning = ""

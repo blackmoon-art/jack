@@ -96,12 +96,12 @@ _init_db()
 def db_save_message(session_id: str, role: str, content: str):
     """持久化一条消息到 SQLite。"""
     try:
-        with _get_db() as conn:
-            conn.execute(
-                "INSERT INTO session_history (session_id, role, content) VALUES (?, ?, ?)",
-                (session_id, role, content),
-            )
-            conn.commit()
+        conn = _get_db()
+        conn.execute(
+            "INSERT INTO session_history (session_id, role, content) VALUES (?, ?, ?)",
+            (session_id, role, content),
+        )
+        conn.commit()
     except Exception as e:
         logger.warning(f"Failed to save session message: {e}")
 

@@ -1,6 +1,8 @@
 """高级图表: heatmap, radar, bubble, function, regression, wireframe, waveform, contour。"""
 
+import ast
 import logging
+import operator as _op
 import re
 
 import matplotlib.pyplot as plt
@@ -9,38 +11,66 @@ import numpy as np
 logger = logging.getLogger("nano_agent.tools.chart.advanced")
 
 
-# ── eval 安全沙箱 ───────────────────────────────────────
-# 禁止模式：任何包含这些字符串的表达式都会被拒绝
-# 这是唯一数据源，draw_function 和 _safe_eval_2d 共用
-_FORBIDDEN = (
-    "__", "import ", "exec", "eval", "compile", "open(",
-    "getattr", "setattr", "globals", "locals", "vars",
-    "dir(", "type(", "breakpoint", "input(", "class",
-    "subclass", "mro", "builtin", "system", "popen",
-    "os.", "sys.", "subprocess", "__import__",
-    "pdb", "code", "inspect", "ctypes", "signal",
-)
+# ── 安全数学表达式求值器 (AST-based, 替代 eval) ──────────
 
-def _check_forbidden(expr: str) -> str:
-    """检查表达式是否包含禁止模式。通过返回空字符串，否则返回错误信息。"""
-    expr_lower = expr.lower()
-    for kw in _FORBIDDEN:
-        if kw in expr_lower:
-            return f"Forbidden pattern '{kw}' in expression"
-    return ""
+def _safe_eval_math(expr_str: str, namespace: dict):
+    """用 ast.parse 安全求值数学表达式。只允许已知的运算符、函数和变量。
+
+    支持的语法:
+      - 字面量: 数字 (int/float)
+      - 变量:   Name 节点（必须在 namespace 中已存在）
+      - 运算符: +, -, *, /, **, 一元 +/-
+      - 函数调用: 只允许 namespace 中的可调用对象
+      - 不允许: 属性访问, 下标, 比较, 布尔, 推导式等
+    """
+
+    _BINOPS = {
+        ast.Add: _op.add, ast.Sub: _op.sub, ast.Mult: _op.mul,
+        ast.Div: _op.truediv, ast.Pow: _op.pow,
+    }
+    _UNOPS = {ast.USub: _op.neg, ast.UAdd: _op.pos}
+
+    def _eval(node):
+        if isinstance(node, ast.Constant):
+            return node.value
+        if isinstance(node, ast.Name):
+            if node.id in namespace:
+                return namespace[node.id]
+            raise NameError(f"name '{node.id}' is not defined")
+        if isinstance(node, ast.BinOp):
+            left = _eval(node.left)
+            right = _eval(node.right)
+            op_cls = type(node.op)
+            if op_cls not in _BINOPS:
+                raise ValueError(f"Unsupported operator: {op_cls.__name__}")
+            return _BINOPS[op_cls](left, right)
+        if isinstance(node, ast.UnaryOp):
+            operand = _eval(node.operand)
+            op_cls = type(node.op)
+            if op_cls not in _UNOPS:
+                raise ValueError(f"Unsupported unary: {op_cls.__name__}")
+            return _UNOPS[op_cls](operand)
+        if isinstance(node, ast.Call):
+            func = _eval(node.func)
+            if not callable(func):
+                raise ValueError(f"'{type(func).__name__}' is not callable")
+            args = [_eval(a) for a in node.args]
+            if node.keywords:
+                raise ValueError("Keyword arguments not allowed")
+            return func(*args)
+        if isinstance(node, ast.Expression):
+            return _eval(node.body)
+        raise ValueError(f"Unsupported expression element: {type(node).__name__}")
+
+    try:
+        tree = ast.parse(expr_str.strip(), mode="eval")
+        return _eval(tree)
+    except Exception:
+        raise  # re-raise for caller to handle
 
 
 class AdvancedCharts:
     """高级图表绘制 — 热力图、雷达、气泡、函数、回归、3D、波形。"""
-
-    @staticmethod
-    def _extract_xy(data_sets, label_sets):
-        if label_sets and label_sets[0] and label_sets[0][0].strip().lower() == "x":
-            x_vals = [float(v) for v in data_sets[0]]
-            y_sets = data_sets[1:]
-            y_labels = label_sets[1:]
-            return x_vals, y_sets, y_labels
-        return None, data_sets, label_sets
 
     @staticmethod
     def draw_heatmap(ax, data_sets, label_sets, is_dark=True):
@@ -148,9 +178,6 @@ class AdvancedCharts:
             expr = expr.replace("^", "**")
             expr = re.sub(r"(\d)([a-zA-Z])", r"\1*\2", expr)
             expr = re.sub(r"(\d)\*([eE])(\d)", r"\1\2\3", expr)  # 修复科学计数法
-            err = _check_forbidden(expr)
-            if err:
-                raise ValueError(err)
             # 自动补全 np. 前缀 → 裸函数名
             for fn in ("sin", "cos", "tan", "exp", "log", "sqrt", "abs"):
                 expr = expr.replace(f"np.{fn}", fn)
@@ -167,8 +194,7 @@ class AdvancedCharts:
 
         x = np.linspace(x_range[0], x_range[1], 500)
 
-        # 安全沙箱：只暴露纯数值函数，不暴露 np 模块
-        safe_globals = {"__builtins__": {}}
+        # 安全沙箱：只暴露纯数值函数和变量
         ns = {"x": x, "sin": np.sin, "cos": np.cos, "tan": np.tan,
               "exp": np.exp, "log": np.log, "sqrt": np.sqrt, "abs": np.abs,
               "pi": np.pi, "e": np.e}
@@ -176,7 +202,7 @@ class AdvancedCharts:
         has_error = False
         for i, expr in enumerate(exprs):
             try:
-                y = eval(expr, safe_globals, ns)
+                y = _safe_eval_math(expr, ns)
             except Exception as e:
                 logger.warning(f"Function eval failed for '{expr}': {e}")
                 if not has_error:
@@ -311,9 +337,134 @@ class AdvancedCharts:
         ax.set_xlabel("x", color=fg)
         ax.set_ylabel("y", color=fg)
 
+    # ── 预定义 3D 形状 ────────────────────────────────────
+
+    _SHAPE_NAMES: set[str] = {
+        "cube", "sphere", "torus", "cone", "cylinder",
+        "paraboloid", "saddle", "ripple", "helix", "mobius",
+        "heart", "hyperboloid",
+    }
+
+    @classmethod
+    def _generate_shape_mesh(cls, shape: str, resolution: int = 80):
+        """生成预定义 3D 形状的网格数据 (X, Y, Z)。"""
+        res = resolution
+        if shape == "sphere":
+            theta = np.linspace(0, np.pi, res)
+            phi = np.linspace(0, 2 * np.pi, res)
+            T, P = np.meshgrid(theta, phi)
+            r = 1
+            X = r * np.sin(T) * np.cos(P)
+            Y = r * np.sin(T) * np.sin(P)
+            Z = r * np.cos(T)
+        elif shape == "torus":
+            theta = np.linspace(0, 2 * np.pi, res)
+            phi = np.linspace(0, 2 * np.pi, res)
+            T, P = np.meshgrid(theta, phi)
+            R, r = 2.0, 0.6
+            X = (R + r * np.cos(P)) * np.cos(T)
+            Y = (R + r * np.cos(P)) * np.sin(T)
+            Z = r * np.sin(P)
+        elif shape == "cone":
+            h = np.linspace(0, 2, res)
+            theta = np.linspace(0, 2 * np.pi, res)
+            H, T = np.meshgrid(h, theta)
+            r = 1 - H / 2
+            X = r * np.cos(T)
+            Y = r * np.sin(T)
+            Z = H
+        elif shape == "cylinder":
+            h = np.linspace(0, 2, res)
+            theta = np.linspace(0, 2 * np.pi, res)
+            H, T = np.meshgrid(h, theta)
+            X = np.cos(T)
+            Y = np.sin(T)
+            Z = H
+        elif shape == "helix":
+            t = np.linspace(0, 4 * np.pi, res * 2)
+            r = np.linspace(0.2, 0.2, res)
+            T, R = np.meshgrid(t, r)
+            X = R * np.cos(T)
+            Y = R * np.sin(T)
+            Z = T / (2 * np.pi)
+        elif shape == "hyperboloid":
+            u = np.linspace(-1.5, 1.5, res)
+            v = np.linspace(0, 2 * np.pi, res)
+            U, V = np.meshgrid(u, v)
+            X = np.sqrt(1 + U**2) * np.cos(V)
+            Y = np.sqrt(1 + U**2) * np.sin(V)
+            Z = U
+        elif shape == "heart":
+            u = np.linspace(0, 2 * np.pi, res)
+            v = np.linspace(-1, 1, res)
+            U, V = np.meshgrid(u, v)
+            X = 16 * np.sin(U)**3
+            Y = 13 * np.cos(U) - 5 * np.cos(2*U) - 2 * np.cos(3*U) - np.cos(4*U)
+            Z = V * 5
+            X, Y, Z = X / 10, Y / 10, Z / 5
+        else:
+            # cube / paraboloid / saddle / ripple / mobius
+            x = np.linspace(-2, 2, res)
+            y = np.linspace(-2, 2, res)
+            X, Y = np.meshgrid(x, y)
+            if shape == "paraboloid":
+                Z = X**2 + Y**2
+            elif shape == "saddle":
+                Z = X**2 - Y**2
+            elif shape == "ripple":
+                R = np.sqrt(X**2 + Y**2)
+                Z = np.sin(R * 3) / (R + 0.5)
+            elif shape == "mobius":
+                u = np.linspace(0, 2 * np.pi, res)
+                v = np.linspace(-0.5, 0.5, res)
+                U, V = np.meshgrid(u, v)
+                X = (1 + V * np.cos(U/2)) * np.cos(U)
+                Y = (1 + V * np.cos(U/2)) * np.sin(U)
+                Z = V * np.sin(U/2)
+            elif shape == "cube":
+                # cube as surface formula: (x^10 + y^10 + z^10)^(1/10) = 1
+                # approximate with smooth cube
+                X, Y = np.meshgrid(x, y)
+                Z = np.ones_like(X)  # top face
+                X, Y, Z = X, Y, Z  # placeholder — cube is special
+                # Actually, cube is better as wireframe; for surface, use rounded cube
+                p = 10
+                Z = (1 - np.abs(X)**p - np.abs(Y)**p) ** (1/p)
+                Z = np.nan_to_num(Z, nan=0)
+                X, Y = X, Y
+                # top half only
+                mask = np.abs(X) <= 1
+                mask &= np.abs(Y) <= 1
+                Z[~mask] = np.nan
+        return X, Y, Z
+
+    @classmethod
+    def _parse_3d_ranges(cls, label_sets, default=(-5.0, 5.0)):
+        """从 label_sets 解析 X/Y 范围。labels='x_min,x_max;y_min,y_max'"""
+        x_range, y_range = list(default), list(default)
+        if label_sets:
+            for i, group in enumerate(label_sets):
+                nums = []
+                for item in group:
+                    try:
+                        nums.append(float(item))
+                    except (ValueError, TypeError):
+                        pass
+                if len(nums) >= 2 and i == 0:
+                    x_range = [nums[0], nums[1]]
+                if len(nums) >= 2 and i == 1:
+                    y_range = [nums[0], nums[1]]
+        return x_range, y_range
+
     @staticmethod
     def draw_wireframe(fig, data, label_sets, is_dark, title):
-        """3D 线框模型 — 立方体、锥体、球体网格等。"""
+        """3D 线框模型 — 预定义形状 / 数学公式 / 边列表。
+
+        data 格式:
+          - 形状名: "sphere", "torus", "cone", "saddle", "paraboloid" 等
+          - 公式:   "sin(sqrt(X**2+Y**2))" → 用 plot_wireframe 渲染
+          - 边列表: "x1,y1,z1;x2,y2,z2;..." (向后兼容)
+        """
         from mpl_toolkits.mplot3d import Axes3D  # noqa: F401
 
         fg = "#e0e0e0" if is_dark else "#333"
@@ -323,22 +474,60 @@ class AdvancedCharts:
         ax.set_facecolor(bg)
         fig.patch.set_facecolor(bg)
 
-        edges_data = data if data else ""
-        if not edges_data.strip():
-            edges_data = (
-                "0,0,0;1,0,0; 1,0,0;1,1,0; 1,1,0;0,1,0; 0,1,0;0,0,0;"
-                "0,0,1;1,0,1; 1,0,1;1,1,1; 1,1,1;0,1,1; 0,1,1;0,0,1;"
-                "0,0,0;0,0,1; 1,0,0;1,0,1; 1,1,0;1,1,1; 0,1,0;0,1,1"
-            )
+        raw = (data or "").strip().lower()
 
-        edges = [e.strip() for e in edges_data.replace("\n", ";").split(";") if e.strip()]
-        for edge in edges:
-            parts = edge.split(",")
-            if len(parts) >= 6:
-                x1, y1, z1 = float(parts[0]), float(parts[1]), float(parts[2])
-                x2, y2, z2 = float(parts[3]), float(parts[4]), float(parts[5])
-                ax.plot([x1, x2], [y1, y2], [z1, z2],
-                        color="#7c3aed", linewidth=2, alpha=0.9)
+        # ── 模式 1: 预定义形状 ──
+        if raw in AdvancedCharts._SHAPE_NAMES:
+            X, Y, Z = AdvancedCharts._generate_shape_mesh(raw)
+            try:
+                ax.plot_wireframe(X, Y, Z, color="#7c3aed", linewidth=0.5, alpha=0.8)
+            except Exception:
+                # fallback: draw as scatter wire
+                for i in range(0, X.shape[0], 4):
+                    ax.plot(X[i, :], Y[i, :], Z[i, :], color="#7c3aed",
+                            linewidth=0.5, alpha=0.7)
+                for j in range(0, X.shape[1], 4):
+                    ax.plot(X[:, j], Y[:, j], Z[:, j], color="#7c3aed",
+                            linewidth=0.5, alpha=0.7)
+            _title = f"{raw.title()} Wireframe"
+            ax.set_title(_title, color=fg, fontsize=13, fontweight="bold")
+
+        # ── 模式 2: 数学公式 → plot_wireframe ──
+        elif raw and any(op in raw for op in ("**", "*", "+", "-", "/", "sin", "cos", "exp", "sqrt", "X", "Y")):
+            x_range, y_range = AdvancedCharts._parse_3d_ranges(label_sets)
+            X, Y = np.meshgrid(
+                np.linspace(x_range[0], x_range[1], 80),
+                np.linspace(y_range[0], y_range[1], 80),
+            )
+            Z = AdvancedCharts._safe_eval_2d(raw, X, Y)
+            if Z is not None:
+                ax.plot_wireframe(X, Y, Z, color="#7c3aed", linewidth=0.5, alpha=0.8)
+                clean = raw.replace("**", "^").replace("*", "")
+                ax.set_title(f"Z = {clean}", color=fg, fontsize=13, fontweight="bold")
+            else:
+                ax.text2D(0.5, 0.5, f"Error evaluating:\n{raw}", transform=ax.transAxes,
+                          ha="center", color=fg, fontsize=11)
+
+        # ── 模式 3: 边列表 (向后兼容) ──
+        else:
+            edges_data = data if data else ""
+            if not edges_data.strip():
+                edges_data = (
+                    "0,0,0;1,0,0; 1,0,0;1,1,0; 1,1,0;0,1,0; 0,1,0;0,0,0;"
+                    "0,0,1;1,0,1; 1,0,1;1,1,1; 1,1,1;0,1,1; 0,1,1;0,0,1;"
+                    "0,0,0;0,0,1; 1,0,0;1,0,1; 1,1,0;1,1,1; 0,1,0;0,1,1"
+                )
+            edges = [e.strip() for e in edges_data.replace("\n", ";").split(";") if e.strip()]
+            for edge in edges:
+                parts = edge.split(",")
+                if len(parts) >= 6:
+                    try:
+                        x1, y1, z1 = float(parts[0]), float(parts[1]), float(parts[2])
+                        x2, y2, z2 = float(parts[3]), float(parts[4]), float(parts[5])
+                        ax.plot([x1, x2], [y1, y2], [z1, z2],
+                                color="#7c3aed", linewidth=2, alpha=0.9)
+                    except ValueError:
+                        pass
 
         try:
             ax.set_box_aspect([1, 1, 1])
@@ -348,6 +537,85 @@ class AdvancedCharts:
         ax.tick_params(colors=fg, labelsize=9)
         ax.set_xlabel("X" if not label_sets else label_sets[0][0] if label_sets[0] else "X",
                       color=fg, fontsize=10)
+        ax.set_ylabel("Y", color=fg, fontsize=10)
+        ax.set_zlabel("Z", color=fg, fontsize=10)
+
+        try:
+            ax.set_proj_type('ortho')
+        except Exception:
+            pass
+
+    # ── 3D 曲面渲染 ─────────────────────────────────────
+
+    @classmethod
+    def draw_surface(cls, fig, data, label_sets, is_dark, title):
+        """3D 曲面渲染 — plot_surface，带光照、颜色映射、colorbar。
+
+        data 格式:
+          - 形状名: "sphere", "torus", "saddle", "heart", "mobius" 等
+          - 数学公式: "sin(sqrt(X**2+Y**2))" → meshgrid + plot_surface
+
+        labels 可指定范围: "x_min,x_max;y_min,y_max" (默认 -5,5)
+        """
+        from mpl_toolkits.mplot3d import Axes3D  # noqa: F401
+
+        fg = "#e0e0e0" if is_dark else "#333"
+        bg = "#1a1a2e" if is_dark else "#fafafa"
+
+        ax = fig.add_subplot(111, projection='3d')
+        ax.set_facecolor(bg)
+        fig.patch.set_facecolor(bg)
+
+        raw = (data or "").strip()
+
+        # ── 模式 1: 预定义形状 ──
+        if raw.lower() in cls._SHAPE_NAMES:
+            X, Y, Z = cls._generate_shape_mesh(raw.lower())
+            surf_title = f"{raw.title()} Surface"
+        # ── 模式 2: 数学公式 ──
+        elif raw:
+            x_range, y_range = cls._parse_3d_ranges(label_sets)
+            X, Y = np.meshgrid(
+                np.linspace(x_range[0], x_range[1], 100),
+                np.linspace(y_range[0], y_range[1], 100),
+            )
+            Z = cls._safe_eval_2d(raw, X, Y)
+            if Z is None:
+                ax.text2D(0.5, 0.5, f"Error evaluating:\n{raw}", transform=ax.transAxes,
+                          ha="center", color=fg, fontsize=11)
+                ax.tick_params(colors=fg, labelsize=9)
+                return
+            surf_title = raw.replace("**", "^").replace("*", "")
+        else:
+            # 默认: 涟漪
+            x = np.linspace(-5, 5, 100)
+            y = np.linspace(-5, 5, 100)
+            X, Y = np.meshgrid(x, y)
+            R = np.sqrt(X**2 + Y**2)
+            Z = np.sin(R) / (R + 0.3)
+            surf_title = "sin(r) / (r + 0.3)"
+
+        # 渲染曲面
+        cmap_name = "viridis" if is_dark else "plasma"
+        try:
+            surf = ax.plot_surface(X, Y, Z, cmap=cmap_name, alpha=0.92,
+                                   linewidth=0, antialiased=True,
+                                   rstride=1, cstride=1)
+            fig.colorbar(surf, ax=ax, shrink=0.5, aspect=12, pad=0.08,
+                         label="Z" if not title else "")
+        except Exception as e:
+            logger.warning(f"plot_surface failed: {e}, falling back to wireframe")
+            ax.plot_wireframe(X, Y, Z, color="#7c3aed", linewidth=0.3, alpha=0.7)
+
+        ax.set_title(title or surf_title, color=fg, fontsize=13, fontweight="bold")
+
+        try:
+            ax.set_box_aspect([1, 1, 1])
+        except Exception:
+            pass
+
+        ax.tick_params(colors=fg, labelsize=9)
+        ax.set_xlabel("X", color=fg, fontsize=10)
         ax.set_ylabel("Y", color=fg, fontsize=10)
         ax.set_zlabel("Z", color=fg, fontsize=10)
 
@@ -538,6 +806,129 @@ class AdvancedCharts:
         ax.spines["right"].set_visible(False)
         ax.grid(True, axis="x", alpha=0.15, color=grid_c)
 
+    # ── 频谱 / FFT ─────────────────────────────────────────
+
+    @staticmethod
+    def draw_spectrum(ax, data_sets, label_sets, is_dark=True):
+        """频谱图 — 对时域信号做 FFT 显示频域幅度谱。
+
+        输入格式 (同 waveform):
+          模拟: data='sine,2,5;square,6,3' (type,freq_hz,amp)
+          数字: data='1,0,1,0,1,0;0,1,0,1' (采样值)
+          混合: data='sine,2,5;1,0,0,1' (模拟+数字自动识别)
+
+        labels[0] 可指定采样率: 'sample_rate' 或数字 (默认 1000 Hz)
+        """
+        fg = "#e0e0e0" if is_dark else "#333"
+        grid_c = "#333333" if is_dark else "#dddddd"
+        colors = ["#7c3aed", "#3b82f6", "#10b981", "#f59e0b", "#ef4444", "#ec4899"]
+        wave_types = {"sine", "square", "triangle", "sawtooth", "sin", "cos"}
+
+        # 采样率：从 labels[0] 提取数字
+        sample_rate = 1000.0
+        if label_sets and label_sets[0]:
+            try:
+                sample_rate = float(label_sets[0][0])
+            except (ValueError, TypeError, IndexError):
+                pass
+
+        # ── 逐通道生成时域信号 → FFT ──
+        max_freq = 0.0
+        spectrum_lines = []  # (freqs, magnitude, label, color)
+
+        for i, ds in enumerate(data_sets):
+            if not ds:
+                continue
+            label = label_sets[i][0] if i < len(label_sets) and label_sets[i] else f"CH{i+1}"
+            first_val = str(ds[0]).strip().lower()
+            n_samples = max(1024, int(sample_rate * 0.5))
+
+            if first_val in wave_types and len(ds) >= 3:
+                # 模拟信号 → 生成时域 → FFT
+                wtype = first_val
+                freq = float(ds[1])
+                amp = float(ds[2])
+                phase_deg = float(ds[3]) if len(ds) > 3 else 0.0
+                phase_rad = np.radians(phase_deg)
+                t = np.linspace(0, n_samples / sample_rate, n_samples, endpoint=False)
+                omega = 2 * np.pi * freq
+
+                if wtype in ("sine", "sin"):
+                    y = amp * np.sin(omega * t + phase_rad)
+                elif wtype == "cos":
+                    y = amp * np.cos(omega * t + phase_rad)
+                elif wtype == "square":
+                    y = amp * np.sign(np.sin(omega * t + phase_rad))
+                elif wtype == "triangle":
+                    y = amp * (2 / np.pi) * np.arcsin(np.sin(omega * t + phase_rad))
+                elif wtype == "sawtooth":
+                    phase_t = (omega * t + phase_rad) / (2 * np.pi)
+                    y = amp * 2 * (phase_t - np.floor(phase_t + 0.5))
+                else:
+                    continue
+                max_freq = max(max_freq, freq)
+            else:
+                # 数字信号 → 采样值
+                samples = []
+                for v in ds:
+                    try:
+                        samples.append(float(v))
+                    except (ValueError, TypeError):
+                        samples.append(0.0)
+                if not samples:
+                    continue
+                n_samples = max(1024, len(samples) * 8)
+                # 上采样（零阶保持）
+                t = np.linspace(0, n_samples / sample_rate, n_samples, endpoint=False)
+                y = np.zeros(n_samples)
+                ratio = n_samples // len(samples)
+                for j, v in enumerate(samples):
+                    start = j * ratio
+                    end = start + ratio
+                    if end > n_samples:
+                        end = n_samples
+                    y[start:end] = v
+                max_freq = max(max_freq, sample_rate / (2 * len(samples)))
+
+            # FFT
+            fft = np.fft.rfft(y)
+            freqs = np.fft.rfftfreq(n_samples, 1.0 / sample_rate)
+            magnitude = np.abs(fft) / n_samples * 2  # 归一化（单边谱）
+            magnitude[0] /= 2  # DC 分量不乘 2
+            spectrum_lines.append((freqs, magnitude, label, colors[i % len(colors)]))
+
+        # ── 绘图 ──
+        for freqs, mag, label, color in spectrum_lines:
+            ax.plot(freqs, mag, color=color, linewidth=1.8, label=label, alpha=0.9)
+
+        # 标注峰值
+        for freqs, mag, label, color in spectrum_lines:
+            if len(freqs) < 3:
+                continue
+            # 找前 5 个峰值
+            peak_indices = []
+            for j in range(1, len(mag) - 1):
+                if mag[j] > mag[j-1] and mag[j] > mag[j+1]:
+                    peak_indices.append((j, mag[j]))
+            peak_indices.sort(key=lambda x: -x[1])
+            for j, m in peak_indices[:5]:
+                if m > mag.max() * 0.15:  # 只标显著峰值
+                    ax.annotate(f"{freqs[j]:.1f}Hz", (freqs[j], m),
+                                textcoords="offset points", xytext=(0, 8),
+                                fontsize=7, color=color, ha="center", alpha=0.8)
+
+        x_max = min(max_freq * 8, sample_rate / 2)
+        ax.set_xlim(0, max(x_max, 10))
+        ax.set_ylim(bottom=0)
+        ax.set_xlabel("Frequency (Hz)", color=fg, fontsize=11)
+        ax.set_ylabel("Magnitude", color=fg, fontsize=11)
+        ax.set_title("Frequency Spectrum (FFT)", color=fg, fontsize=13, fontweight="bold")
+        ax.tick_params(colors=fg)
+        ax.grid(True, alpha=0.15, color=grid_c)
+        if len(spectrum_lines) > 1:
+            ax.legend(facecolor="#1a1a2e" if is_dark else "#f5f5f5",
+                      edgecolor="#444" if is_dark else "#ccc", labelcolor=fg)
+
     # ── 等高线 / 梯度下降 ──────────────────────────────
 
     _SAFE_FUNCTIONS = {
@@ -623,13 +1014,9 @@ class AdvancedCharts:
         # 隐式乘法 XY→X*Y，但不拆分已知函数名 (sin/cos/exp/log/abs/sqrt/tan/pi)
         expr = re.sub(r"(?<![a-zA-Z])([a-zA-Z])([a-zA-Z])(?![a-zA-Z])", r"\1*\2", expr)
         expr = expr.replace("p*i", "pi")  # 保护 pi 常量
-        err = _check_forbidden(expr)
-        if err:
-            logger.warning(err)
-            return None
         ns = {"X": X, "Y": Y, "x": X, "y": Y, **cls._SAFE_FUNCTIONS}
         try:
-            Z = eval(expr, {"__builtins__": {}}, ns)
+            Z = _safe_eval_math(expr, ns)
             return np.asarray(Z, dtype=float)
         except Exception as e:
             logger.warning(f"Contour expression eval failed for '{expr}': {e}")

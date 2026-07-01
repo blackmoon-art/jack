@@ -39,14 +39,12 @@ class Observation:
         return self.result[key]
 
     def __eq__(self, other) -> bool:
-        if isinstance(other, str):
-            return self.result == other
         if isinstance(other, Observation):
-            return self.result == other.result
+            return self.tool_name == other.tool_name and self.result == other.result
         return NotImplemented
 
     def __hash__(self) -> int:
-        return hash(self.result)
+        return hash((self.tool_name, self.result))
 
     def __bool__(self) -> bool:
         return self.success

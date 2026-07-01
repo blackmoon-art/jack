@@ -22,8 +22,9 @@ O-O-D-A 阶段:
 import json
 import logging
 import threading
+import time as _time
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Any, Callable
 
 from .config import Config
 from .llm import LLM
@@ -41,7 +42,7 @@ class Agent:
 
     StrategyFn = Callable[..., str]
 
-    def __init__(self, config: Optional[Config] = None):
+    def __init__(self, config: Config | None = None):
         self.config = config or Config()
         self.llm = LLM(self.config)
         self.tools = ToolRegistry(self.config.work_dir, self.config.bash_timeout,
@@ -60,7 +61,6 @@ class Agent:
                               refl_file, lt_db, rx_db,
                               max_lines=self.config.memory_max_lines)
         self.orient_engine = Orient(self.config, self.llm)
-        self._last_orientation: Optional[dict] = None  # 最近一次 Orient 结果
         self._emit_lock = threading.Lock()  # 保护 _emit 回调的线程安全
         self._local = threading.local()  # 每 request 独立的运行时状态
         self._local.on_event = None
@@ -69,12 +69,13 @@ class Agent:
         self._local.visual_routed = False
         self._local.prompt_cache = None  # system prompt 缓存 (per-request)
         self._local.prompt_cache_key = ()
-        self._current_orient_fn: Optional[Callable] = None  # 当前任务的 Orient 函数（绑定原始任务）
+        self._local.last_orientation = None  # 最近一次 Orient 结果 (per-request)
+        self._current_orient_fn: Callable | None = None  # 当前任务的 Orient 函数（绑定原始任务）
     # ── 主入口 ──────────────────────────────────────────
 
     def run(self, task: str, strategy: str = "default",
-            on_event: Optional[Callable[[str, dict], None]] = None,
-            model_override: Optional[str] = None,
+            on_event: Callable[[str, dict], None] | None = None,
+            model_override: str | None = None,
             **strategy_kwargs) -> str:
         """
         执行用户任务。线程安全：同一 Agent 实例可被多线程并发调用。
@@ -267,7 +268,7 @@ class Agent:
 
     # ── 核心循环 (O-O-D-A) ─────────────────────────────
 
-    def _try_visual_route(self, messages: list) -> Optional[tuple]:
+    def _try_visual_route(self, messages: list) -> tuple | None:
         """从消息列表中提取原始任务，尝试视觉路由。
 
         扫描 messages 找到最后的 user 消息内容，用 route_visual 匹配。
@@ -284,10 +285,10 @@ class Agent:
                     return route_visual(content)
         return None
 
-    def _agent_loop(self, messages: list, exclude_tools: Optional[list] = None,
-                    system_prompt: Optional[str] = None,
-                    step_callback: Optional[Callable[[str, list], Optional[str]]] = None,
-                    tool_callback: Optional[Callable[[str, dict, str, bool], None]] = None,
+    def _agent_loop(self, messages: list, exclude_tools: list | None = None,
+                    system_prompt: str | None = None,
+                    step_callback: Callable[[str, list], str | None] | None = None,
+                    tool_callback: Callable[[str, dict, str, bool], None] | None = None,
                     ) -> tuple[str, list]:
         """
         Agent 核心循环：O-O-D-A
@@ -310,7 +311,7 @@ class Agent:
 
         # system_prompt — 允许策略覆盖
         prompt = system_prompt or self._system_prompt()
-        response = None  # 防止 max_iterations=0 时 NameError
+        response: dict[str, Any] | None = None  # 防止 max_iterations=0 时 NameError
 
         # ── 视觉路由预检：首次进入 agent_loop 时注入 hint ──
         route_exclude = []
@@ -365,7 +366,22 @@ class Agent:
                     if messages and messages[-1].get("role") == "user":
                         messages[-1]["content"] += hint
 
+        loop_start = _time.monotonic()
         for _ in range(self.config.max_iterations):
+            # ── 全局超时检查 ──
+            if _time.monotonic() - loop_start > self.config.agent_timeout:
+                logger.warning(
+                    f"Agent timeout ({self.config.agent_timeout}s) reached after "
+                    f"{_} iterations"
+                )
+                timeout_msg = (
+                    f"⚠️ Agent timeout ({self.config.agent_timeout}s) reached. "
+                    "Try simplifying the task or increasing AGENT_TIMEOUT."
+                )
+                if response and response.get("text"):
+                    return f"{response['text'][:500].strip()}\n\n{timeout_msg}", messages
+                return timeout_msg, messages
+
             # ── Decide: LLM 决策 ──
             response = self.llm.chat(
                 messages=messages,
@@ -375,8 +391,8 @@ class Agent:
             )
 
             assistant_msg: dict[str, Any] = {"role": "assistant", "content": response["text"]}
-            # DeepSeek reasoner: 保留 reasoning_content 以传给下轮请求
-            if response.get("reasoning_content"):
+            # DeepSeek reasoner: 保留 reasoning_content（仅 DeepSeek 需要回传）
+            if response.get("reasoning_content") and self.config.provider == "deepseek":
                 assistant_msg["reasoning_content"] = response["reasoning_content"]
             if response["tool_calls"]:
                 assistant_msg["tool_calls"] = [
@@ -420,6 +436,9 @@ class Agent:
                         tool_callback=tool_callback)
 
 
+        if response is None:
+            return "No iterations executed (max_iterations=0).", messages
+
         logger.warning(f"Max iterations ({self.config.max_iterations}) reached, "
                         f"forcing stop. Last tool: "
                         f"{response.get('tool_calls', [{}])[0].get('name', 'N/A') if response.get('tool_calls') else 'N/A'}")
@@ -434,7 +453,7 @@ class Agent:
 
     # ── Orient 阶段 ─────────────────────────────────────
 
-    def _orient(self, observation: str, task: str = "") -> Optional[dict]:
+    def _orient(self, observation: str, task: str = "") -> dict | None:
         """
         Orient 阶段：将工具结果转化为结构化理解。
 
@@ -452,7 +471,7 @@ class Agent:
                 memory_context, rules,
                 model=getattr(self._local, "model_override", None),
             )
-            self._last_orientation = orientation
+            self._local.last_orientation = orientation
             return orientation
         except Exception as e:
             logger.warning(f"Orient failed: {e}")
@@ -499,7 +518,7 @@ class Agent:
             "You are Sleeping fox (睡狐), an AI assistant developed for this platform. "
             "You are powered by large language models and equipped with tools to help users. "
             "Be concise, helpful, and act decisively. When asked who you are, say you are Sleeping fox.",
-            "Keep answers reasonably short — use bullet points and tables over long paragraphs. Don't over-explain, skip filler."
+            "Keep answers reasonably short — use bullet points and tables over long paragraphs. Don't over-explain, skip filler.",
             "",
             builtin_rules,
         ]
@@ -516,7 +535,7 @@ class Agent:
 
     def clear_memory(self):
         self.memory.clear()
-        self._last_orientation = None
+        self._local.last_orientation = None
         logger.info("Memory cleared.")
 
     @property
@@ -524,5 +543,5 @@ class Agent:
         return self.memory.get_summary()
 
     @property
-    def last_orientation(self) -> Optional[dict]:
-        return self._last_orientation
+    def last_orientation(self) -> dict | None:
+        return getattr(self._local, 'last_orientation', None)

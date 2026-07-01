@@ -22,7 +22,6 @@ Tree-of-Thought 策略 — 多路径探索 + 评估 + 选择最优 + 回溯。
 
 import json
 import logging
-from typing import Optional
 
 from ..config import Config
 from ..llm import LLM
@@ -155,20 +154,6 @@ class TreeOfThoughtStrategy(BaseStrategy):
             return data
         return {"score": 5, "solved": True, "reason": "fallback"}
 
-    def _is_simple_task(self, task: str) -> bool:
-        """判断是否为简单任务（纯推理/知识/计算，不需要多路径探索）。"""
-        simple_patterns = [
-            "证明", "计算", "翻译", "解释", "什么是", "为什么",
-            "prove", "calculate", "explain", "what is", "why",
-            "总结",
-        ]
-        # "写" 太宽泛（写信/写代码都不是简单任务），需要组合词
-        if len(task) < 100:
-            task_lower = task.lower()
-            if any(p in task_lower for p in simple_patterns):
-                return True
-        return False
-
     def run(self, task: str, agent_loop_fn) -> str:
         """
         执行 Tree-of-Thought 策略。
@@ -204,19 +189,20 @@ class TreeOfThoughtStrategy(BaseStrategy):
         # ── 写入 pipeline_state，供后续策略（如 PlanExecute）复用 ──
         ps = self._pipeline_state
         if ps is not None:
-            ps["tot"] = {
-                "candidates": [
-                    {
-                        "approach": c.get("approach", ""),
-                        "score": c.get("score", 0),
-                        "confidence": c.get("confidence", 0),
-                        "risks": c.get("risks", ""),
-                        "verdict": c.get("verdict", ""),
-                    }
-                    for c in candidates
-                ],
-                "best_index": 0,
-            }
+            with self._pipeline_lock:
+                ps["tot"] = {
+                    "candidates": [
+                        {
+                            "approach": c.get("approach", ""),
+                            "score": c.get("score", 0),
+                            "confidence": c.get("confidence", 0),
+                            "risks": c.get("risks", ""),
+                            "verdict": c.get("verdict", ""),
+                        }
+                        for c in candidates
+                    ],
+                    "best_index": 0,
+                }
             logger.info(f"[ToT:Pipeline] Wrote {len(candidates)} candidates to pipeline_state")
 
         # Phase 3: Execute best-first with backtracking
@@ -287,8 +273,9 @@ class TreeOfThoughtStrategy(BaseStrategy):
         # 更新 pipeline_state 中的 path 探索记录
         ps = self._pipeline_state
         if ps is not None and "tot" in ps:
-            ps["tot"]["explored_paths"] = self._explored_paths
-            ps["tot"]["best_overall_score"] = best_overall_score
+            with self._pipeline_lock:
+                ps["tot"]["explored_paths"] = self._explored_paths
+                ps["tot"]["best_overall_score"] = best_overall_score
 
         return best_overall_result
 

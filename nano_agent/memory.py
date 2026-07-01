@@ -17,29 +17,31 @@ import sqlite3
 import threading
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 logger = logging.getLogger("nano_agent.memory")
 
 # ── 文件轮转锁：防止多线程并发写导致数据丢失 ──
 _rotate_locks: dict[str, threading.Lock] = {}
 _rotate_locks_guard = threading.Lock()
-_ROTATE_LOCKS_MAX = 64  # 防止无界增长
+_ROTATE_LOCKS_WARN = 1024  # 超过此值记录警告（正常使用不会达到）
 
 
 def _get_rotate_lock(file_path: str) -> threading.Lock:
     """获取文件对应的轮转锁（惰性创建，线程安全）。
 
-    超过 _ROTATE_LOCKS_MAX 时清空重建，避免长期运行内存泄漏。
-    清空是安全的：锁只在写操作期间持有，清空时无人持有即可安全删除。
+    不做逐出：逐出可能造成持有旧锁的线程与新线程拿到不同的锁对象，
+    导致两个线程同时写同一文件。64 个 Lock 对象仅 ~4KB，无需回收。
     """
     with _rotate_locks_guard:
         lock = _rotate_locks.get(file_path)
         if lock is not None:
             return lock
-        # 超限时清空（安全：旧锁对应的文件不在活跃写入中）
-        if len(_rotate_locks) >= _ROTATE_LOCKS_MAX:
-            _rotate_locks.clear()
+        if len(_rotate_locks) >= _ROTATE_LOCKS_WARN:
+            logger.warning(
+                f"Rotate lock count ({len(_rotate_locks)}) exceeded "
+                f"{_ROTATE_LOCKS_WARN} — possible leak or unusual workload"
+            )
         lock = threading.Lock()
         _rotate_locks[file_path] = lock
         return lock
@@ -400,10 +402,10 @@ class Memory:
       4. Long-term Memory (SQLite):  FTS5 全文检索，跨会话语义匹配
     """
 
-    def __init__(self, window_size: int = 10, file_path: Optional[str] = None,
-                 reflection_path: Optional[str] = None,
-                 long_term_db: Optional[str] = None,
-                 reflexion_db: Optional[str] = None,
+    def __init__(self, window_size: int = 10, file_path: str | None = None,
+                 reflection_path: str | None = None,
+                 long_term_db: str | None = None,
+                 reflexion_db: str | None = None,
                  max_lines: int = 200):
         """
         Args:
@@ -423,7 +425,7 @@ class Memory:
         self._reflexion_trace = ReflexionTrace(reflexion_db) if reflexion_db else None
 
         # Persistent memory cache: avoid re-reading file on every agent_loop iteration
-        self._persistent_cache: Optional[str] = None
+        self._persistent_cache: str | None = None
         self._persistent_dirty: bool = True
 
     # ── 1. Working Memory (窗口) ────────────────────────

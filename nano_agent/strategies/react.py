@@ -14,7 +14,6 @@ ReAct 策略 — Reasoning + Acting：Function Calling + 显式 Thought。
 
 import json
 import logging
-from typing import Optional
 
 from ..config import Config
 from ..llm import LLM
@@ -96,7 +95,7 @@ Final Answer: The current directory contains 2 files: agent.py and README.md."""
             return text[start:].strip()
         return text[:300].strip()
 
-    def _extract_final_answer(self, text: str) -> Optional[str]:
+    def _extract_final_answer(self, text: str) -> str | None:
         """检查是否有 Final Answer。"""
         if "Final Answer:" in text:
             start = text.index("Final Answer:") + len("Final Answer:")

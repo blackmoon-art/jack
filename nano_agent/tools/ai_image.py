@@ -9,8 +9,8 @@
 import json
 import logging
 import os
-import subprocess
 import urllib.parse
+import urllib.request
 from datetime import datetime
 from pathlib import Path
 
@@ -125,7 +125,7 @@ class AIImage:
 
     def _generate_pollinations(self, prompt: str, negative_prompt: str,
                                width: int, height: int) -> str:
-        """pollinations.ai — 免费, 无需 API key, 用 curl 子进程。"""
+        """pollinations.ai — 免费, 无需 API key。"""
         params = {
             "width": width,
             "height": height,
@@ -141,19 +141,25 @@ class AIImage:
 
         logger.info(f"pollinations.ai: '{prompt[:80]}' ({width}x{height})")
 
-        r = subprocess.run(
-            ["curl", "-sS", "--connect-timeout", "15", "--max-time", "60", url],
-            capture_output=True, timeout=70,
-        )
+        try:
+            req = urllib.request.Request(url, headers={
+                "User-Agent": "nano_agent_plus/1.0",
+            })
+            with urllib.request.urlopen(req, timeout=60) as resp:
+                image_data = resp.read()
+        except urllib.error.URLError as e:
+            raise RuntimeError(f"pollinations.ai request failed: {e.reason}")
+        except Exception as e:
+            raise RuntimeError(f"pollinations.ai request failed: {e}")
 
-        if r.returncode != 0 or len(r.stdout) < 1000:
-            raise RuntimeError(f"pollinations.ai returned invalid data ({len(r.stdout)} bytes)")
+        if len(image_data) < 1000:
+            raise RuntimeError(f"pollinations.ai returned invalid data ({len(image_data)} bytes)")
 
         # 检查是否是图片 (PNG/JPEG)
-        if r.stdout[:4] != b'\x89PNG' and r.stdout[:2] != b'\xff\xd8':
-            raise RuntimeError(f"pollinations.ai returned non-image data ({len(r.stdout)} bytes, starts with {r.stdout[:4].hex()})")
+        if image_data[:4] != b'\x89PNG' and image_data[:2] != b'\xff\xd8':
+            raise RuntimeError(f"pollinations.ai returned non-image data ({len(image_data)} bytes, starts with {image_data[:4].hex()})")
 
-        return self._save_image(r.stdout, prompt)
+        return self._save_image(image_data, prompt)
 
     # ── 后端 2: Stability AI API ──────────────────────
 
@@ -164,7 +170,6 @@ class AIImage:
         if not api_key:
             raise RuntimeError("STABILITY_API_KEY not set")
 
-        # Stability API 支持 SD3
         payload = json.dumps({
             "prompt": prompt,
             "negative_prompt": negative_prompt or "blurry, ugly, low quality",
@@ -173,27 +178,35 @@ class AIImage:
             "steps": 30,
             "cfg_scale": 7,
             "output_format": "png",
-        })
+        }).encode()
 
-        r = subprocess.run(
-            ["curl", "-sS", "--connect-timeout", "15", "--max-time", "60",
-             "-X", "POST",
-             "https://api.stability.ai/v2/stable-image/generate/core",
-             "-H", f"Authorization: Bearer {api_key}",
-             "-H", "Content-Type: application/json",
-             "-H", "Accept: image/png",
-             "-d", payload,
-             "--output", "-"],
-            capture_output=True, timeout=70,
-        )
+        try:
+            req = urllib.request.Request(
+                "https://api.stability.ai/v2/stable-image/generate/core",
+                data=payload,
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                    "Accept": "image/png",
+                    "User-Agent": "nano_agent_plus/1.0",
+                },
+            )
+            with urllib.request.urlopen(req, timeout=60) as resp:
+                image_data = resp.read()
+        except urllib.error.HTTPError as e:
+            raise RuntimeError(f"Stability API error: HTTP {e.code} — {e.reason}")
+        except urllib.error.URLError as e:
+            raise RuntimeError(f"Stability API request failed: {e.reason}")
+        except Exception as e:
+            raise RuntimeError(f"Stability API request failed: {e}")
 
-        if r.returncode != 0 or len(r.stdout) < 1000:
-            raise RuntimeError(f"Stability API error ({len(r.stdout)} bytes)")
+        if len(image_data) < 1000:
+            raise RuntimeError(f"Stability API returned invalid data ({len(image_data)} bytes)")
 
-        if r.stdout[:4] != b'\x89PNG':
+        if image_data[:4] != b'\x89PNG':
             raise RuntimeError("Stability API returned non-PNG data")
 
-        return self._save_image(r.stdout, prompt)
+        return self._save_image(image_data, prompt)
 
     # ── 后端 3: diffusers 本地 ──────────────────────
 

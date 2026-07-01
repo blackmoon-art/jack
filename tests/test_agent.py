@@ -39,6 +39,17 @@ class TestAgentLoop(unittest.TestCase):
                 "arguments": str(tc.get("arguments", {})),
             },
         }
+        # chat_json_with_retry: 委托给 chat + clean_json_response
+        import json as _json
+        def _mock_chat_json(messages, max_retries=2, system="", model=None,
+                            tools=None):
+            try:
+                resp = mock_llm.chat(messages=messages, tools=tools or [],
+                                      system=system, model=model)
+                return _json.loads(mock_llm.clean_json_response(resp["text"]))
+            except (_json.JSONDecodeError, KeyError):
+                return None
+        mock_llm.chat_json_with_retry = _mock_chat_json
         agent = Agent(config=self.config)
         agent.llm = mock_llm
         return agent

@@ -11,7 +11,7 @@
 """
 
 import logging
-from typing import Any, Optional
+from typing import Any
 
 from .observation import Observation
 from .sandbox import PathSandbox
@@ -120,7 +120,7 @@ class ToolRegistry:
     # ── 内部注册 ──────────────────────────────────────
 
     def _register(self, name: str, desc: str, func, properties: dict,
-                  required: Optional[list] = None):
+                  required: list | None = None):
         self._tools[name] = {
             "func": func,
             "schema": {

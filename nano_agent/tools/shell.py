@@ -5,7 +5,7 @@ import operator as _op
 import os
 import shlex
 import subprocess
-from typing import Any, Optional
+from typing import Any
 
 from .observation import Observation
 

@@ -11,15 +11,23 @@ import sys
 
 
 def _ensure_pptx():
-    """确保 python-pptx 已安装。"""
+    """确保 python-pptx 已安装。需设置 AGENT_AUTO_INSTALL_PPTX=true 才自动安装。"""
     try:
         import pptx  # noqa: F401
         return
     except ImportError:
-        subprocess.run(
-            [sys.executable, "-m", "pip", "install", "python-pptx", "-q"],
-            check=True, timeout=120,
+        pass
+
+    if os.environ.get("AGENT_AUTO_INSTALL_PPTX", "").lower() != "true":
+        raise ImportError(
+            "python-pptx is not installed. Run: pip install python-pptx\n"
+            "Or set AGENT_AUTO_INSTALL_PPTX=true to auto-install."
         )
+
+    subprocess.run(
+        [sys.executable, "-m", "pip", "install", "python-pptx", "-q", "--user"],
+        check=True, timeout=120,
+    )
 
 
 class PPT:

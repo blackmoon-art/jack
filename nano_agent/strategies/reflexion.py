@@ -19,7 +19,6 @@ Reflexion 策略 — 自我反思 + 失败重试 + 教训学习。
 
 import json
 import logging
-from typing import Optional
 
 from ..config import Config
 from ..llm import LLM
@@ -43,13 +42,6 @@ class ReflexionStrategy(BaseStrategy):
                      '质量', '审查', 'review', '检查', '验证', '确保')
     auto_priority = 2
 
-    # 简单任务模式：跳过评估和反思，直接执行一次
-    _SIMPLE_PATTERNS = (
-        "证明", "计算", "翻译", "解释", "什么是", "为什么",
-        "prove", "calculate", "explain", "what is", "why",
-        "总结", "分析", "比较", "总结",
-    )
-
     def __init__(self, config: Config, llm: LLM, tools: ToolRegistry,
                  max_retries: int = None, **kwargs):
         super().__init__(config, llm, tools, **kwargs)
@@ -71,7 +63,7 @@ class ReflexionStrategy(BaseStrategy):
             return True
 
         # 明显失败信号 → 需要评估（确认失败原因）
-        if any(result_lower.startswith(s) for s in _FAILURE_SIGNALS):
+        if any(s in result_lower for s in _FAILURE_SIGNALS):
             return True
 
         # 明显成功信号 + 足够长 → 跳过评估
@@ -92,8 +84,8 @@ class ReflexionStrategy(BaseStrategy):
         result_lower = result.lower().strip()
 
         # 快速路径：明显失败
-        if any(result_lower.startswith(s) for s in _FAILURE_SIGNALS):
-            return {"status": "failed", "reason": "result starts with error signal",
+        if any(s in result_lower for s in _FAILURE_SIGNALS):
+            return {"status": "failed", "reason": "result contains error signal",
                     "missing": "valid output", "score": 2}
 
         # 快速路径：明显成功（足够长 + 成功信号词）
@@ -208,13 +200,6 @@ class ReflexionStrategy(BaseStrategy):
         return fields
 
     # ── 主循环 ────────────────────────────────────────────
-
-    def _is_simple_task(self, task: str) -> bool:
-        """判断是否为简单任务（纯推理/知识/计算，不需要多轮反思）。"""
-        if len(task) < 100:
-            task_lower = task.lower()
-            return any(p in task_lower for p in self._SIMPLE_PATTERNS)
-        return False
 
     def run(self, task: str, agent_loop_fn) -> str:
         """

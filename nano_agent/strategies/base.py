@@ -18,7 +18,8 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any, Callable, Optional
+import threading
+from typing import Any, Callable
 
 from ..config import Config
 from ..llm import LLM
@@ -52,6 +53,21 @@ class BaseStrategy:
     auto_priority: int = 0
     """auto 模式匹配优先级。越大越优先。Default=0, ReAct=1, ToT=2, PlanExecute=3。"""
 
+    # ── 简单任务检测（子类复用）────────────────────────
+    _SIMPLE_TASK_PATTERNS = (
+        "证明", "计算", "翻译", "解释", "什么是", "为什么",
+        "prove", "calculate", "explain", "what is", "why",
+        "总结", "分析", "比较",
+    )
+
+    @classmethod
+    def _is_simple_task(cls, task: str) -> bool:
+        """判断是否为简单任务（纯推理/知识/计算，不需要多轮思考）。"""
+        if len(task) >= 100:
+            return False
+        task_lower = task.lower()
+        return any(p in task_lower for p in cls._SIMPLE_TASK_PATTERNS)
+
     def __init__(self, config: Config = None, llm: LLM = None,
                  tools: ToolRegistry = None, **kwargs):
         ctx = kwargs.pop("context", None)
@@ -68,19 +84,21 @@ class BaseStrategy:
             self._model_override = ctx.model_override
             self._system_prompt_fn = ctx.system_prompt_fn  # Agent._system_prompt
             self._pipeline_state = ctx.pipeline_state   # Meta 策略的跨策略共享状态
+            self._pipeline_lock = ctx.pipeline_lock     # 保护 pipeline_state 的锁
         else:
             # 旧式: 向后兼容
             self.config = config
             self.llm = llm
             self.tools = tools
             self.memory = kwargs.get("memory")
-            self._emit: Optional[Callable[[str, dict], None]] = None
+            self._emit: Callable[[str, dict], None] | None = None
             self._execute_tool = None  # 等待猴子补丁注入
             self._agent_loop = None
-            self._orient_fn: Optional[Callable] = None
-            self._model_override: Optional[str] = None
-            self._system_prompt_fn: Optional[Callable[[], str]] = None
+            self._orient_fn: Callable | None = None
+            self._model_override: str | None = None
+            self._system_prompt_fn: Callable[[], str] | None = None
             self._pipeline_state: dict = {}             # 独立空 dict，不做跨策略共享
+            self._pipeline_lock = threading.Lock()      # 独立锁
 
     def emit(self, event_type: str, data: dict):
         """发送事件给回调（如果已设置）。静默失败。"""
@@ -111,7 +129,7 @@ class BaseStrategy:
         return messages
 
     def execute_tool(self, tool_call: dict, messages: list[dict],
-                      orient_fn: Optional[Callable] = None,
+                      orient_fn: Callable | None = None,
                       enable_orient: bool = True) -> dict:
         """委托给 Agent 的统一实现，确保行为一致。"""
         if self._execute_tool:
@@ -147,7 +165,7 @@ class BaseStrategy:
 
     def execute_tools_parallel(self, tool_calls: list[dict],
                                 messages: list[dict],
-                                tool_callback: Optional[Callable] = None) -> dict[int, dict]:
+                                tool_callback: Callable | None = None) -> dict[int, dict]:
         """并行执行多个工具，追加结果到 messages，执行批量 Orient。
 
         所有并行工具执行统一走此方法：_agent_loop 和 DefaultStrategy 都调用它。
@@ -225,28 +243,15 @@ class BaseStrategy:
         """
         raise NotImplementedError
 
-    def _chat_json(self, messages: list[dict], max_retries: int = 2) -> Optional[Any]:
+    def _chat_json(self, messages: list[dict], max_retries: int = 2) -> Any | None:
         """调用 LLM 并解析 JSON 响应，失败自动重试。
 
-        内部调用 self.llm.chat + self.llm.clean_json_response，
-        保持与 mock 兼容（测试 mock 这两个方法）。
+        委托给 LLM.chat_json_with_retry（单一实现），加 emit 通知。
         """
-        for attempt in range(max_retries + 1):
-            response = self.llm.chat(messages=messages, tools=[], system="",
-                                      model=self._model_override)
-            text = self.llm.clean_json_response(response["text"])
-            try:
-                return json.loads(text)
-            except json.JSONDecodeError:
-                if attempt < max_retries:
-                    logger.warning(
-                        f"JSON parse failed (attempt {attempt+1}/{max_retries+1}), "
-                        f"retrying... Response: {text[:200]}")
-                else:
-                    logger.warning(
-                        f"JSON parse failed after {max_retries+1} attempts. "
-                        f"Response: {text[:200]}")
-                    self.emit("text", {
-                        "text": "LLM returned unparseable JSON, using fallback."
-                    })
-        return None
+        result = self.llm.chat_json_with_retry(
+            messages=messages, max_retries=max_retries,
+            system="", model=self._model_override,
+        )
+        if result is None:
+            self.emit("text", {"text": "LLM returned unparseable JSON, using fallback."})
+        return result

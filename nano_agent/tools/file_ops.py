@@ -68,7 +68,13 @@ class FileOps:
         return Observation.ok("read_file", "\n".join(numbered))
 
     def write(self, path: str, content: str) -> Observation:
-        """写入文件到工作目录内。"""
+        """写入文件到工作目录内。
+
+        当写入 HTML/PPTX/PDF/CSV/代码等可下载文件时，会自动复制一份到 Web
+        可访问的 charts 目录，并在返回结果中附带下载链接。
+        这是为了让 Web UI 用户能直接下载 agent 生成的文件。
+        纯文本日志/中间文件不受影响。
+        """
         if self.public_mode:
             return Observation.error("write_file", "Write access denied (public mode)")
         safe = self.sandbox.safe_path(path)

@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import Optional
 
 logger = logging.getLogger("nano_agent.visual_router")
 
@@ -26,6 +25,10 @@ _EXACT_ROUTES: list[tuple[str, str, dict]] = [
     # 等高线（放最前面，优先级高于其他含"图"的词）
     ("等高线|梯度下降|contour|loss surface|损失函数可视化",
      "generate_chart", {"chart_type": "contour", "data": "X**2+Y**2"}),
+    # 频谱 / FFT（放波形前面，fft/spectrum 比 waveform 更精确）
+    ("傅里叶|fourier|fft|频谱|spectrum|频域|frequency domain|频率分析|"
+     "谐波|harmonic|傅立叶|傅里叶变换|fourier transform",
+     "generate_chart", {"chart_type": "spectrum"}),
     # 波形（放前面，避免被"信号"等其他规则抢）
     ("波形|信号波|waveform|时钟脉冲|clock pulse|voltage wave",
      "generate_chart", {"chart_type": "waveform"}),
@@ -41,6 +44,10 @@ _EXACT_ROUTES: list[tuple[str, str, dict]] = [
     # 3D
     ("3d|三维|wireframe|立体图|3d模型",
      "generate_chart", {"chart_type": "wireframe"}),
+    # 3D 曲面 / 渲染
+    ("surface|曲面|3d曲面|三维曲面|实体渲染|光照渲染|网格面|mesh|plot3d|"
+     "3d rendering|3d渲染",
+     "generate_chart", {"chart_type": "surface"}),
     # 散点
     ("散点|scatter|相关性图|散点分布",
      "generate_chart", {"chart_type": "scatter"}),
@@ -172,7 +179,7 @@ def reset_stats():
 
 # ── 公共接口 ──────────────────────────────────────────
 
-def route_visual(task: str) -> Optional[tuple[str, dict]]:
+def route_visual(task: str) -> tuple[str, dict] | None:
     """主入口：尝试匹配画图意图。
 
     Args:
@@ -215,26 +222,27 @@ def _ascii_word_match(kw: str, text: str) -> bool:
     return re.search(pattern, text) is not None
 
 
-def _exact_match(task_lower: str) -> Optional[tuple[str, dict]]:
+# ── 模块级编译常量（避免每次调用重复构建）──────────────────
+_HW_TIMING_KW = re.compile(
+    r"时钟|SPI|I2C|UART|CAN|USB|信号|电平|上升沿|下降沿|"
+    r"高电平|低电平|电路|OCC|总线|晶振|脉冲|波特|probe|"
+    r"oscilloscope|逻辑分析仪|trigger|edge",
+    re.IGNORECASE
+)
+_SW_SEQ_KW = re.compile(
+    r"交互时序|sequence|消息交互|组件交互|用户.*时序|"
+    r"API.*时序|登录.*流程|支付.*流程|请求.*响应"
+)
+_REGEX_META = frozenset('\\*+?[](){}|^$.|')
+
+
+def _exact_match(task_lower: str) -> tuple[str, dict] | None:
     """Layer 1: 精确关键词匹配。英文词加单词边界防子串误匹配。
 
     关键词分两类：
     - 纯文本（含中文）：子串匹配
     - 正则模式（含 \\, *, +, [, ( 等元字符）：re.search 匹配
     """
-    # 硬件信号时序关键词 — 这些场景的"时序图"是信号波形，不是 sequenceDiagram
-    _HW_TIMING_KW = re.compile(
-        r"时钟|SPI|I2C|UART|CAN|USB|信号|电平|上升沿|下降沿|"
-        r"高电平|低电平|电路|OCC|总线|晶振|脉冲|波特|probe|"
-        r"oscilloscope|逻辑分析仪|trigger|edge",
-        re.IGNORECASE
-    )
-    # 软件交互时序关键词 — 这些才是 sequenceDiagram
-    _SW_SEQ_KW = re.compile(
-        r"交互时序|sequence|消息交互|组件交互|用户.*时序|"
-        r"API.*时序|登录.*流程|支付.*流程|请求.*响应"
-    )
-    _REGEX_META = set('\\*+?[](){}|^$.|')
     for keywords, tool_name, params in _EXACT_ROUTES:
         for kw in keywords.split("|"):
             kw = kw.strip()
@@ -261,7 +269,7 @@ def _exact_match(task_lower: str) -> Optional[tuple[str, dict]]:
     return None
 
 
-def _intent_match(task: str, task_lower: str) -> Optional[tuple[str, dict]]:
+def _intent_match(task: str, task_lower: str) -> tuple[str, dict] | None:
     """Layer 2: 动词+名词组合模式匹配。"""
     for verb_pat, noun_pat, tool_name, params in _INTENT_PATTERNS:
         if re.search(verb_pat, task_lower) and re.search(noun_pat, task_lower):
@@ -270,36 +278,17 @@ def _intent_match(task: str, task_lower: str) -> Optional[tuple[str, dict]]:
 
 
 def is_visual_request(task: str) -> bool:
-    """快速判断任务是否是画图请求（比 route_visual 更宽松）。
+    """快速判断任务是否是画图请求。委托给 route_visual 避免匹配逻辑重复。
 
-    用于替代 default.py 中的 _should_force_visual 关键词列表。
-    ASCII 关键词使用 _ascii_word_match 防子串误匹配
-    （如 'scatter' 不应匹配 'scattering', 'pie' 不应匹配 'empire'）。
-    正则规则用 re.search 检测。
+    额外检查：意图动词 + 画图暗示词（比 route_visual 的 intent_match 更宽松）。
     """
+    if route_visual(task) is not None:
+        return True
+    # 补充：纯意图动词 + 画图暗示词
     task_lower = task.lower()
-    _REGEX_META = set('\\*+?[](){}|^$.|')
-    # 含精确路由关键词
-    for keywords, _, _ in _EXACT_ROUTES:
-        for kw in keywords.split("|"):
-            kw = kw.strip()
-            if not kw:
-                continue
-            if any(c in _REGEX_META for c in kw):
-                if re.search(kw, task_lower):
-                    return True
-            elif kw.isascii():
-                if _ascii_word_match(kw, task_lower):
-                    return True
-            else:
-                if kw.lower() in task_lower:
-                    return True
-    # 含意图模式动词
     for verb_pat, _, _, _ in _INTENT_PATTERNS:
         if re.search(verb_pat, task_lower):
-            # 还需要含一个画图暗示词
-            draw_hints = ("画|图|plot|chart|graph|draw|visual|可视化|展示")
-            if re.search(draw_hints, task_lower):
+            if re.search(r"画|图|plot|chart|graph|draw|visual|可视化|展示", task_lower):
                 return True
     return False
 

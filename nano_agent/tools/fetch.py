@@ -1,12 +1,81 @@
 """URL 抓取工具：fetch_url。
 
-从 URL 抓取网页并提取纯文本内容，内置 SSRF 防护。
+从 URL 抓取网页并提取纯文本内容，内置 SSRF 防护（含 DNS 重绑定 + 重定向检查）。
 """
 
+import ipaddress
 import re
+import socket
 import urllib.parse
 import urllib.request
 import urllib.error
+
+
+# ── SSRF 防护：IP 检查 ────────────────────────────────────
+
+def _is_private_ip(ip_str: str) -> bool:
+    """检查 IP 是否为私有/保留地址。"""
+    try:
+        ip = ipaddress.ip_address(ip_str)
+        return ip.is_private or ip.is_loopback or ip.is_reserved or ip.is_unspecified
+    except ValueError:
+        return False
+
+
+def _check_hostname(host: str) -> str | None:
+    """检查主机名是否安全。返回 None 表示通过，否则返回错误信息。"""
+    if not host:
+        return "Error: empty hostname"
+    if host in ("localhost", "127.0.0.1", "::1", "0.0.0.0"):
+        return "Error: Access to localhost is blocked"
+    if host.startswith("127."):
+        return "Error: Access to loopback is blocked"
+    if host.startswith(("192.168.", "10.", "0.")):
+        return "Error: Access to internal network is blocked"
+    # 172.16.0.0/12
+    if host.startswith("172."):
+        parts = host.split(".")
+        if len(parts) >= 2 and parts[1].isdigit():
+            second = int(parts[1])
+            if 16 <= second <= 31:
+                return "Error: Access to internal network is blocked"
+    # 整数 IP 绕过
+    if host.isdigit():
+        try:
+            ip_int = int(host)
+            octets = [
+                (ip_int >> 24) & 0xFF,
+                (ip_int >> 16) & 0xFF,
+                (ip_int >> 8) & 0xFF,
+                ip_int & 0xFF,
+            ]
+            return _check_hostname(".".join(str(o) for o in octets))
+        except (ValueError, OverflowError):
+            pass
+    return None
+
+
+# ── SSRF 防护：重定向拦截器 ──────────────────────────────
+
+class _SafeRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """阻止重定向到内网地址的 HTTPRedirectHandler。"""
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        host = urllib.parse.urlparse(newurl).hostname or ""
+        err = _check_hostname(host)
+        if err:
+            raise urllib.error.URLError(f"Redirect blocked: {err}")
+        # DNS 重绑定检查：解析新 URL 的 IP
+        try:
+            resolved = socket.getaddrinfo(host, None, socket.AF_UNSPEC,
+                                          socket.SOCK_STREAM)
+            for family, _, _, _, sockaddr in resolved:
+                ip = sockaddr[0]
+                if _is_private_ip(ip):
+                    raise urllib.error.URLError(
+                        f"Redirect blocked: {host} resolves to private IP {ip}")
+        except socket.gaierror:
+            pass  # DNS 解析失败也继续（后续 urlopen 自会报错）
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
 class Fetch:
@@ -23,44 +92,30 @@ class Fetch:
     # ── 公开接口 ──────────────────────────────────────
 
     def fetch_url(self, url: str) -> str:
-        """抓取网页并提取文本内容。阻止内网/本地地址防止 SSRF。"""
+        """抓取网页并提取文本内容。SSRF 防护：阻止内网/本地 + DNS 重绑定 + 重定向检查。"""
         if not url.startswith(("http://", "https://")):
             return "Error: URL must start with http:// or https://"
-        # SSRF 防护：检查目标主机
         host = urllib.parse.urlparse(url).hostname or ""
 
-        # 内网主机名检查
-        if host in ("localhost", "127.0.0.1", "::1", "0.0.0.0", ""):
-            return "Error: Access to localhost is blocked"
-        # IPv6 loopback 各种形式
-        if host.startswith("[::1") or host.startswith("[::ffff:"):
-            return "Error: Access to localhost is blocked"
-        # 127.x.x.x 整个 loopback 段
-        if host.startswith("127."):
-            return "Error: Access to loopback is blocked"
-        # 内网 IP 段
-        if host.startswith(("192.168.", "10.", "172.16.", "172.17.", "172.18.",
-                           "172.19.", "172.20.", "172.21.", "172.22.", "172.23.",
-                           "172.24.", "172.25.", "172.26.", "172.27.", "172.28.",
-                           "172.29.", "172.30.", "172.31.")):
-            return "Error: Access to internal network is blocked"
-        # 0.0.0.0/8 段（含 0x7f000001 等十六进制绕过变体）
-        if host.startswith("0") and host != "0":
-            return "Error: Access to reserved network is blocked"
-        # 整数 IP 绕过（2130706433 → 127.0.0.1）
-        if host.isdigit():
-            try:
-                ip_int = int(host)
-                # 检查是否是私有/保留 IP 段
-                if (ip_int == 0 or                          # 0.0.0.0
-                    (0x7F000000 <= ip_int <= 0x7FFFFFFF) or # 127.0.0.0/8
-                    (0x0A000000 <= ip_int <= 0x0AFFFFFF) or # 10.0.0.0/8
-                    (0xC0A80000 <= ip_int <= 0xC0A8FFFF) or # 192.168.0.0/16
-                    (0xAC100000 <= ip_int <= 0xAC1FFFFF)):  # 172.16.0.0/12
-                    return "Error: Access to private network is blocked"
-            except (ValueError, OverflowError):
-                pass
+        # 1. 主机名检查
+        err = _check_hostname(host)
+        if err:
+            return err
+
+        # 2. DNS 重绑定检查：解析 IP 并验证
         try:
+            resolved = socket.getaddrinfo(host, None, socket.AF_UNSPEC,
+                                          socket.SOCK_STREAM)
+            for family, _, _, _, sockaddr in resolved:
+                ip = sockaddr[0]
+                if _is_private_ip(ip):
+                    return f"Error: {host} resolves to private IP ({ip}) — blocked"
+        except socket.gaierror:
+            pass
+
+        # 3. 带安全重定向拦截器的 opener
+        try:
+            opener = urllib.request.build_opener(_SafeRedirectHandler())
             req = urllib.request.Request(url, headers={
                 "User-Agent": (
                     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
@@ -69,7 +124,7 @@ class Fetch:
                 "Accept": "text/html,application/xhtml+xml",
                 "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
             })
-            with urllib.request.urlopen(req, timeout=15) as resp:
+            with opener.open(req, timeout=15) as resp:
                 content_type = resp.headers.get("Content-Type", "")
                 if "html" not in content_type and "text" not in content_type:
                     return f"Error: Unsupported content type — {content_type}"

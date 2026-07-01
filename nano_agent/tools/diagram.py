@@ -140,9 +140,22 @@ class Diagram:
 
         plant_code = "\n".join(plant_lines)
 
-        # 编码: hex (更可靠，尤其是中文/UTF-8)
+        # 编码: 优先 deflate+base64 (更紧凑), hex 作为 fallback
+        compressed = zlib.compress(plant_code.encode('utf-8'), level=9)
+        encoded = base64.urlsafe_b64encode(compressed).decode().rstrip("=")
         hex_str = plant_code.encode('utf-8').hex()
-        url = f"{self.PLANTUML_BASE}/png/~h{hex_str}"
+
+        # 用更短的编码（PlantUML 均支持）；超过 5000 字符的 URL 可能被服务器拒绝
+        if len(encoded) <= len(hex_str):
+            url = f"{self.PLANTUML_BASE}/png/{encoded}"
+        else:
+            url = f"{self.PLANTUML_BASE}/png/~h{hex_str}"
+
+        if len(url) > 5000:
+            return (
+                f"Error: PlantUML diagram too large (URL {len(url)} chars). "
+                "Try simplifying the diagram or reducing the number of states."
+            )
 
         # 下载 PNG
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")

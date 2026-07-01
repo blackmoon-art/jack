@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import threading
 from dataclasses import dataclass, field
 from collections.abc import Callable
-from typing import Any, Optional
+from typing import Any
 
 
 @dataclass
@@ -21,25 +22,25 @@ class StrategyContext:
     memory: Any = None             # Memory 实例（可选）
 
     # ── 事件回调 ──
-    emit: Optional[Callable[[str, dict], None]] = None
+    emit: Callable[[str, dict], None] | None = None
     """发送事件给上层 (Web UI 等)。event_type: text|tool_call|tool_result|orient"""
 
     # ── 引擎能力 ──
-    execute_tool: Optional[Callable] = None
+    execute_tool: Callable | None = None
     """执行单个工具调用。由 Agent 提供统一实现。"""
 
-    agent_loop: Optional[Callable] = None
+    agent_loop: Callable | None = None
     """核心 O-O-D-A 循环。f(messages, exclude_tools=None) -> (text, messages)"""
 
-    orient_fn: Optional[Callable] = None
+    orient_fn: Callable | None = None
     """Orient 解读函数。已绑定原始任务。"""
 
     # ── 请求级覆盖 ──
-    model_override: Optional[str] = None
+    model_override: str | None = None
     """请求级模型覆盖（线程安全）"""
 
     # ── Prompt 构建 ──
-    system_prompt_fn: Optional[Callable[[], str]] = None
+    system_prompt_fn: Callable[[], str] | None = None
     """构建 system prompt 的函数（委托到 Agent._system_prompt）"""
 
     # ── 跨策略通信 ──
@@ -64,4 +65,8 @@ class StrategyContext:
       tot = ctx.pipeline_state.get("tot", {})
       for c in tot.get("candidates", []):
           ...
+
+    线程安全: 使用 ctx.pipeline_lock 保护对 pipeline_state 的读写。
     """
+    pipeline_lock: threading.Lock = field(default_factory=threading.Lock)
+    """保护 pipeline_state 的锁。并行工具执行或跨策略访问时使用。"""

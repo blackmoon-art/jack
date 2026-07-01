@@ -6,7 +6,6 @@ import os
 import threading
 from dataclasses import dataclass, field, replace as _dc_replace
 from pathlib import Path
-from typing import Optional
 
 _dotenv_loaded = False
 _dotenv_lock = threading.Lock()
@@ -35,7 +34,10 @@ def _env(key: str, default: str = "") -> str:
 
 
 def _env_int(key: str, default: int) -> int:
-    return int(_env(key, str(default)))
+    try:
+        return int(_env(key, str(default)))
+    except (ValueError, TypeError):
+        return default
 
 
 def _env_bool(key: str) -> bool:
@@ -53,7 +55,7 @@ class Config:
     anthropic_api_key: str = field(
         default_factory=lambda: _env("ANTHROPIC_API_KEY", "")
     )
-    anthropic_base_url: Optional[str] = field(
+    anthropic_base_url: str | None = field(
         default_factory=lambda: os.getenv("ANTHROPIC_BASE_URL") or None
     )
 
@@ -76,6 +78,7 @@ class Config:
     # ── Agent 行为 ──
     max_iterations: int = field(default_factory=lambda: _env_int("AGENT_MAX_ITERATIONS", 10))
     max_tokens: int = field(default_factory=lambda: _env_int("AGENT_MAX_TOKENS", 8000))
+    agent_timeout: int = field(default_factory=lambda: _env_int("AGENT_TIMEOUT", 300))
     bash_timeout: int = field(default_factory=lambda: _env_int("AGENT_BASH_TIMEOUT", 120))
     work_dir: str = field(default_factory=lambda: _env("AGENT_WORK_DIR", str(Path.cwd())))
     charts_dir: str = field(default_factory=lambda: _env(
@@ -84,16 +87,16 @@ class Config:
 
     # ── 记忆 ──
     memory_window: int = field(default_factory=lambda: _env_int("AGENT_MEMORY_WINDOW", 10))
-    memory_file: Optional[str] = field(
+    memory_file: str | None = field(
         default_factory=lambda: _env("AGENT_MEMORY_FILE") or None
     )
-    reflection_file: Optional[str] = field(
+    reflection_file: str | None = field(
         default_factory=lambda: _env("AGENT_REFLECTION_FILE") or None
     )
-    long_term_db: Optional[str] = field(
+    long_term_db: str | None = field(
         default_factory=lambda: _env("AGENT_LONG_TERM_DB") or None
     )
-    reflexion_db: Optional[str] = field(
+    reflexion_db: str | None = field(
         default_factory=lambda: _env("AGENT_REFLEXION_DB") or None
     )
 
@@ -112,13 +115,13 @@ class Config:
     fetch_max_chars: int = field(default_factory=lambda: _env_int("AGENT_FETCH_MAX_CHARS", 8000))
 
     # ── 自定义规则 / 技能 ──
-    rules_dir: Optional[str] = field(
+    rules_dir: str | None = field(
         default_factory=lambda: _env("AGENT_RULES_DIR", ".agent/rules")
     )
-    skills_dir: Optional[str] = field(
+    skills_dir: str | None = field(
         default_factory=lambda: _env("AGENT_SKILLS_DIR", ".agent/skills")
     )
-    brave_api_key: Optional[str] = field(
+    brave_api_key: str | None = field(
         default_factory=lambda: _env("BRAVE_SEARCH_API_KEY", "")
     )
 
