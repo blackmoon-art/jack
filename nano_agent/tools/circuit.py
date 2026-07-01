@@ -519,10 +519,13 @@ class Circuit:
                 return self._get_anchor(elem)
 
         if token in named:
-            anchor = _pick_anchor(named[token])
+            elem = named[token]
+            in_anchor = _pick_anchor(elem)
             if last is not None:
-                d.add(elm.Line().at(self._get_anchor(last)).to(anchor))
-            return _AnchorRef(anchor), True
+                d.add(elm.Line().at(self._get_anchor(last)).to(in_anchor))
+            # 后续元件应从该元件的输出侧开始，而非输入侧
+            out_anchor = self._get_output_anchor(elem)
+            return _AnchorRef(out_anchor), True
 
         if "." in token:
             base, anchor_name = token.split(".", 1)
@@ -533,7 +536,9 @@ class Circuit:
                 except AttributeError: anchor = self._get_anchor(elem)
                 if last is not None:
                     d.add(elm.Line().at(self._get_anchor(last)).to(anchor))
-                return _AnchorRef(anchor), True
+                # 显式锚点引用，用该锚点作为出点
+                out_anchor = self._get_output_anchor(elem)
+                return _AnchorRef(out_anchor), True
         return None, False
 
     def _draw_chain(self, chain_desc: str, comp_map: dict,
@@ -582,7 +587,13 @@ class Circuit:
                 el_obj = self._place_component(
                     n, v, lbl, last, d, elm, comp_map, direction, comp_anchor, valid_names_str)
                 last = el_obj
-                if node_name: named[node_name] = el_obj
+                if node_name:
+                    if comp_anchor:
+                        named[node_name] = _AnchorRef(
+                            getattr(el_obj, comp_anchor,
+                                    self._get_anchor(el_obj)))
+                    else:
+                        named[node_name] = el_obj
             elif part_type == "parallel":
                 last = self._draw_parallel(part_data, comp_map, named, last, d, elm, direction, valid_names_str)
 
@@ -644,6 +655,16 @@ class Circuit:
     def _make_box(label_text: str, elm):
         try: return elm.Box().label(label_text)
         except AttributeError: return elm.Line().label(f"[{label_text}]")
+
+    @staticmethod
+    def _get_output_anchor(elem):
+        """获取元件的输出锚点（优先 out → end → center → (0,0)）。"""
+        try: return elem.out
+        except AttributeError:
+            try: return elem.end
+            except AttributeError:
+                try: return elem.center
+                except AttributeError: return (0, 0)
 
     @staticmethod
     def _get_anchor(last, anchor: str = "end"):
