@@ -120,7 +120,7 @@ _EXACT_ROUTES: list[tuple[str, str, dict]] = [
     ("数字电路|逻辑门|门电路|逻辑电路|digital.*circuit|logic.*gate|"
      "and gate|nand gate|nor gate|xor gate|半加器|全加器|触发器|"
      "flip.flop|dff|latch|寄存器|译码器|多路复用|encoder|decoder|mux|"
-     "fifo|异步.*fifo|async.*fifo|gray.*code|格雷码|同步器|synchronizer|"
+     "fifo|异步.*fifo|async.*fifo|gray.*code|格雷码|同步器|synchronizer|两级同步|"
      "clock.*domain|counter|ram|双口|dpram|demux|三态|tristate|"
      "alu|算术逻辑|移位|shift|编码器|锁存器|数字滤波",
      "draw_digital", {}),
@@ -131,7 +131,16 @@ _EXACT_ROUTES: list[tuple[str, str, dict]] = [
      "低通|高通|带通|带阻|频率响应|"
      "差分放大|差分对|diff.*pair|differential.*amp|"
      "rc.*filter|lc.*filter|rlc|passive.*filter|active.*filter|"
-     "low.pass|high.pass|band.pass|lowpass|highpass",
+     "low.pass|high.pass|band.pass|lowpass|highpass|bandpass|"
+     "陷波器|notch.*filter|butterworth|chebyshev|bessel|elliptic|"
+     "共射|共集|共基|common.*emitter|common.*collector|common.*base|"
+     "推挽|push.*pull|电流镜|current.*mirror|"
+     "功率放大|power.*amp|震荡器|oscillator.*circuit|晶体振荡|"
+     "积分电路|微分电路|integrator|differentiator|"
+     "比较器|comparator.*circuit|"
+     "bjt|mosfet|jfet|整流|rectifier|稳压|regulator|"
+     "LC谐振|并联谐振|串联谐振|偏置|biasing|分压|"
+     "共模|CMRR",
      "draw_analog", {}),
     # 系统框图 / 信号链 (RF、混合信号等)
     ("系统框图|block.*diagram|信号链|signal.*chain|rf.*chain|"
