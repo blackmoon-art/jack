@@ -290,6 +290,40 @@ class Circuit:
 
     # ── 单链绘制 ────────────────────────────────────────────
 
+    def _try_connect_node(self, part_data: str, named: dict,
+                          last, d, elm) -> tuple:
+        """如果是节点引用，画线连接到该节点。返回 (new_last, was_handled)。
+
+        支持:
+          - 简单引用: n2 → 连线到 n2.end (或 .center)
+          - 锚点引用: q2.emitter → 连线到 q2 的 emitter 锚点
+        """
+        token = part_data.strip()
+
+        # 检查: 整个 token 是否就是命名节点 (如 n2)
+        if token in named:
+            elem = named[token]
+            anchor = self._get_anchor(elem)
+            if last is not None:
+                d.add(elm.Line().at(self._get_anchor(last)).to(anchor))
+            return _AnchorRef(anchor), True
+
+        # 检查: token 包含 . 且 base 在 named 中 (如 q2.emitter)
+        if "." in token:
+            base, anchor_name = token.split(".", 1)
+            base, anchor_name = base.strip(), anchor_name.strip()
+            if base in named:
+                elem = named[base]
+                try:
+                    anchor = getattr(elem, anchor_name)
+                except AttributeError:
+                    anchor = self._get_anchor(elem)
+                if last is not None:
+                    d.add(elm.Line().at(self._get_anchor(last)).to(anchor))
+                return _AnchorRef(anchor), True
+
+        return None, False
+
     def _draw_chain(self, chain_desc: str, comp_map: dict,
                     named: dict, last, d, elm, direction: str):
         """绘制一条链。返回 (new_last, current_direction)。"""
@@ -316,6 +350,13 @@ class Circuit:
             if part_type == "direction":
                 direction = part_data
             elif part_type == "series":
+                # ── 尝试中链节点引用 (如 q2.emitter, n2) ──
+                ref_last, handled = self._try_connect_node(
+                    part_data, named, last, d, elm)
+                if handled:
+                    last = ref_last
+                    continue
+
                 n, v, lbl, node_name, comp_anchor = self._parse_comp(part_data)
                 el_obj = self._place_component(
                     n, v, lbl, last, d, elm, comp_map, direction, comp_anchor)
