@@ -407,6 +407,7 @@ class Circuit:
             direction = "right"
             _input_usage: dict[int, int] = {}
             _fanout_count: dict[int, int] = {}
+            _chain_seq: list[int] = [0]  # 新信号链序号（用于垂直偏移）
 
             chains = self._split_chains(description)
             if not chains:
@@ -415,7 +416,7 @@ class Circuit:
             for chain_desc in chains:
                 last, direction = self._draw_chain(
                     chain_desc, comp_map, named, last, d, elm, "right",
-                    valid_names_str, _input_usage, _fanout_count)
+                    valid_names_str, _input_usage, _fanout_count, _chain_seq)
 
             ts = datetime.now().strftime("%Y%m%d_%H%M%S")
             prefix = {"digital": "digital", "analog": "analog", "block": "block"}
@@ -543,7 +544,8 @@ class Circuit:
     def _draw_chain(self, chain_desc: str, comp_map: dict,
                     named: dict, last, d, elm, direction: str,
                     valid_names_str: str, _input_usage: dict | None = None,
-                    _fanout_count: dict | None = None):
+                    _fanout_count: dict | None = None,
+                    _chain_seq: list | None = None):
         chain_desc = chain_desc.strip()
 
         # connect(N1, N2): 两个命名节点间画连接线
@@ -578,8 +580,13 @@ class Circuit:
                         self._get_anchor(last)[1] - offset)})()
                 _fanout_count[key] = cnt + 1
         else:
-            # 链首不是节点引用 → 独立信号路径，重置 last
+            # 链首不是节点引用 → 新信号路径，向下偏移避免重叠
             last = None
+            if _chain_seq is not None:
+                _chain_seq[0] += 1
+                if _chain_seq[0] > 1:
+                    y_off = -(_chain_seq[0] - 1) * 1.5
+                    last = type('_OffsetAnchor', (), {'end': (0, y_off)})()
 
         if not chain_desc: return last, direction
 
