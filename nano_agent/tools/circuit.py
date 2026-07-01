@@ -65,25 +65,18 @@ _ANALOG_COMPS = (
 ) + _COMMON_COMPS
 
 _BLOCK_COMPS = (
-    # RF / 信号链
+    # RF / 信号链 (核心框图元件)
     "mixer", "lna", "amp", "amplifier",
     "adc", "dac", "oscillator", "lo",
     "filter_box", "filter",
     "combiner", "splitter", "rf",
     # 通用
     "block", "port", "terminal",
-    # 基础元件 (框图也可用)
+    # 基础元件 (信号链中常用)
     "resistor", "r", "capacitor", "c", "inductor", "l",
     "opamp", "ground", "gnd", "ac", "v", "battery",
-    # 数字 (框图也可用)
-    "and_gate", "or_gate", "not_gate", "nand_gate", "nor_gate",
-    "xor_gate", "xnor_gate", "buffer", "dff", "jkff",
-    "ram", "counter", "comparator", "gray_code",
-    "mux", "decoder", "encoder", "latch", "register",
-    "tristate", "alu", "shift_reg", "npn", "pnp",
-    "diode", "led", "isource", "antenna",
-    "fuse", "lamp", "motor", "speaker", "microphone",
-    "switch", "spst",
+    "diode", "led", "npn", "pnp",
+    "antenna", "switch", "spst",
 ) + _COMMON_COMPS
 
 
