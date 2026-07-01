@@ -170,18 +170,35 @@ def save_usage(data: dict):
     USAGE_FILE.write_text(json.dumps(data, ensure_ascii=False))
 
 
-def check_daily_limit(session_id: str) -> str:
-    """检查每日使用次数。返回空字符串表示通过，否则返回错误信息。"""
+def get_client_ip(request: Request) -> str:
+    """从请求中提取客户端真实 IP。
+
+    优先检查反向代理头（X-Forwarded-For, X-Real-IP），
+    兜底使用直连 IP。
+    """
+    # X-Forwarded-For: "client, proxy1, proxy2" → 取第一个
+    forwarded = request.headers.get("X-Forwarded-For", "").strip()
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    real_ip = request.headers.get("X-Real-IP", "").strip()
+    if real_ip:
+        return real_ip
+    # 兜底：直连 IP（可能为 None，如测试环境）
+    return getattr(request.client, "host", "unknown") if request.client else "unknown"
+
+
+def check_daily_limit(ip: str) -> str:
+    """检查每日使用次数，按 IP 限制。返回空字符串表示通过，否则返回错误信息。"""
     if DAILY_LIMIT <= 0:
         return ""
     today = _today()
     usage = load_usage()
     if today not in usage:
         usage[today] = {}
-    count = usage[today].get(session_id, 0)
+    count = usage[today].get(ip, 0)
     if count >= DAILY_LIMIT:
         return f"今日已达上限 ({DAILY_LIMIT} 次)，请明天再试"
-    usage[today][session_id] = count + 1
+    usage[today][ip] = count + 1
     save_usage(usage)
     return ""
 
@@ -381,11 +398,12 @@ async def chat(request: Request):
 
     session_id = get_or_create_session(session_id)
 
-    # 每日限流：owner 藉免
+    # 每日限流：owner 藉免，外部用户按 IP 限制
     owner_code = os.getenv("WEB_ACCESS_CODE", "")
     is_owner = bool(owner_code and body.get("code", "") == owner_code)
     if not is_owner:
-        limit_msg = check_daily_limit(session_id)
+        client_ip = get_client_ip(request)
+        limit_msg = check_daily_limit(client_ip)
         if limit_msg:
             return {"error": limit_msg}
 
