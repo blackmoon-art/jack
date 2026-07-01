@@ -25,6 +25,10 @@ _EXACT_ROUTES: list[tuple[str, str, dict]] = [
     # 等高线（放最前面，优先级高于其他含"图"的词）
     ("等高线|梯度下降|contour|loss surface|损失函数可视化",
      "generate_chart", {"chart_type": "contour", "data": "X**2+Y**2"}),
+    # Bode / 频率响应（放频谱前面，更精确的滤波器关键词）
+    ("bode|频率响应|幅频特性|相频特性|freq.*resp|frequency response|"
+     "滤波器响应|filter.*response|伯德图|bode.*plot",
+     "generate_chart", {"chart_type": "bode"}),
     # 频谱 / FFT（放波形前面，fft/spectrum 比 waveform 更精确）
     ("傅里叶|fourier|fft|频谱|spectrum|频域|frequency domain|频率分析|"
      "谐波|harmonic|傅立叶|傅里叶变换|fourier transform",

@@ -32,7 +32,8 @@ class Chart:
          "3D: wireframe=线框, surface=实体曲面(带光照+颜色映射). surface type supports formulas: data='sin(sqrt(X**2+Y**2))' "
          "and predefined shapes: sphere, torus, saddle, paraboloid, cone, cylinder, heart, mobius, ripple, hyperboloid, helix. "
          "waveform: signal/voltage wave (NOT 交互时序图 — use mermaid_chart sequenceDiagram for that). "
-         "spectrum: FFT frequency spectrum (傅立叶变换/频谱分析).", "generate_chart",
+         "spectrum: FFT frequency spectrum (傅立叶变换/频谱分析). "
+         "bode: filter frequency response / Bode plot (滤波器频率响应, 幅频特性, 相频特性).", "generate_chart",
          {"chart_type": {"type": "string", "description": (
              "Chart type (one of 20). Each with data format:\n"
              "line: y1,y2;y3,y4 labels='x;S1;S2' | "
@@ -52,6 +53,7 @@ class Chart:
              "surface: shape|formula labels='x1,x2;y1,y2' e.g. data='heart' | "
              "waveform: analog='sine,2,5;square,6,3' (type,freq,amp) or digital='0,1,0;1,0,1'. labels='CH1;CH2' | "
              "spectrum: same format as waveform. labels='sample_rate;CH1' e.g. data='square,5,3',labels='1000' | "
+             "bode: filter_type,R,C labels='f_min,f_max' e.g. data='lowpass,1000,10e-9' (RC). Also: highpass, bandpass | "
              "geometry: proof_type labels='params' e.g. data='Pythagoras',labels='3,4' | "
              "draw: shape_defs labels='notes' e.g. data='circle(0,0,1)' | "
              "cat: style labels='pose' e.g. data='simple'"
@@ -59,7 +61,8 @@ class Chart:
           "data": {"type": "string", "description": (
               "Values: comma-sep within series, semicolon-sep between series. "
               "3D surface/wireframe: formula (X**2+Y**2) or shape name (sphere,torus,heart...). "
-              "Waveform/spectrum: analog='sine,2,5;square,6,3' (type,freq_hz,amp) or digital='0,1,0;1,0,1'. "
+              "Waveform/spectrum: analog='sine,2,5;square,6,3' or digital='0,1,0;1,0,1'. "
+              "Bode: 'lowpass,1000,10e-9' (filter_type,R,C). "
               "Regression: 'x1,y1;x2,y2' (paired) or 'x1,x2;y1,y2' (2-series)."
           )},
           "title": {"type": "string", "description": "Chart title"},
@@ -78,7 +81,7 @@ class Chart:
     # chart_type → 绘制器映射
     _BASIC_TYPES = {"line", "curve", "bar", "scatter", "pie", "histogram", "area"}
     _ADVANCED_TYPES = {"heatmap", "radar", "bubble", "function", "regression",
-                       "wireframe", "surface", "waveform", "spectrum", "contour"}
+                       "wireframe", "surface", "waveform", "spectrum", "bode", "contour"}
     _SPECIAL_TYPES = {"geometry", "draw", "cat"}
 
     def __init__(self, work_dir: str, charts_dir: str = ""):
@@ -113,6 +116,16 @@ class Chart:
         if (not data_sets or not data_sets[0]) and chart_type not in no_data_types:
             return "Error: data is required (e.g. '10,20,30,40')"
 
+        chart_type = chart_type.lower().strip()
+
+        # ── 数据验证：发现问题时返回可操作的错误消息 ──
+        val_err = self._validate(chart_type, data_sets, label_sets, raw_data=data, raw_labels=labels)
+        if val_err:
+            return val_err
+
+        # ── 元数据：LLM 可据此判断图表是否正确 ──
+        meta = self._compute_metadata(chart_type, data_sets, label_sets, data, labels)
+
         # 中文字体
         plt.rcParams["font.sans-serif"] = [
             "WenQuanYi Micro Hei", "Noto Sans CJK SC", "Arial Unicode MS", "PingFang SC", "Heiti SC",
@@ -120,7 +133,6 @@ class Chart:
         ]
         plt.rcParams["axes.unicode_minus"] = False
 
-        chart_type = chart_type.lower().strip()
         style = style.lower().strip()
         is_dark = style != "light"
         bg = "#1a1a2e" if is_dark else "#ffffff"
@@ -161,7 +173,163 @@ class Chart:
         finally:
             plt.close(fig)
         url = f"/charts/{filename}"
-        return f"Chart generated: {url}\n![{title}]({url})"
+        # 返回：元数据 + 图片 markdown，LLM 可据此验证并纠错
+        meta_str = f"[Chart: type={meta['type']}, {meta['summary']}]"
+        return f"{meta_str}\n![{title or chart_type}]({url})"
+
+    # ── 数据验证 ────────────────────────────────────────────
+
+    @staticmethod
+    def _validate(chart_type: str, data_sets: list[list],
+                  label_sets: list[list], raw_data="", raw_labels="") -> str | None:
+        """验证输入数据合理性。返回错误消息或 None（通过）。"""
+        ct = chart_type
+
+        if ct in ("bar", "pie", "radar"):
+            vals = [float(x) for ds in data_sets for x in ds if x]
+            if not vals:
+                return f"Error: {ct} chart needs data (e.g. '10,20,30')"
+            if len(vals) < 1:
+                return f"Error: {ct} chart needs at least 1 value"
+
+        if ct == "scatter":
+            if len(data_sets) >= 2:
+                x_len = len(data_sets[0])
+                y_len = len(data_sets[1])
+                if x_len != y_len:
+                    return (f"Error: scatter x and y must have same length "
+                            f"(got {x_len} vs {y_len}). "
+                            f"Format: data='x1,x2;y1,y2' or data='y1,y2'")
+
+        if ct == "bubble":
+            if len(data_sets) < 3:
+                return ("Error: bubble needs 3 series (x;y;size). "
+                        f"Got {len(data_sets)}. Example: data='1,2,3;4,5,6;10,20,30'")
+            lengths = {len(ds) for ds in data_sets[:3]}
+            if len(lengths) > 1:
+                return (f"Error: bubble x/y/size must have same length "
+                        f"(got lengths {[len(d) for d in data_sets[:3]]})")
+
+        if ct == "heatmap":
+            if len(data_sets) < 2:
+                return ("Error: heatmap needs ≥2 rows. "
+                        f"Format: data='1,2,3;4,5,6' (rows semicolon-sep)")
+
+        if ct == "bode":
+            parts = [p.strip() for p in raw_data.split(",") if p.strip()]
+            if len(parts) < 3:
+                return ("Error: bode needs filter_type,R,C. "
+                        "Example: data='lowpass,1000,10e-9'")
+
+        if ct in ("line", "curve", "area") and len(data_sets) > 3:
+            # 多系列时检查长度一致性
+            lengths = {len(ds) for ds in data_sets if ds}
+            if len(lengths) > 1:
+                return (f"Error: multi-series {ct} needs same length per series "
+                        f"(got {sorted(lengths)}). Use labels='x;S1;S2' for x-coords")
+
+        return None
+
+    # ── 元数据计算 ──────────────────────────────────────────
+
+    @staticmethod
+    def _compute_metadata(chart_type: str, data_sets: list[list],
+                          label_sets: list[list],
+                          raw_data="", raw_labels="") -> dict:
+        """计算结构化元数据，LLM 可据此验证图表正确性。"""
+        ct = chart_type
+        meta = {"type": ct, "summary": ""}
+
+        def _num_vals():
+            vals = []
+            for ds in data_sets:
+                for x in ds:
+                    try:
+                        vals.append(float(x))
+                    except (ValueError, TypeError):
+                        pass
+            return vals
+
+        if ct in ("line", "curve", "bar", "area"):
+            vals = _num_vals()
+            if vals:
+                meta["summary"] = (f"series={len(data_sets)}, "
+                                   f"points={[len(ds) for ds in data_sets if ds]}, "
+                                   f"range=[{min(vals):.1f}, {max(vals):.1f}]")
+            else:
+                meta["summary"] = f"series={len(data_sets)}, no numeric data"
+
+        elif ct == "scatter":
+            meta["summary"] = f"series={len(data_sets)}, points={[len(ds) for ds in data_sets if ds]}"
+
+        elif ct == "pie":
+            vals = _num_vals()
+            meta["summary"] = f"slices={len(vals)}, values={[f'{v:.0f}' for v in vals[:6]]}"
+
+        elif ct == "histogram":
+            vals = _num_vals()
+            meta["summary"] = f"bins={label_sets[0][0] if label_sets and label_sets[0] else 'auto'}, samples={len(vals)}"
+
+        elif ct == "heatmap":
+            meta["summary"] = f"rows={len(data_sets)}, cols={len(data_sets[0]) if data_sets else 0}"
+
+        elif ct == "radar":
+            vals = _num_vals()
+            meta["summary"] = f"axes={len(vals)}, range=[{min(vals):.0f},{max(vals):.0f}]"
+
+        elif ct == "bubble":
+            meta["summary"] = f"points={len(data_sets[0]) if data_sets else 0}"
+
+        elif ct == "function":
+            expr = data_sets[0][0] if data_sets and data_sets[0] else "?"
+            xr = label_sets[0] if label_sets and label_sets[0] else ["-5", "5"]
+            meta["summary"] = f"expr={expr}, x=[{xr[0]},{xr[-1] if len(xr)>1 else xr[0]}]"
+
+        elif ct == "regression":
+            pts = 0
+            for ds in data_sets:
+                if len(ds) == 2:
+                    pts += 1
+                else:
+                    pts += len(ds)
+            meta["summary"] = f"points={pts}"
+
+        elif ct == "contour":
+            has_formula = any(op in str(raw_data) for op in ("**", "*", "+", "sin", "cos", "exp"))
+            meta["summary"] = f"formula={has_formula}"
+
+        elif ct in ("wireframe", "surface"):
+            raw = raw_data.strip()
+            if raw in ("sphere", "torus", "cone", "saddle", "heart", "mobius",
+                        "paraboloid", "ripple", "helix", "hyperboloid", "cylinder", "cube"):
+                meta["summary"] = f"shape={raw}"
+            elif raw:
+                meta["summary"] = f"formula={raw[:60]}"
+            else:
+                meta["summary"] = "default_shape"
+
+        elif ct == "waveform":
+            analog = sum(1 for ds in data_sets if ds and str(ds[0]).lower()
+                         in ("sine", "square", "triangle", "sawtooth", "sin", "cos"))
+            digital = len(data_sets) - analog
+            meta["summary"] = f"channels={len(data_sets)}, analog={analog}, digital={digital}"
+
+        elif ct == "spectrum":
+            sr = label_sets[0][0] if label_sets and label_sets[0] else "1000"
+            meta["summary"] = f"channels={len(data_sets)}, sample_rate={sr}Hz"
+
+        elif ct == "bode":
+            parts = [p.strip() for p in raw_data.split(",") if p.strip()]
+            ftype = parts[0] if parts else "?"
+            meta["summary"] = f"filter={ftype}"
+
+        elif ct in ("geometry", "draw", "cat"):
+            meta["summary"] = f"type={raw_data[:40] if raw_data else ct}"
+
+        else:
+            meta["summary"] = f"data_series={len(data_sets)}"
+
+        return meta
 
     def _dispatch(self, chart_type, fig, ax, data_sets, label_sets,
                   raw_data, raw_labels, is_dark, title, fg, grid_c):
@@ -177,6 +345,8 @@ class Chart:
                 AdvancedCharts.draw_surface(fig, raw_data, label_sets, is_dark, title)
             elif chart_type == "spectrum":
                 AdvancedCharts.draw_spectrum(ax, data_sets, label_sets, is_dark=is_dark)
+            elif chart_type == "bode":
+                AdvancedCharts.draw_bode(fig, raw_data, label_sets, is_dark, title)
             else:
                 method = getattr(AdvancedCharts, f"draw_{chart_type}")
                 method(ax, data_sets, label_sets, is_dark=is_dark)
@@ -196,7 +366,7 @@ class Chart:
     @staticmethod
     def _apply_style(ax, chart_type, is_dark, fg, grid_c, x_label, y_label, title):
         """应用通用坐标轴样式。"""
-        if chart_type in ("wireframe", "surface"):
+        if chart_type in ("wireframe", "surface", "bode"):
             pass  # 3D 轴样式在各绘制器内设置
         elif chart_type not in ("pie", "radar"):
             ax.tick_params(colors=fg)

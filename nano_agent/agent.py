@@ -239,6 +239,12 @@ class Agent:
         self._emit("tool_result", {"name": name, "result": result_text, "success": is_success})
         logger.debug(f"[Tool Result] {result_text[:200]}")
 
+        # 图表视觉验证（可选，AGENT_CHART_VERIFY=true 启用）
+        if self.config.chart_verify and is_success:
+            verify = self._verify_chart_result(name, result_text)
+            if verify:
+                result_text = result_text + "\n" + verify
+
         # Orient 可在上层（_agent_loop）显式执行
         content = result_text
         if enable_orient:
@@ -265,6 +271,40 @@ class Agent:
             f"[Orient] interpretation={orientation.get('interpretation', '')[:200]}\n"
             f"[Orient] implication={orientation.get('implication', '')[:200]}"
         )
+
+    # ── 图表视觉验证 ────────────────────────────────────
+    _CHART_TOOLS = {"generate_chart", "draw_circuit", "mermaid_chart",
+                    "stock_chart", "ai_image"}
+
+    def _verify_chart_result(self, tool_name: str, result: str) -> str:
+        """对图表工具输出做视觉验证。失败静默返回空字符串。"""
+        if tool_name not in self._CHART_TOOLS:
+            return ""
+
+        # 从结果中提取图片路径
+        import re as _re_verify
+        m = _re_verify.search(r'/charts/[\w.-]+\.(?:png|jpg|jpeg|gif|webp|svg)', result)
+        if not m:
+            return ""
+        img_path = m.group(0)
+
+        try:
+            question = (
+                "Verify this chart: 1) Does it look correct and complete? "
+                "2) Are all labels/axes readable? 3) Any visible errors? "
+                "Answer briefly in one sentence. If OK, just say 'Chart looks correct.'"
+            )
+            verify_obs = self.tools.execute("analyze_image", {
+                "path": img_path,
+                "question": question,
+            })
+            verify_text = str(verify_obs)
+            if verify_obs.success and verify_text and "Error" not in verify_text:
+                v = verify_text.strip()[:300]
+                return f"\n[Chart Verify] {v}"
+        except Exception:
+            pass
+        return ""
 
     # ── 核心循环 (O-O-D-A) ─────────────────────────────
 

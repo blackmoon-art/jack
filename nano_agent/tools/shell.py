@@ -1,13 +1,12 @@
 """Shell 工具：bash, calculate。"""
 
-import ast
-import operator as _op
 import os
 import shlex
 import subprocess
 from typing import Any
 
 from .observation import Observation
+from .safe_math import safe_eval
 
 # ── 危险命令白名单（只允许这些前缀的命令通过）────────────
 _SAFE_COMMAND_PREFIXES = [
@@ -209,45 +208,9 @@ class Shell:
             )
 
     def calculate(self, expression: str) -> Observation:
-        """安全计算数学表达式（使用 ast 解析，无 eval）。"""
-
-        _ALLOWED_OPS = {
-            ast.Add: _op.add,
-            ast.Sub: _op.sub,
-            ast.Mult: _op.mul,
-            ast.Div: _op.truediv,
-            ast.FloorDiv: _op.floordiv,
-            ast.Mod: _op.mod,
-            ast.Pow: _op.pow,
-            ast.USub: _op.neg,
-            ast.UAdd: _op.pos,
-        }
-
-        def _eval_ast(node):
-            if isinstance(node, ast.Constant):
-                return node.value
-            if isinstance(node, ast.BinOp):
-                left = _eval_ast(node.left)
-                right = _eval_ast(node.right)
-                op_cls = type(node.op)
-                if op_cls not in _ALLOWED_OPS:
-                    raise ValueError(f"Unsupported operator: {op_cls.__name__}")
-                if op_cls is ast.Div and right == 0:
-                    raise ZeroDivisionError("division by zero")
-                return _ALLOWED_OPS[op_cls](left, right)
-            if isinstance(node, ast.UnaryOp):
-                operand = _eval_ast(node.operand)
-                op_cls = type(node.op)
-                if op_cls not in _ALLOWED_OPS:
-                    raise ValueError(f"Unsupported unary: {op_cls.__name__}")
-                return _ALLOWED_OPS[op_cls](operand)
-            if isinstance(node, ast.Expression):
-                return _eval_ast(node.body)
-            raise ValueError(f"Unsupported expression element: {type(node).__name__}")
-
+        """安全计算数学表达式（AST 白名单，无 eval）。"""
         try:
-            tree = ast.parse(expression.strip(), mode="eval")
-            result = _eval_ast(tree)
+            result = safe_eval(expression)
             return Observation(
                 tool_name="calculate",
                 result=f"{expression} = {result}",

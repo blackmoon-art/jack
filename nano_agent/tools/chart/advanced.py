@@ -1,72 +1,14 @@
 """高级图表: heatmap, radar, bubble, function, regression, wireframe, waveform, contour。"""
 
-import ast
 import logging
-import operator as _op
 import re
 
 import matplotlib.pyplot as plt
 import numpy as np
 
+from ..safe_math import safe_eval
+
 logger = logging.getLogger("nano_agent.tools.chart.advanced")
-
-
-# ── 安全数学表达式求值器 (AST-based, 替代 eval) ──────────
-
-def _safe_eval_math(expr_str: str, namespace: dict):
-    """用 ast.parse 安全求值数学表达式。只允许已知的运算符、函数和变量。
-
-    支持的语法:
-      - 字面量: 数字 (int/float)
-      - 变量:   Name 节点（必须在 namespace 中已存在）
-      - 运算符: +, -, *, /, **, 一元 +/-
-      - 函数调用: 只允许 namespace 中的可调用对象
-      - 不允许: 属性访问, 下标, 比较, 布尔, 推导式等
-    """
-
-    _BINOPS = {
-        ast.Add: _op.add, ast.Sub: _op.sub, ast.Mult: _op.mul,
-        ast.Div: _op.truediv, ast.Pow: _op.pow,
-    }
-    _UNOPS = {ast.USub: _op.neg, ast.UAdd: _op.pos}
-
-    def _eval(node):
-        if isinstance(node, ast.Constant):
-            return node.value
-        if isinstance(node, ast.Name):
-            if node.id in namespace:
-                return namespace[node.id]
-            raise NameError(f"name '{node.id}' is not defined")
-        if isinstance(node, ast.BinOp):
-            left = _eval(node.left)
-            right = _eval(node.right)
-            op_cls = type(node.op)
-            if op_cls not in _BINOPS:
-                raise ValueError(f"Unsupported operator: {op_cls.__name__}")
-            return _BINOPS[op_cls](left, right)
-        if isinstance(node, ast.UnaryOp):
-            operand = _eval(node.operand)
-            op_cls = type(node.op)
-            if op_cls not in _UNOPS:
-                raise ValueError(f"Unsupported unary: {op_cls.__name__}")
-            return _UNOPS[op_cls](operand)
-        if isinstance(node, ast.Call):
-            func = _eval(node.func)
-            if not callable(func):
-                raise ValueError(f"'{type(func).__name__}' is not callable")
-            args = [_eval(a) for a in node.args]
-            if node.keywords:
-                raise ValueError("Keyword arguments not allowed")
-            return func(*args)
-        if isinstance(node, ast.Expression):
-            return _eval(node.body)
-        raise ValueError(f"Unsupported expression element: {type(node).__name__}")
-
-    try:
-        tree = ast.parse(expr_str.strip(), mode="eval")
-        return _eval(tree)
-    except Exception:
-        raise  # re-raise for caller to handle
 
 
 class AdvancedCharts:
@@ -202,7 +144,7 @@ class AdvancedCharts:
         has_error = False
         for i, expr in enumerate(exprs):
             try:
-                y = _safe_eval_math(expr, ns)
+                y = safe_eval(expr, ns)
             except Exception as e:
                 logger.warning(f"Function eval failed for '{expr}': {e}")
                 if not has_error:
@@ -929,6 +871,154 @@ class AdvancedCharts:
             ax.legend(facecolor="#1a1a2e" if is_dark else "#f5f5f5",
                       edgecolor="#444" if is_dark else "#ccc", labelcolor=fg)
 
+    # ── Bode 图 / 频率响应 ──────────────────────────────
+
+    @staticmethod
+    def draw_bode(fig, data, label_sets, is_dark, title):
+        """Bode 图 — 滤波器频率响应（幅度 dB + 相位 vs 对数频率）。
+
+        data 格式: 'filter_type,R,C' 或 'filter_type,R1,C1,R2,C2'
+          RC 低通:  'lowpass,1000,10e-9'    (R=1kΩ, C=10nF)
+          RC 高通:  'highpass,1000,10e-9'
+          RL 低通:  'lowpass_rl,100,0.01'
+          RL 高通:  'highpass_rl,100,0.01'
+          RLC 带通: 'bandpass,1000,10e-9,100,10e-6'
+
+        labels: 'f_min,f_max' (默认自动计算: cutoff/100 到 cutoff*100)
+        """
+        import matplotlib.pyplot as plt
+
+        fg_c = "#e0e0e0" if is_dark else "#333"
+        bg_c = "#1a1a2e" if is_dark else "#fafafa"
+        grid_c = "#333" if is_dark else "#ddd"
+
+        # Parse filter params
+        parts = [p.strip() for p in (data or "").split(",") if p.strip()]
+        if len(parts) < 3:
+            ax = fig.add_subplot(111)
+            ax.text(0.5, 0.5, "Bode: need filter_type,R,C\n"
+                    "e.g. data='lowpass,1000,10e-9'",
+                    transform=ax.transAxes, ha="center", color=fg_c, fontsize=11)
+            ax.set_facecolor(bg_c)
+            return
+
+        ftype = parts[0].lower()
+        try:
+            vals = [float(p) for p in parts[1:]]
+        except ValueError:
+            ax = fig.add_subplot(111)
+            ax.text(0.5, 0.5, f"Bode: invalid numbers in '{data}'",
+                    transform=ax.transAxes, ha="center", color=fg_c)
+            return
+
+        # Compute transfer function H(s) at s = jω
+        def _bode_h(ft, r, c, l=None, f=None):
+            """Return H(jω) for given component values and frequency array."""
+            omega = 2 * np.pi * f
+            s = 1j * omega
+            if ft == "lowpass":
+                return 1 / (1 + s * r * c)
+            elif ft == "highpass":
+                return s * r * c / (1 + s * r * c)
+            elif ft == "lowpass_rl":
+                return r / (r + s * l) if l else np.ones_like(f)
+            elif ft == "highpass_rl":
+                return s * l / (r + s * l) if l else np.ones_like(f)
+            elif ft in ("bandpass", "bandstop") and len(vals) >= 4:
+                r1, c1, r2, c2 = vals[0], vals[1], vals[2], vals[3]
+                if ft == "bandpass":
+                    # HP cascaded with LP
+                    h_hp = s * r1 * c1 / (1 + s * r1 * c1)
+                    h_lp = 1 / (1 + s * r2 * c2)
+                    return h_hp * h_lp
+                else:
+                    h_lp = 1 / (1 + s * r1 * c1)
+                    h_hp = s * r2 * c2 / (1 + s * r2 * c2)
+                    return h_lp + h_hp
+            return np.ones_like(f)
+
+        # Determine frequency range
+        if ftype in ("lowpass", "highpass"):
+            fc = 1 / (2 * np.pi * vals[0] * vals[1])
+        elif ftype in ("lowpass_rl", "highpass_rl") and len(vals) >= 2:
+            fc = vals[0] / (2 * np.pi * vals[1])
+        elif len(vals) >= 4:
+            fc = 1 / (2 * np.pi * vals[0] * vals[1])
+        else:
+            fc = 1000
+
+        f_min = fc / 100
+        f_max = fc * 100
+        if label_sets and label_sets[0]:
+            try:
+                f_min = float(label_sets[0][0])
+                if len(label_sets[0]) >= 2:
+                    f_max = float(label_sets[0][1])
+            except (ValueError, IndexError):
+                pass
+        f_min = max(f_min, 0.1)
+        f_max = min(f_max, 1e9)
+
+        f = np.logspace(np.log10(f_min), np.log10(f_max), 1000)
+
+        # Compute H(jω)
+        if len(vals) == 2:
+            h = _bode_h(ftype, vals[0], vals[1], f=f)
+        elif len(vals) == 3:
+            h = _bode_h(ftype, vals[0], vals[1], l=vals[2], f=f)
+        elif len(vals) >= 4:
+            h = _bode_h(ftype, vals[0], vals[1], vals[2], f=f)
+        else:
+            h = np.ones_like(f)
+
+        mag_db = 20 * np.log10(np.abs(h) + 1e-15)
+        phase_deg = np.angle(h, deg=True)
+
+        # Create subplots
+        fig.clf()
+        ax1 = fig.add_subplot(211)
+        ax2 = fig.add_subplot(212)
+
+        fig.patch.set_facecolor(bg_c)
+        ax1.set_facecolor(bg_c)
+        ax2.set_facecolor(bg_c)
+
+        # Magnitude plot
+        ax1.semilogx(f, mag_db, color="#7c3aed", linewidth=2)
+        ax1.axhline(y=-3, color="#ef4444", linestyle="--", linewidth=1, alpha=0.7,
+                    label="-3 dB cutoff")
+        # Mark cutoff
+        if f_min <= fc <= f_max:
+            idx = np.argmin(np.abs(f - fc))
+            ax1.axvline(x=fc, color="#f59e0b", linestyle=":", linewidth=1, alpha=0.5)
+            ax1.plot(fc, mag_db[idx], "o", color="#f59e0b", markersize=6)
+            ax1.annotate(f"fc={fc:.1f}Hz", (fc, mag_db[idx]),
+                         textcoords="offset points", xytext=(8, -12),
+                         fontsize=8, color="#f59e0b")
+
+        ax1.set_ylabel("Magnitude (dB)", color=fg_c, fontsize=10)
+        ax1.grid(True, alpha=0.15, color=grid_c)
+        ax1.legend(fontsize=8, facecolor=bg_c, edgecolor=grid_c, labelcolor=fg_c)
+        ax1.tick_params(colors=fg_c, labelsize=9)
+        ax1.set_xlim(f_min, f_max)
+
+        # Phase plot
+        ax2.semilogx(f, phase_deg, color="#3b82f6", linewidth=2)
+        ax2.axhline(y=-45, color="#888", linestyle=":", linewidth=0.8, alpha=0.4)
+        ax2.axhline(y=-90, color="#888", linestyle=":", linewidth=0.8, alpha=0.4)
+        if f_min <= fc <= f_max:
+            ax2.axvline(x=fc, color="#f59e0b", linestyle=":", linewidth=1, alpha=0.5)
+
+        ax2.set_xlabel("Frequency (Hz)", color=fg_c, fontsize=10)
+        ax2.set_ylabel("Phase (°)", color=fg_c, fontsize=10)
+        ax2.grid(True, alpha=0.15, color=grid_c)
+        ax2.tick_params(colors=fg_c, labelsize=9)
+        ax2.set_xlim(f_min, f_max)
+
+        fig.suptitle(title or f"{ftype.title()} Filter — Bode Plot",
+                     color=fg_c, fontsize=14, fontweight="bold")
+        fig.tight_layout()
+
     # ── 等高线 / 梯度下降 ──────────────────────────────
 
     _SAFE_FUNCTIONS = {
@@ -1016,7 +1106,7 @@ class AdvancedCharts:
         expr = expr.replace("p*i", "pi")  # 保护 pi 常量
         ns = {"X": X, "Y": Y, "x": X, "y": Y, **cls._SAFE_FUNCTIONS}
         try:
-            Z = _safe_eval_math(expr, ns)
+            Z = safe_eval(expr, ns)
             return np.asarray(Z, dtype=float)
         except Exception as e:
             logger.warning(f"Contour expression eval failed for '{expr}': {e}")

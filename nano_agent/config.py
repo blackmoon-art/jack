@@ -79,6 +79,7 @@ class Config:
     max_iterations: int = field(default_factory=lambda: _env_int("AGENT_MAX_ITERATIONS", 10))
     max_tokens: int = field(default_factory=lambda: _env_int("AGENT_MAX_TOKENS", 8000))
     agent_timeout: int = field(default_factory=lambda: _env_int("AGENT_TIMEOUT", 300))
+    chart_verify: bool = field(default_factory=lambda: _env_bool("AGENT_CHART_VERIFY"))
     bash_timeout: int = field(default_factory=lambda: _env_int("AGENT_BASH_TIMEOUT", 120))
     work_dir: str = field(default_factory=lambda: _env("AGENT_WORK_DIR", str(Path.cwd())))
     charts_dir: str = field(default_factory=lambda: _env(

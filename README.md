@@ -954,6 +954,32 @@ nano_agent_plus/
 
 ## 更新日志
 
+### 2026-07-01 (图表工具 & 安全加固)
+
+- **图表工具全面升级**:
+  - **电路图 DSL**: 节点命名 (`as N1`)、锚点连接 (`@base`/`@emitter`)、多链路 (`;`)、方向控制 (`up`/`down`/`left`)、中链节点引用 (`-> n2 ->`)。支持滤波器、差分放大器等复杂拓扑。
+  - **3D 曲面渲染**: 新增 `surface` 图表类型 (`plot_surface` + 颜色映射 + colorbar)，支持公式渲染和 12 种预定义形状 (sphere, torus, heart, mobius 等)。
+  - **3D 线框增强**: `wireframe` 扩展为形状名/公式/边列表三种模式，向后兼容。
+  - **FFT 频谱图**: 新增 `spectrum` 类型，输入时域信号 → numpy FFT → 频域幅度谱 + 峰值自动标注。
+  - **Bode 图/频率响应**: 新增 `bode` 类型，支持 RC/RL/RLC 滤波器传递函数，双图（幅度 dB + 相位° vs 对数频率）。
+  - **Tool Description 全覆盖**: 20 种图表类型的 data/labels 格式 + 示例全部写入 tool description，LLM 不再需要猜测参数格式。
+- **图表自动验证闭环**:
+  - **数据验证** (`_validate`): 渲染前检查数据格式/长度/范围，返回具体错误 + 正确格式示例。
+  - **结构化元数据** (`_compute_metadata`): 每次出图返回 `[Chart: type=bar, series=1, points=[3], range=[10,30]]`，LLM 可据此判断是否正确。
+  - **多模态视觉验证** (`AGENT_CHART_VERIFY=true`): 图表生成后自动调用 vision LLM (MiniCPM-V/Ollama/Gemini/Claude) 看图验证，错误时 LLM 自动重试。
+- **安全加固**:
+  - **SSRF 三层防护**: DNS 预检 + `_SafeRedirectHandler` 重定向拦截 + `ipaddress` 标准库完整 IP 检查。
+  - **PPT 移除 auto-install**: 删除 `pip install` 子进程调用，改为手动安装指引。
+  - **Weather 升级**: curl 子进程 → `urllib.request` + HTTPS，消除 SSL 配置继承风险。
+  - **AST 求值器去重**: 提取到 `tools/safe_math.py`，`shell.py` 和 `advanced.py` 统一调用。
+- **搜索优先级动态排序**: 有 Brave API Key → Brave 优先；无 Key → Bing 优先。
+- **IP 限流**: `check_daily_limit` 从按 `session_id` 改为按客户端 IP 计数，支持 X-Forwarded-For。
+- **类型标注**: 全项目 `Optional[X]` → `X | None` (Python 3.10+)，放弃 3.8/3.9 兼容。
+- **运维增强**: `AGENT_TIMEOUT` 全局超时 (默认 300s)、`AGENT_LOG_FORMAT=json` 结构化日志、`_env_int` 非法值不崩溃。
+- **线程安全**: `_last_orientation`→`threading.local`、`pipeline_lock`、memory cache 锁保护、锁永不逐出。
+- **代码去重**: `_chat_json`、`_is_simple_task`、`_extract_xy`、`is_visual_request` 各删除重复，正则模块级编译。
+- **测试**: 143 → **217** tests (新增 test_pipeline, test_tool_security, test_memory 扩展)，macOS `/tmp` glob 修复。
+
 ### 2026-06-30 (性能 & 架构优化)
 
 - **#1 视觉路由下沉到 `agent_loop`**: `route_visual` 检查从 `DefaultStrategy.run()` 移到 `Agent._agent_loop()`，所有策略 (ReAct/Plan-Execute/Reflexion/ToT) 统一受益。命中时直接构造 tool_call (无需数据的图表类型) 或注入 hint 引导 LLM 选对工具。

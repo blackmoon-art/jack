@@ -1,11 +1,11 @@
-"""天气工具：get_weather。数据来源 Open-Meteo，免费无需 API Key。
-
-使用 subprocess + curl 获取数据，绕过 Python urllib 在某些 macOS 环境下的出站连接问题。
-"""
+"""天气工具：get_weather。数据来源 Open-Meteo，免费无需 API Key。"""
 
 import json
-import subprocess
+import logging
 import urllib.parse
+import urllib.request
+
+logger = logging.getLogger("nano_agent.tools.weather")
 
 _WMO_CODES: dict = {
     0: "晴天 ☀️", 1: "大部晴朗 🌤️", 2: "多云 ⛅", 3: "阴天 ☁️",
@@ -18,21 +18,19 @@ _WMO_CODES: dict = {
     95: "雷暴 ⚡", 96: "冰雹雷暴 ⚡", 99: "强冰雹雷暴 ⚡",
 }
 
-_GEO_BASE = "http://geocoding-api.open-meteo.com/v1/search"
-_WEATHER_BASE = "http://api.open-meteo.com/v1/forecast"
+_GEO_BASE = "https://geocoding-api.open-meteo.com/v1/search"
+_WEATHER_BASE = "https://api.open-meteo.com/v1/forecast"
 
 
-def _curl_get(url: str, timeout: int = 8) -> dict | None:
-    """用 curl 子进程获取 JSON，绕过 Python urllib 出站问题。"""
+def _http_get(url: str, timeout: int = 8) -> dict | None:
+    """用 urllib 获取 JSON，标准 HTTPS 验证。"""
     try:
-        r = subprocess.run(
-            ["curl", "-sS", "--connect-timeout", str(timeout),
-             "--max-time", str(timeout + 5), url],
-            capture_output=True, text=True, timeout=timeout + 8,
-        )
-        if r.returncode != 0 or not r.stdout.strip():
-            return None
-        return json.loads(r.stdout)
+        req = urllib.request.Request(url, headers={
+            "User-Agent": "SleepingFox/1.0",
+            "Accept": "application/json",
+        })
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return json.loads(resp.read().decode("utf-8"))
     except Exception:
         return None
 
@@ -52,7 +50,7 @@ class Weather:
             f"{_GEO_BASE}"
             f"?name={urllib.parse.quote(city)}&count=1&language=zh&format=json"
         )
-        geo_data = _curl_get(geo_url)
+        geo_data = _http_get(geo_url)
         if not geo_data:
             return "Error: Cannot reach weather service (geocoding timeout)"
 
@@ -73,7 +71,7 @@ class Weather:
             "weather_code,wind_speed_10m,pressure_msl"
             "&timezone=auto"
         )
-        w_data = _curl_get(weather_url)
+        w_data = _http_get(weather_url)
         if not w_data:
             return f"Error: Cannot fetch weather for {location} (timeout)"
 
