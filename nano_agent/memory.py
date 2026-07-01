@@ -427,6 +427,7 @@ class Memory:
         # Persistent memory cache: avoid re-reading file on every agent_loop iteration
         self._persistent_cache: str | None = None
         self._persistent_dirty: bool = True
+        self._persistent_lock = threading.Lock()
 
     # ── 1. Working Memory (窗口) ────────────────────────
 
@@ -458,14 +459,16 @@ class Memory:
         """从文件加载持久记忆（最近 N 行）。带缓存，避免每轮读磁盘。"""
         if not self.file_path:
             return ""
-        if not self._persistent_dirty and self._persistent_cache is not None:
-            return self._persistent_cache
+        with self._persistent_lock:
+            if not self._persistent_dirty and self._persistent_cache is not None:
+                return self._persistent_cache
         try:
             content = Path(self.file_path).read_text(encoding="utf-8")
             lines = content.split("\n")
             result = "\n".join(lines[-self.max_lines:]) if len(lines) > self.max_lines else content
-            self._persistent_cache = result
-            self._persistent_dirty = False
+            with self._persistent_lock:
+                self._persistent_cache = result
+                self._persistent_dirty = False
             return result
         except Exception as e:
             logger.warning(f"Failed to load persistent memory: {e}")
@@ -478,7 +481,8 @@ class Memory:
         if self.file_path:
             entry = f"\n## {timestamp}\n**Task:** {task}\n**Result:** {result[:500]}\n"
             self._append_with_rotation(self.file_path, entry, max_lines=self.max_lines)
-            self._persistent_dirty = True  # invalidate cache
+            with self._persistent_lock:
+                self._persistent_dirty = True  # invalidate cache
         # 写入长期记忆（全文检索）
         if self._long_term:
             self._long_term.add(task, result)

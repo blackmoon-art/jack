@@ -13,13 +13,7 @@ _PERIOD_DAYS = {'1mo': 30, '3mo': 90, '6mo': 180, '1y': 365, '3y': 1095, '5y': 1
 
 
 class StockMarket:
-    # 工具注册声明
-    TOOLS = [
-        ("stock_market", "Get A-share market overview: major indices + sector rankings (top/bottom 5).", "stock_market",
-         {}, []),
-        ("stock_market_us", "Get US stock market overview: S&P 500, Dow Jones, Nasdaq indices + major movers.", "stock_market_us",
-         {}, []),
-    ]
+    """股票大盘 — StockUnified 的内部 helper，不直接暴露工具。"""
 
     def __init__(self, work_dir: str, charts_dir: str = ""):
         self.work_dir = work_dir

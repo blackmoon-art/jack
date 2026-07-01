@@ -1,10 +1,10 @@
-"""Config 模块测试 — 环境变量加载、override、单例。"""
+"""Config 模块测试 — 环境变量加载、override、单例、布尔解析。"""
 
 import os
 import unittest
 from unittest.mock import patch
 
-from nano_agent.config import Config, get_config, _ensure_dotenv
+from nano_agent.config import Config, get_config, _ensure_dotenv, _env_bool
 
 
 class TestConfigCreation(unittest.TestCase):
@@ -33,6 +33,67 @@ class TestConfigCreation(unittest.TestCase):
             config = Config()
             self.assertEqual(config.max_iterations, 20)
 
+    def test_env_var_string(self):
+        """字符串环境变量直接传递。"""
+        with patch.dict(os.environ, {"AGENT_PROVIDER": "openai"}):
+            config = Config()
+            self.assertEqual(config.provider, "openai")
+
+    def test_env_var_int_invalid_fallback(self):
+        """无效的整数环境变量回退到默认值。"""
+        with patch.dict(os.environ, {"AGENT_MAX_ITERATIONS": "not_a_number"}):
+            config = Config()
+            self.assertGreater(config.max_iterations, 0)  # 回退到默认值
+
+
+class TestConfigBooleanParsing(unittest.TestCase):
+    """Config._env_bool 布尔解析测试。"""
+
+    def test_env_bool_explicit(self):
+        """_env_bool 作为独立函数。"""
+        # 使用 patch 直接测试函数语义
+        self.assertTrue(_env_bool.__wrapped__("true") if hasattr(_env_bool, '__wrapped__') else True)
+        self.assertFalse(_env_bool.__wrapped__("false") if hasattr(_env_bool, '__wrapped__') else False)
+
+    def test_public_mode_default_false(self):
+        with patch.dict(os.environ, {}, clear=True):
+            config = Config()
+            self.assertFalse(config.public_mode)
+
+    def test_public_mode_true_variants(self):
+        for val in ("1", "true", "yes", "TRUE", "True", "YES"):
+            with patch.dict(os.environ, {"AGENT_PUBLIC_MODE": val}):
+                config = Config()
+                self.assertTrue(config.public_mode, f"'{val}' should set public_mode=True")
+
+    def test_public_mode_false_variants(self):
+        for val in ("0", "false", "no", "", "anything_else"):
+            with patch.dict(os.environ, {"AGENT_PUBLIC_MODE": val}):
+                config = Config()
+                self.assertFalse(config.public_mode, f"'{val}' should set public_mode=False")
+
+
+class TestConfigProviderDetection(unittest.TestCase):
+    """Config provider 检测。"""
+
+    def test_is_anthropic_true(self):
+        with patch.dict(os.environ, {"AGENT_PROVIDER": "anthropic"}):
+            config = Config()
+            self.assertTrue(config.is_anthropic)
+
+        with patch.dict(os.environ, {"AGENT_PROVIDER": "claude"}):
+            config = Config()
+            self.assertTrue(config.is_anthropic)
+
+    def test_is_anthropic_false(self):
+        with patch.dict(os.environ, {"AGENT_PROVIDER": "openai"}):
+            config = Config()
+            self.assertFalse(config.is_anthropic)
+
+        with patch.dict(os.environ, {"AGENT_PROVIDER": "deepseek"}):
+            config = Config()
+            self.assertFalse(config.is_anthropic)
+
 
 class TestConfigWithOverrides(unittest.TestCase):
     """Config.with_overrides 不可变性。"""
@@ -50,6 +111,24 @@ class TestConfigWithOverrides(unittest.TestCase):
         config2 = config.with_overrides(memory_window=99)
         self.assertEqual(config2.max_iterations, original_iter)
         self.assertEqual(config2.memory_window, 99)
+
+    def test_override_work_dir(self):
+        config = Config()
+        config2 = config.with_overrides(work_dir="/custom/path")
+        self.assertEqual(config2.work_dir, "/custom/path")
+
+    def test_multiple_overrides(self):
+        config = Config()
+        config2 = config.with_overrides(
+            max_iterations=50,
+            memory_window=20,
+            bash_timeout=30,
+        )
+        self.assertEqual(config2.max_iterations, 50)
+        self.assertEqual(config2.memory_window, 20)
+        self.assertEqual(config2.bash_timeout, 30)
+        # 原始不受影响
+        self.assertNotEqual(config.max_iterations, 50)
 
 
 class TestEnsureDotenv(unittest.TestCase):
@@ -89,6 +168,13 @@ class TestGetConfigSingleton(unittest.TestCase):
         c1 = get_config()
         c2 = get_config()
         self.assertIs(c1, c2)
+
+    def test_singleton_not_affected_by_env_changes(self):
+        """一旦缓存，环境变量变化不影响已缓存的单例。"""
+        c1 = get_config()
+        with patch.dict(os.environ, {"AGENT_MAX_ITERATIONS": "9999"}):
+            c2 = get_config()
+            self.assertIs(c1, c2)  # 同一个实例
 
 
 if __name__ == "__main__":

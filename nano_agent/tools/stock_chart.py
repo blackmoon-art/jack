@@ -15,14 +15,7 @@ _PERIOD_DAYS = {'1mo': 30, '3mo': 90, '6mo': 180, '1y': 365, '3y': 1095, '5y': 1
 
 
 class StockChart:
-    # 工具注册声明
-    TOOLS = [
-        ("stock_chart", "Generate stock price chart (PNG) with volume subplot. A-shares via Tencent API, US/HK via yfinance. Supports line and candle charts.", "stock_chart",
-         {"symbol": {"type": "string", "description": "Stock symbol"},
-          "period": {"type": "string", "description": "Time period: 1mo, 3mo, 6mo, 1y, 3y, 5y (default: 3mo)"},
-          "chart_type": {"type": "string", "description": "Chart type: line or candle (default: line)"}},
-         ["symbol"]),
-    ]
+    """股票图表 — StockUnified 的内部 helper，不直接暴露工具。"""
 
     def __init__(self, work_dir: str, charts_dir: str = ""):
         self.work_dir = work_dir

@@ -1,6 +1,7 @@
 """搜索工具：web_search, search_and_fetch。
 
-五级降级：Brave → DuckDuckGo → Bing → SearXNG → Wikipedia
+降级链 (动态排序): 有 Brave Key → Brave → Bing → DDG → SearXNG → Wikipedia
+                     无 Brave Key → Bing → DDG → SearXNG → Wikipedia
 """
 
 import json
@@ -27,17 +28,25 @@ class Search:
     # ── 公开接口 ──────────────────────────────────────
 
     def web_search(self, query: str, max_results: int = 5) -> str:
-        """搜索网页：Bing → DuckDuckGo → Brave → SearXNG → Wikipedia 五级降级。"""
+        """搜索网页：有 Brave Key 时 Brave 优先，否则 Bing 优先。"""
         max_results = min(max(max_results, 1), 10)
 
-        # 降级链： (名称, 方法引用, 是否需要 API Key)
-        providers = [
-            ("Bing",       self._search_bing,       False),
-            ("DuckDuckGo", self._search_duckduckgo, False),
-            ("Brave",      self._search_brave,      bool(self.brave_api_key)),
-            ("SearXNG",    self._search_searxng,    False),
-            ("Wikipedia",  self._search_wikipedia,  False),
-        ]
+        # 降级链：有 Key → Brave 优先，无 Key → Bing 优先
+        if self.brave_api_key:
+            providers = [
+                ("Brave",      self._search_brave,      True),
+                ("Bing",       self._search_bing,       False),
+                ("DuckDuckGo", self._search_duckduckgo, False),
+                ("SearXNG",    self._search_searxng,    False),
+                ("Wikipedia",  self._search_wikipedia,  False),
+            ]
+        else:
+            providers = [
+                ("Bing",       self._search_bing,       False),
+                ("DuckDuckGo", self._search_duckduckgo, False),
+                ("SearXNG",    self._search_searxng,    False),
+                ("Wikipedia",  self._search_wikipedia,  False),
+            ]
 
         for name, search_fn, needs_key in providers:
             if needs_key and not self.brave_api_key:

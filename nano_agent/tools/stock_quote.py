@@ -18,20 +18,7 @@ _PERIOD_DAYS = {'1mo': 30, '3mo': 90, '6mo': 180, '1y': 365, '3y': 1095, '5y': 1
 
 
 class StockQuote:
-    # 工具注册声明
-    TOOLS = [
-        ("stock_info", "Get real-time stock quote. A-shares via Tencent API (600519, 000001), US/HK via Yahoo Finance with Tencent fallback (AAPL, 0700.HK).", "stock_info",
-         {"symbol": {"type": "string", "description": "Stock symbol (e.g. 600519, AAPL, 0700.HK)"}},
-         ["symbol"]),
-        ("stock_history", "Get historical stock prices. A-shares via Tencent K-line API, US/HK via yfinance. Period: 1mo/3mo/6mo/1y/3y/5y.", "stock_history",
-         {"symbol": {"type": "string", "description": "Stock symbol"},
-          "period": {"type": "string", "description": "Time period: 1mo, 3mo, 6mo, 1y, 3y, 5y (default: 1mo)"}},
-         ["symbol"]),
-        ("stock_indicators", "Calculate technical indicators: MA (5/10/20/60), RSI (14), MACD (12/26/9), Bollinger Bands (20,2).", "stock_indicators",
-         {"symbol": {"type": "string", "description": "Stock symbol"},
-          "period": {"type": "string", "description": "Time period: 1mo, 3mo, 6mo, 1y, 3y, 5y (default: 6mo)"}},
-         ["symbol"]),
-    ]
+    """股票行情 — StockUnified 的内部 helper，不直接暴露工具。"""
 
     def __init__(self, work_dir: str, charts_dir: str = ""):
         self.work_dir = work_dir
