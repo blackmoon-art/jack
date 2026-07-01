@@ -131,7 +131,9 @@ class FileOps:
         full_pattern = str(Path(self.work_dir) / safe)
         try:
             files = _glob.glob(full_pattern, recursive=True)
-            rel_files = [str(Path(f).relative_to(self.work_dir)) for f in sorted(files)]
+            # os.path.relpath 处理 macOS /tmp→/private/tmp 的符号链接差异
+            import os as _os
+            rel_files = [_os.path.relpath(f, self.work_dir) for f in sorted(files)]
             result = "\n".join(rel_files) if rel_files else "No files found"
             return Observation.ok("glob", result)
         except Exception as e:
