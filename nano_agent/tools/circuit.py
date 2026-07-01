@@ -539,7 +539,9 @@ class Circuit:
                          direction: str = "right", comp_anchor: str = None,
                          valid_names_str: str = ""):
         if name not in comp_map:
-            return elm.Line().label(f"[?{name}]")
+            raise ValueError(
+                f"Unknown component '{name}' for this circuit type. "
+                f"Valid: {valid_names_str[:200]}")
 
         comp_cls, kwargs = comp_map[name]
 
@@ -550,7 +552,12 @@ class Circuit:
                 box_label = value if value else name.upper()
                 box_label = box_label.replace("_", " ").title()
                 box = self._make_box(box_label, elm)
-                if last is not None: box = box.at(self._get_anchor(last))
+                if direction != "right":
+                    dir_method = getattr(box, direction, None)
+                    if dir_method is not None:
+                        box = dir_method()
+                if last is not None:
+                    box = box.at(self._get_anchor(last))
                 d.add(box); return box
 
             if last is None: el_obj = comp_cls(**kwargs)

@@ -122,7 +122,7 @@ _EXACT_ROUTES: list[tuple[str, str, dict]] = [
      "flip.flop|dff|latch|寄存器|译码器|多路复用|encoder|decoder|mux|"
      "fifo|异步.*fifo|async.*fifo|gray.*code|格雷码|同步器|synchronizer|"
      "clock.*domain|counter|ram|双口|dpram|demux|三态|tristate|"
-     "alu|算术逻辑|移位|shift|编码器|锁存器",
+     "alu|算术逻辑|移位|shift|编码器|锁存器|数字滤波",
      "draw_digital", {}),
     # 模拟电路
     ("模拟电路|analog.*circuit|"

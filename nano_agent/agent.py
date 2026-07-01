@@ -273,7 +273,8 @@ class Agent:
         )
 
     # ── 图表视觉验证 ────────────────────────────────────
-    _CHART_TOOLS = {"generate_chart", "draw_circuit", "mermaid_chart",
+    _CHART_TOOLS = {"generate_chart", "draw_circuit", "draw_digital",
+                    "draw_analog", "draw_block", "mermaid_chart",
                     "stock_chart", "ai_image"}
 
     def _verify_chart_result(self, tool_name: str, result: str) -> str:
