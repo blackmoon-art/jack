@@ -62,6 +62,13 @@ _VALID_COMPONENT_NAMES = (
     "filter_box", "filter",
     "block", "port", "terminal",
     "combiner", "splitter", "rf",
+    # 数字逻辑门 (渲染为带标签方块)
+    "and_gate", "or_gate", "not_gate", "nand_gate", "nor_gate",
+    "xor_gate", "xnor_gate", "buffer", "dff", "jkff",
+    # 数字功能块
+    "ram", "counter", "comparator", "gray_code",
+    "mux", "decoder", "encoder", "latch", "register",
+    "tristate", "alu", "shift_reg",
     # 连接 / 装饰
     "fuse", "lamp", "motor", "speaker", "microphone",
     "line", "wire", "open", "dot",
@@ -84,8 +91,8 @@ class Circuit:
     TOOLS = [
         ("draw_circuit",
          "Draw professional circuit diagrams and signal-processing block diagrams. "
-         "For: circuit schematics, filter circuits, differential amplifiers, "
-         "RF/signal chains (block diagrams), wiring layouts.\n"
+         "For: analog circuits (filters, amplifiers), digital circuits (logic gates, "
+         "flip-flops), RF/signal chains (block diagrams), wiring layouts.\n"
          "\n"
          "**Valid components:** " + _VALID_NAMES_STR + "\n"
          "Block-diagram elements (LNA, mixer, ADC, amp, filter_box, etc.) draw as labeled boxes.\n"
@@ -106,7 +113,11 @@ class Circuit:
          "n2 -> down -> capacitor(C2) -> ground ; "
          "opamp(OP1)@out as op_out ; connect(op_out, c1_out)`  (feedback)\n"
          "\n"
-         "`ac(Vin) -> resistor(1k) as n1 -> capacitor(10n) -> ground ; n1 -> line -> open(Vout)`\n"
+         "**Digital logic (half-adder):**\n"
+         "`port(A) -> xor_gate as g1 ; port(B) -> g1 ; "
+         "g1 -> port(Sum) ; port(A) -> and_gate as g2 ; port(B) -> g2 ; "
+         "g2 -> port(Carry)`\n"
+         "\n"
          "\n"
          "**Diff-amp example:**\n"
          "`ac(Vin+) -> npn(Q1)@base as q1 ; ac(Vin-) -> npn(Q2)@base as q2 ; "
@@ -239,6 +250,29 @@ class Circuit:
                 "combiner":    (_BLOCK_FACTORY, {}),
                 "splitter":    (_BLOCK_FACTORY, {}),
                 "rf":          (_BLOCK_FACTORY, {}),
+                # 数字逻辑门 (框图渲染)
+                "and_gate":    (_BLOCK_FACTORY, {}),
+                "or_gate":     (_BLOCK_FACTORY, {}),
+                "not_gate":    (_BLOCK_FACTORY, {}),
+                "nand_gate":   (_BLOCK_FACTORY, {}),
+                "nor_gate":    (_BLOCK_FACTORY, {}),
+                "xor_gate":    (_BLOCK_FACTORY, {}),
+                "xnor_gate":   (_BLOCK_FACTORY, {}),
+                "buffer":      (_BLOCK_FACTORY, {}),
+                "dff":         (_BLOCK_FACTORY, {}),
+                "jkff":        (_BLOCK_FACTORY, {}),
+                "ram":         (_BLOCK_FACTORY, {}),
+                "counter":     (_BLOCK_FACTORY, {}),
+                "comparator":  (_BLOCK_FACTORY, {}),
+                "gray_code":   (_BLOCK_FACTORY, {}),
+                "mux":         (_BLOCK_FACTORY, {}),
+                "decoder":     (_BLOCK_FACTORY, {}),
+                "encoder":     (_BLOCK_FACTORY, {}),
+                "latch":       (_BLOCK_FACTORY, {}),
+                "register":    (_BLOCK_FACTORY, {}),
+                "tristate":    (_BLOCK_FACTORY, {}),
+                "alu":         (_BLOCK_FACTORY, {}),
+                "shift_reg":   (_BLOCK_FACTORY, {}),
                 # 连接 / 装饰
                 "fuse": (elm.Fuse, {}),
                 "lamp": (elm.Lamp, {}),

@@ -116,8 +116,19 @@ _EXACT_ROUTES: list[tuple[str, str, dict]] = [
      "mermaid_chart", {}),
 
     # === 其他画图工具 ===
-    # 电路
-    ("电路|原理图|schematic|circuit|电路图|接线图|电路设计",
+    # 数字电路（放在模拟电路前面，更精确匹配）
+    ("数字电路|逻辑门|门电路|逻辑电路|digital.*circuit|logic.*gate|"
+     "and gate|nand gate|nor gate|xor gate|半加器|全加器|触发器|"
+     "flip.flop|dff|latch|寄存器|译码器|多路复用|encoder|decoder|mux|"
+     "fifo|异步.*fifo|async.*fifo|gray.*code|格雷码|同步器|synchronizer|"
+     "clock.*domain|counter|ram|双口|dpram|mux|demux|三态|tristate|"
+     "alu|算术逻辑|移位|shift|译码器|decoder|encoder|编码器|锁存器|latch|寄存器",
+     "draw_circuit", {}),
+    # 模拟电路
+    ("电路|原理图|schematic|circuit|电路图|接线图|电路设计|"
+     "滤波器|filter.*circuit|运放电路|放大电路|有源滤波|无源滤波|"
+     "低通|高通|带通|带阻|频率响应|电子电路|pcb|布线|模拟电路|"
+     "analog.*circuit",
      "draw_circuit", {}),
     # AI 图片
     ("照片|photo|艺术|art|画一只|画个猫|画只|画张|画一幅|"
