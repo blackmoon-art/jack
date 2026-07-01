@@ -306,30 +306,29 @@ class LogicSVG:
                 "stroke": self.COLORS["gate_stroke"], "stroke-width": "1.5",
             })
         elif shape == "or":
-            # Shield shape — 输入(左)隆起，输出(右)尖锐
-            r = self.W * 0.6
-            d = (f"M{x + self.W * 0.85},{y} "
-                 f"Q{x},{y} {x + self.W * 0.85},{cy} "
-                 f"Q{x},{y + self.H} {x + self.W * 0.85},{y + self.H} "
-                 f"Q{x + self.W + r},{cy} {x + self.W * 0.85},{y} Z")
+            # Shield — 左(x)宽，右(x+W)尖
+            r = self.W * 0.5
+            d = (f"M{x},{y} "
+                 f"Q{x + self.W * 0.5},{y + self.H * 0.15} {x + self.W},{cy} "
+                 f"Q{x + self.W * 0.5},{y + self.H * 0.85} {x},{y + self.H} "
+                 f"Q{x - r},{cy} {x},{y} Z")
             ET.SubElement(g, "path", {
                 "d": d, "fill": self.COLORS["gate_fill"],
                 "stroke": self.COLORS["gate_stroke"], "stroke-width": "1.5",
             })
         elif shape == "xor":
-            # OR-like + 额外输入弧线
-            r = self.W * 0.6
-            d = (f"M{x + self.W * 0.75},{y} "
-                 f"Q{x},{y} {x + self.W * 0.85},{cy} "
-                 f"Q{x},{y + self.H} {x + self.W * 0.75},{y + self.H} "
-                 f"Q{x + self.W + r},{cy} {x + self.W * 0.75},{y} Z")
+            r = self.W * 0.5
+            d = (f"M{x},{y} "
+                 f"Q{x + self.W * 0.4},{y + self.H * 0.1} {x + self.W},{cy} "
+                 f"Q{x + self.W * 0.4},{y + self.H * 0.9} {x},{y + self.H} "
+                 f"Q{x - r},{cy} {x},{y} Z")
             ET.SubElement(g, "path", {
                 "d": d, "fill": self.COLORS["gate_fill"],
                 "stroke": self.COLORS["gate_stroke"], "stroke-width": "1.5",
             })
-            # Extra XOR curve on input side
-            ed = (f"M{x + self.W * 0.9},{y} "
-                  f"Q{x + self.W + r * 0.7},{cy} {x + self.W * 0.9},{y + self.H}")
+            # XOR 额外输入弧线
+            ed = (f"M{x - self.W * 0.02},{y} "
+                  f"Q{x - r * 0.7},{cy} {x - self.W * 0.02},{y + self.H}")
             ET.SubElement(g, "path", {
                 "d": ed, "fill": "none",
                 "stroke": self.COLORS["gate_stroke"], "stroke-width": "1.2",
@@ -342,9 +341,9 @@ class LogicSVG:
                 "stroke": self.COLORS["gate_stroke"], "stroke-width": "1.5",
             })
 
-        # 气泡
+        # 气泡 (在输出侧，右侧)
         if bubble:
-            bx = x + self.W * 0.85 if shape != "not" else x + self.W * 0.75
+            bx = x + self.W + 6 if shape != "not" else x + self.W * 0.8
             ET.SubElement(g, "circle", {
                 "cx": str(bx), "cy": str(cy), "r": "4",
                 "fill": "none", "stroke": self.COLORS["gate_stroke"],
