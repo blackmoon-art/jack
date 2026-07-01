@@ -431,43 +431,69 @@ class Circuit:
     @staticmethod
     def _layout_circuit(chains: list[str], comp_map: dict,
                         comp_set: str) -> tuple[dict, list]:
-        """两遍渲染第一遍：解析所有链，计算组件网格位置。"""
-        named = {}          # name → (comp_info_dict)
-        nodes = []          # [(node_id, comp_name, value, col, row)]
-        edges = []          # [(from_id, to_id)]
+        """两遍渲染第一遍：解析所有链，计算组件网格位置。
 
-        # 链深度计数器（同一列放置同深度的组件）
-        depth = 0
-        row = 0
+        方向标记影响布局：
+          right（默认）→ col+1, row 不变
+          down → col 不变, row+1
+          up → col 不变, row-1
+        connect() → 在命名节点间添加边
+        """
+        named = {}
+        nodes = []
+        edges = []
+        connect_edges = []  # (from_name, to_name)
 
         for chain_desc in chains:
             chain_desc = chain_desc.strip()
             if not chain_desc:
                 continue
 
-            # 检查链首是否是命名节点引用
+            # ── connect() 链 ──
+            if chain_desc.startswith("connect("):
+                import re as _re_layout
+                m = _re_layout.match(
+                    r'connect\(\s*(\S+?)\s*,\s*(\S+?)\s*\)', chain_desc)
+                if m:
+                    connect_edges.append((m.group(1), m.group(2)))
+                continue
+
+            # ── 常规链 ──
             first_token = chain_desc.split("->")[0].strip().split()[0] if chain_desc else ""
             if first_token and first_token in named:
-                # 从已有节点继续
                 prev = named[first_token]
                 chain_desc = chain_desc[len(first_token):].strip()
                 if chain_desc.startswith("->"):
                     chain_desc = chain_desc[2:].strip()
-                depth = prev.get("col", 0) + 1
+                col = prev.get("col", 0)
+                row = prev.get("row", 0)
                 prev_id = prev["id"]
             else:
                 prev_id = None
-                depth = 0
+                col, row = 0, 0
 
-            # 解析链中组件
+            dir_col, dir_row = 1, 0  # default: right
+
             parts = Circuit._parse_parts(chain_desc)
             for pt, pd in parts:
-                if pt == "series":
+                if pt == "direction":
+                    if pd == "down":
+                        dir_col, dir_row = 0, 1
+                    elif pd == "up":
+                        dir_col, dir_row = 0, -1
+                    elif pd == "left":
+                        dir_col, dir_row = -1, 0
+                    else:  # right
+                        dir_col, dir_row = 1, 0
+                elif pt == "series":
                     n, v, lbl, node_name, comp_anchor = Circuit._parse_comp(pd)
+                    col += dir_col
+                    row += dir_row
+
                     node_id = len(nodes)
                     nodes.append({
                         "id": node_id, "name": n, "value": v, "label": lbl,
-                        "col": depth, "row": row,
+                        "col": col, "row": row,
                         "anchor": comp_anchor,
                     })
                     if prev_id is not None:
@@ -476,8 +502,13 @@ class Circuit:
                         nodes[-1]["node_name"] = node_name
                         named[node_name] = nodes[-1]
                     prev_id = node_id
-                    depth += 1
-                    row += 1  # 每个组件占一行
+
+        # 解析 connect edges
+        for a_name, b_name in connect_edges:
+            a = named.get(a_name)
+            b = named.get(b_name)
+            if a and b:
+                edges.append((a["id"], b["id"]))
 
         return named, {"nodes": nodes, "edges": edges}
 
