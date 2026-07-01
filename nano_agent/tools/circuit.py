@@ -417,8 +417,6 @@ class Circuit:
                 kwargs["label"] = value
 
         try:
-            draw_dir = getattr(elm, direction)  # .right(), .up(), etc.
-
             if last is None:
                 el = comp_cls(**kwargs)
             elif name in ("ground", "gnd"):
@@ -428,7 +426,13 @@ class Circuit:
                 el = comp_cls(**kwargs).anchor(comp_anchor).at(last.end)
             else:
                 el = comp_cls(**kwargs)
-                el = draw_dir().at(last.end)
+                # 把方向应用到元件自身，而不是创建新的方向线段
+                # e.g. el.down() 设置电容向下摆放，而非用 elm.down() 覆盖元件
+                if direction != "right":
+                    dir_method = getattr(el, direction, None)
+                    if dir_method is not None:
+                        el = dir_method()
+                el = el.at(last.end)
             d.add(el)
             return el
         except Exception as e:
