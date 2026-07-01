@@ -137,6 +137,7 @@ _EXACT_ROUTES: list[tuple[str, str, dict]] = [
      "差分放大|差分对|diff.*pair|differential.*amp|"
      "rc.*filter|lc.*filter|rlc|passive.*filter|active.*filter|"
      "一阶|二阶|三阶|四阶|1st.*order|2nd.*order|"
+     "RC滤波|LC滤波|RL滤波|rc.*filter|lc.*filter|rl.*filter|"
      "low.pass|high.pass|band.pass|lowpass|highpass|bandpass|"
      "陷波器|notch.*filter|butterworth|chebyshev|bessel|elliptic|"
      "共射|共集|共基|common.*emitter|common.*collector|common.*base|"
