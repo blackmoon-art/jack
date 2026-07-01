@@ -42,7 +42,7 @@ def _make_ieee_gate(gate_type: str, label: str, elm_module):
     """
     from schemdraw.segments import Segment, SegmentArc, SegmentCircle
 
-    w, h = 1.2, 0.8
+    w, h = 1.6, 1.0  # 放大门尺寸，引脚间距更清晰
     gate = elm_module.Element()
 
     # ── AND/NAND: D-shape ──
@@ -50,8 +50,8 @@ def _make_ieee_gate(gate_type: str, label: str, elm_module):
         gate.segments.append(Segment([(0, h/2), (0, -h/2)]))
         gate.segments.append(SegmentArc((0, 0), width=w*0.85, height=h,
                                          theta1=-90, theta2=90))
-        gate.anchors['in1'] = (0, h/4)
-        gate.anchors['in2'] = (0, -h/4)
+        gate.anchors['in1'] = (0, h/3)
+        gate.anchors['in2'] = (0, -h/3)
         bx, by = w * 0.7, 0
 
     # ── OR/NOR/XOR/XNOR: shield shape ──
@@ -66,13 +66,12 @@ def _make_ieee_gate(gate_type: str, label: str, elm_module):
             pts_right.append((x2, t * h))
         gate.segments.append(Segment(pts_left))
         gate.segments.append(Segment(list(reversed(pts_right))))
-        # XOR: extra curve on input side
         if gate_type in ("xor_gate", "xnor_gate"):
             pts_extra = [(-0.25 + 0.15 * (1-(2*t)**2), t * h)
                          for t in [j/12 - 0.5 for j in range(13)]]
             gate.segments.append(Segment(pts_extra))
-        gate.anchors['in1'] = (-0.25, h/4)
-        gate.anchors['in2'] = (-0.25, -h/4)
+        gate.anchors['in1'] = (-0.25, h/3)
+        gate.anchors['in2'] = (-0.25, -h/3)
         bx, by = 0.65, 0
 
     # ── NOT/Buffer: triangle ──
@@ -85,8 +84,8 @@ def _make_ieee_gate(gate_type: str, label: str, elm_module):
 
     else:
         gate.segments.append(Segment([(0, h/2), (0, -h/2), (w, -h/2), (w, h/2), (0, h/2)]))
-        gate.anchors['in1'] = (0, h/4)
-        gate.anchors['in2'] = (0, -h/4)
+        gate.anchors['in1'] = (0, h/3)
+        gate.anchors['in2'] = (0, -h/3)
         bx, by = w, 0
 
     # 输出气泡 (NAND/NOR/XNOR/NOT)
@@ -195,9 +194,9 @@ class Circuit:
          "`port(async_in) -> dff(FF1) -> dff(FF2) -> port(synced) ; "
          "port(clk) -> dff(FF1) ; port(clk) -> dff(FF2)`\n"
          "\n"
-         "**Half-adder:**\n"
-         "`port(A) -> xor_gate as g1 ; port(B) -> g1 ; "
-         "g1 -> port(Sum) ; port(A) -> and_gate as g2 ; port(B) -> g2 ; "
+         "**Half-adder (use as for fan-out):**\n"
+         "`port(A) as A -> xor_gate as g1 ; port(B) as B -> g1 ; "
+         "g1 -> port(Sum) ; A -> and_gate as g2 ; B -> g2 ; "
          "g2 -> port(Carry)`",
          "draw_digital",
          {"description": {"type": "string",
