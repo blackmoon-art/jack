@@ -24,11 +24,83 @@
 """
 
 import logging
+import math
 import re
 from datetime import datetime
 from pathlib import Path
 
 logger = logging.getLogger("nano_agent.tools.circuit")
+
+
+# ── IEEE 逻辑门形状工厂 ────────────────────────────────
+
+def _make_ieee_gate(gate_type: str, label: str, elm_module):
+    """用 schemdraw Segment 构建标准 IEEE 逻辑门形状。
+
+    返回一个已配置好形状和锚点的 schemdraw Element。
+    锚点: in1, in2 (输入), out (输出), start (左中点), end (右中点)
+    """
+    from schemdraw.segments import Segment, SegmentArc, SegmentCircle
+
+    w, h = 1.2, 0.8
+    gate = elm_module.Element()
+
+    # ── AND/NAND: D-shape ──
+    if gate_type in ("and_gate", "nand_gate"):
+        gate.segments.append(Segment([(0, h/2), (0, -h/2)]))
+        gate.segments.append(SegmentArc((0, 0), width=w*0.85, height=h,
+                                         theta1=-90, theta2=90))
+        gate.anchors['in1'] = (0, h/4)
+        gate.anchors['in2'] = (0, -h/4)
+        bx, by = w * 0.7, 0
+
+    # ── OR/NOR/XOR/XNOR: shield shape ──
+    elif gate_type in ("or_gate", "nor_gate", "xor_gate", "xnor_gate"):
+        n = 12
+        pts_left, pts_right = [], []
+        for i in range(n + 1):
+            t = -0.5 + i / n
+            x = -0.15 + 0.45 * (1 - (2*t)**2)
+            pts_left.append((x, t * h))
+            x2 = 0.55 - 0.35 * (1 - (2*t)**2)
+            pts_right.append((x2, t * h))
+        gate.segments.append(Segment(pts_left))
+        gate.segments.append(Segment(list(reversed(pts_right))))
+        # XOR: extra curve on input side
+        if gate_type in ("xor_gate", "xnor_gate"):
+            pts_extra = [(-0.25 + 0.15 * (1-(2*t)**2), t * h)
+                         for t in [j/12 - 0.5 for j in range(13)]]
+            gate.segments.append(Segment(pts_extra))
+        gate.anchors['in1'] = (-0.25, h/4)
+        gate.anchors['in2'] = (-0.25, -h/4)
+        bx, by = 0.65, 0
+
+    # ── NOT/Buffer: triangle ──
+    elif gate_type in ("not_gate", "buffer"):
+        gate.segments.append(Segment([(-w/3, h/2), (-w/3, -h/2), (w/3, 0),
+                                       (-w/3, h/2)]))
+        gate.anchors['in1'] = (-w/3, 0)
+        gate.anchors['in2'] = (-w/3, 0)
+        bx, by = w/3, 0
+
+    else:
+        gate.segments.append(Segment([(0, h/2), (0, -h/2), (w, -h/2), (w, h/2), (0, h/2)]))
+        gate.anchors['in1'] = (0, h/4)
+        gate.anchors['in2'] = (0, -h/4)
+        bx, by = w, 0
+
+    # 输出气泡 (NAND/NOR/XNOR/NOT)
+    if gate_type in ("nand_gate", "nor_gate", "xnor_gate", "not_gate"):
+        gate.segments.append(SegmentCircle((bx + 0.12, by), 0.08))
+        gate.anchors['out'] = (bx + 0.2, by)
+    else:
+        gate.anchors['out'] = (bx, by)
+
+    gate.anchors['start'] = (gate.anchors.get('in1', (-w/3, 0))[0], 0)
+    gate.anchors['end'] = gate.anchors['out']
+    gate.params['label'] = label
+    gate.params['lblloc'] = 'center'
+    return gate
 
 
 # ── 元件分组 ──────────────────────────────────────────
@@ -97,6 +169,7 @@ _BLOCK_NAMES_STR = _names_str(_BLOCK_COMPS)
 # ── 共享常量 ──────────────────────────────────────────
 _DIRECTIONS = {"up", "down", "left", "right"}
 _BLOCK_FACTORY = "__block__"
+_GATE_FACTORY = "__gate__"
 
 
 class _AnchorRef:
@@ -149,14 +222,21 @@ class Circuit:
          "npn anchors: base/emitter/collector; opamp: in1/in2/out.\n"
          "\n"
          "**RC low-pass filter:**\n"
-         "`ac(Vin) -> resistor(1k) as n1 -> capacitor(10n) -> ground ; "
-         "n1 -> line -> open(Vout)`\n"
+         "`ac(Vin) -> resistor(1k) as n1 -> line -> open(Vout) ; "
+         "n1 -> down -> capacitor(10n) -> ground`\n"
+         "  (signal path horizontal right, filter branch down to ground)\n"
          "\n"
-         "**Active filter (Sallen-Key):**\n"
+         "**RC high-pass filter:**\n"
+         "`ac(Vin) -> capacitor(10n) as n1 -> line -> open(Vout) ; "
+         "n1 -> down -> resistor(1k) -> ground`\n"
+         "\n"
+         "**Active filter (Sallen-Key low-pass):**\n"
          "`ac(Vin) -> resistor(R1) as n1 -> resistor(R2) as n2 ; "
-         "n2 -> opamp(OP1)@in1 ; n1 -> down -> capacitor(C1) as c1_out ; "
-         "n2 -> down -> capacitor(C2) -> ground ; "
-         "opamp(OP1)@out as op_out ; connect(op_out, c1_out)`\n"
+         "n2 -> opamp(OP1)@in1 ; opamp(OP1)@out as op_out ; "
+         "connect(op_out, OP1.in2) ; "
+         "n1 -> down -> capacitor(C1) as c1_end ; connect(op_out, c1_end) ; "
+         "n2 -> down -> capacitor(C2) -> ground`\n"
+         "  (signal path top row, R1-R2 needs opamp as follower, C1 feedback from output to R1-R2, C2 to ground)\n"
          "\n"
          "**Differential amplifier:**\n"
          "`ac(Vin+) -> npn(Q1)@base as q1 ; ac(Vin-) -> npn(Q2)@base as q2 ; "
@@ -168,7 +248,7 @@ class Circuit:
          {"description": {"type": "string",
                           "description":
                           "Analog circuit. Valid names: " + _ANALOG_NAMES_STR + ". "
-                          "Filter: 'ac(Vin)->r(1k) as n1->c(10n)->gnd ; n1->line->open(Vout)'"},
+                          "Filter: 'ac(Vin)->r(1k) as n1->line->open(Vout) ; n1->down->c(10n)->gnd' (signal right, cap down to GND)"},
           "title": {"type": "string", "description": "Circuit title"}},
          ["description"]),
 
@@ -306,10 +386,10 @@ class Circuit:
                 "block": (_BLOCK_FACTORY, {}), "port": (_BLOCK_FACTORY, {}),
                 "terminal": (_BLOCK_FACTORY, {}), "combiner": (_BLOCK_FACTORY, {}),
                 "splitter": (_BLOCK_FACTORY, {}), "rf": (_BLOCK_FACTORY, {}),
-                "and_gate": (_BLOCK_FACTORY, {}), "or_gate": (_BLOCK_FACTORY, {}),
-                "not_gate": (_BLOCK_FACTORY, {}), "nand_gate": (_BLOCK_FACTORY, {}),
-                "nor_gate": (_BLOCK_FACTORY, {}), "xor_gate": (_BLOCK_FACTORY, {}),
-                "xnor_gate": (_BLOCK_FACTORY, {}), "buffer": (_BLOCK_FACTORY, {}),
+                "and_gate": (_GATE_FACTORY, {}), "or_gate": (_GATE_FACTORY, {}),
+                "not_gate": (_GATE_FACTORY, {}), "nand_gate": (_GATE_FACTORY, {}),
+                "nor_gate": (_GATE_FACTORY, {}), "xor_gate": (_GATE_FACTORY, {}),
+                "xnor_gate": (_GATE_FACTORY, {}), "buffer": (_GATE_FACTORY, {}),
                 "dff": (_BLOCK_FACTORY, {}), "jkff": (_BLOCK_FACTORY, {}),
                 "ram": (_BLOCK_FACTORY, {}), "counter": (_BLOCK_FACTORY, {}),
                 "comparator": (_BLOCK_FACTORY, {}), "gray_code": (_BLOCK_FACTORY, {}),
@@ -528,23 +608,6 @@ class Circuit:
         try: return elm.Box().label(label_text)
         except AttributeError: return elm.Line().label(f"[{label_text}]")
 
-    # IEEE 逻辑门符号映射
-    _GATE_LABELS = {
-        "and_gate": "AND", "nand_gate": "NAND",
-        "or_gate": "OR", "nor_gate": "NOR",
-        "xor_gate": "XOR", "xnor_gate": "XNOR",
-        "not_gate": "NOT", "buffer": "BUF",
-    }
-
-    @classmethod
-    def _make_gate(cls, name: str, label: str, elm):
-        """绘制逻辑门符号（纯文本标签，XML 安全）。"""
-        gate_label = label if label else cls._GATE_LABELS.get(name, name.upper())
-        try:
-            return elm.Box().label(gate_label)
-        except AttributeError:
-            return elm.Line().label(f"[{gate_label}]")
-
     @staticmethod
     def _get_anchor(last, anchor: str = "end"):
         try: return getattr(last, anchor)
@@ -566,14 +629,18 @@ class Circuit:
         if value: kwargs = dict(kwargs); kwargs["label"] = value
 
         try:
+            if comp_cls == _GATE_FACTORY:
+                # IEEE 标准逻辑门形状
+                gate_label = value if value else name.upper()
+                gate = _make_ieee_gate(name, gate_label, elm)
+                if last is not None:
+                    gate = gate.at(self._get_anchor(last))
+                d.add(gate); return gate
+
             if comp_cls == _BLOCK_FACTORY:
-                # 逻辑门用专用 IEEE 符号，其他框图元件用普通方框
-                if name in self._GATE_LABELS:
-                    box = self._make_gate(name, value, elm)
-                else:
-                    box_label = value if value else name.upper()
-                    box_label = box_label.replace("_", " ").title()
-                    box = self._make_box(box_label, elm)
+                box_label = value if value else name.upper()
+                box_label = box_label.replace("_", " ").title()
+                box = self._make_box(box_label, elm)
                 if direction != "right":
                     dir_method = getattr(box, direction, None)
                     if dir_method is not None:
