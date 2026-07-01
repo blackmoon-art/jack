@@ -135,12 +135,12 @@ class LogicSVG:
 
     # ── SVG 渲染 ───────────────────────────────────
 
-    W, H = 64, 40       # 门尺寸
-    IX, IY = 2, 4       # 输入引脚间距
-    PIN = 6             # 引脚突出长度
-    PORT_W, PORT_H = 40, 24  # 端口尺寸
-    COL_GAP = 80        # 列间距
-    ROW_GAP = 60        # 行间距
+    W, H = 80, 50       # 门尺寸
+    IX, IY = 2, 8       # 输入引脚间距
+    PIN = 8             # 引脚突出长度
+    PORT_W, PORT_H = 48, 28  # 端口尺寸
+    COL_GAP = 100       # 列间距
+    ROW_GAP = 72        # 行间距
     COLORS = {
         "bg": "#1a1a2e", "fg": "#e0e0e0", "grid": "#333",
         "gate_fill": "#2a2a4e", "gate_stroke": "#7c3aed",
