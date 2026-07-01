@@ -441,11 +441,21 @@ class Circuit:
                     return anchor
                 except AttributeError:
                     break
-            # 回退：使用 start（通用输入侧）或 _get_anchor
+            # 回退：多输入框图元件没有 in1/in2，垂直展开输入点
             try:
-                return elem.start
+                base = elem.start
             except AttributeError:
-                return self._get_anchor(elem)
+                base = self._get_anchor(elem)
+            # 展开：in1→不变, in2→下移, in3→上移, in4→再下移...
+            n = _input_usage.get(key, 0) + 1
+            _input_usage[key] = n
+            if n > 1:
+                spread = 0.3
+                dy = ((n - 1) // 2 + 1) * spread
+                if n % 2 == 0:
+                    dy = -dy
+                base = (base[0], base[1] + dy)
+            return base
 
         if token in named:
             elem = named[token]

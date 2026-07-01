@@ -116,8 +116,13 @@ _EXACT_ROUTES: list[tuple[str, str, dict]] = [
      "mermaid_chart", {}),
 
     # === 其他画图工具 ===
-    # 数字电路
-    ("数字电路|逻辑门|门电路|逻辑电路|digital.*circuit|logic.*gate|"
+    # 逻辑门 SVG (数字电路首选)
+    ("半加器|全加器|逻辑电路|logic.*circuit|half.*adder|full.*adder|"
+     "真值表|truth.*table|逻辑表达式|boolean.*expr|"
+     "and.*gate|or.*gate|not.*gate|nand.*gate|nor.*gate|xor.*gate",
+     "draw_logic", {}),
+    # 数字电路 (fallback)
+    ("数字电路|逻辑门|门电路|digital.*circuit|logic.*gate|"
      "and gate|nand gate|nor gate|xor gate|半加器|全加器|触发器|"
      "flip.flop|dff|latch|寄存器|译码器|多路复用|encoder|decoder|mux|"
      "fifo|异步.*fifo|async.*fifo|gray.*code|格雷码|同步器|synchronizer|两级同步|"
