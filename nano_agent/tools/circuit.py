@@ -402,21 +402,12 @@ class Circuit:
             # 过滤：只保留 allowed 集中的元件
             comp_map = {k: v for k, v in full_map.items() if k in allowed}
 
-            named: dict[str, object] = {}
-            last = None
-            direction = "right"
-            _input_usage: dict[int, int] = {}  # 多输入元件的输入追踪
-
+            # ── 两遍渲染：先布局计算位置，再精确放置 ──
             chains = self._split_chains(description)
             if not chains:
                 return "Error: no components in circuit description"
-
-            for chain_desc in chains:
-                # 每条新链重置方向为 right，避免继承上一条链的方向
-                # （上一条链从 down 结束时，新链不应从 down 开始）
-                last, direction = self._draw_chain(
-                    chain_desc, comp_map, named, last, d, elm, "right",
-                    valid_names_str, _input_usage)
+            named, layout = self._layout_circuit(chains, comp_map, comp_set)
+            self._render_layout(layout, named, d, elm, comp_map, valid_names_str)
 
             ts = datetime.now().strftime("%Y%m%d_%H%M%S")
             prefix = {"digital": "digital", "analog": "analog", "block": "block"}
@@ -434,6 +425,119 @@ class Circuit:
         except Exception as e:
             logger.exception(f"Circuit drawing failed: {e}")
             return f"Error drawing circuit: {e}"
+
+    # ── 网格布局引擎 ────────────────────────────────
+
+    @staticmethod
+    def _layout_circuit(chains: list[str], comp_map: dict,
+                        comp_set: str) -> tuple[dict, list]:
+        """两遍渲染第一遍：解析所有链，计算组件网格位置。"""
+        named = {}          # name → (comp_info_dict)
+        nodes = []          # [(node_id, comp_name, value, col, row)]
+        edges = []          # [(from_id, to_id)]
+
+        # 链深度计数器（同一列放置同深度的组件）
+        depth = 0
+        row = 0
+
+        for chain_desc in chains:
+            chain_desc = chain_desc.strip()
+            if not chain_desc:
+                continue
+
+            # 检查链首是否是命名节点引用
+            first_token = chain_desc.split("->")[0].strip().split()[0] if chain_desc else ""
+            if first_token and first_token in named:
+                # 从已有节点继续
+                prev = named[first_token]
+                chain_desc = chain_desc[len(first_token):].strip()
+                if chain_desc.startswith("->"):
+                    chain_desc = chain_desc[2:].strip()
+                depth = prev.get("col", 0) + 1
+                prev_id = prev["id"]
+            else:
+                prev_id = None
+                depth = 0
+
+            # 解析链中组件
+            parts = Circuit._parse_parts(chain_desc)
+            for pt, pd in parts:
+                if pt == "series":
+                    n, v, lbl, node_name, comp_anchor = Circuit._parse_comp(pd)
+                    node_id = len(nodes)
+                    nodes.append({
+                        "id": node_id, "name": n, "value": v, "label": lbl,
+                        "col": depth, "row": row,
+                        "anchor": comp_anchor,
+                    })
+                    if prev_id is not None:
+                        edges.append((prev_id, node_id))
+                    if node_name:
+                        nodes[-1]["node_name"] = node_name
+                        named[node_name] = nodes[-1]
+                    prev_id = node_id
+                    depth += 1
+                    row += 1  # 每个组件占一行
+
+        return named, {"nodes": nodes, "edges": edges}
+
+    @staticmethod
+    def _render_layout(layout: dict, named: dict, d, elm, comp_map: dict,
+                       valid_names_str: str):
+        """两遍渲染第二遍：在计算好的位置放置组件并连线。"""
+        nodes = layout["nodes"]
+        edges = layout["edges"]
+        spacing_x, spacing_y = 2.0, 1.5
+
+        placed = {}  # node_id → schemdraw element
+
+        for node in nodes:
+            x = node["col"] * spacing_x
+            y = -node["row"] * spacing_y
+            name = node["name"]
+            value = node.get("value", "")
+            comp_anchor = node.get("anchor")
+
+            # 创建元件
+            comp_entry = comp_map.get(name)
+            if comp_entry is None:
+                el_obj = elm.Line().label(f"[{name}]")
+            elif comp_entry[0] == _BLOCK_FACTORY:
+                box_label = value if value else name.upper().replace("_", " ").title()
+                el_obj = Circuit._make_box(box_label, elm)
+            elif comp_entry[0] == _GATE_FACTORY:
+                gate_label = value if value else name.upper()
+                if gate_label == gate_label.lower():
+                    gate_label = gate_label.upper()
+                el_obj = _make_ieee_gate(name, gate_label, elm)
+            else:
+                cls_, kwargs = comp_entry
+                kwargs = dict(kwargs)
+                if value:
+                    kwargs["label"] = value
+                try:
+                    el_obj = cls_(**kwargs)
+                except Exception:
+                    el_obj = elm.Line().label(f"[{name}]")
+
+            el_obj = el_obj.at((x, y))
+            d.add(el_obj)
+            placed[node["id"]] = el_obj
+
+        # 连线
+        for from_id, to_id in edges:
+            f_elem = placed[from_id]
+            t_elem = placed[to_id]
+            try:
+                from_anchor = f_elem.end if hasattr(f_elem, 'end') else (0, 0)
+                # 目标元件：用 start 或 _get_anchor
+                try:
+                    to_anchor = getattr(t_elem, 'start', None) or t_elem.end
+                except Exception:
+                    to_anchor = (0, 0)
+                d.add(elm.Line().at(from_anchor).to(to_anchor))
+            except Exception:
+                pass
 
     # ── 链拆分 ────────────────────────────────────────
 
@@ -543,7 +647,8 @@ class Circuit:
 
     def _draw_chain(self, chain_desc: str, comp_map: dict,
                     named: dict, last, d, elm, direction: str,
-                    valid_names_str: str, _input_usage: dict | None = None):
+                    valid_names_str: str, _input_usage: dict | None = None,
+                    _fanout_count: dict | None = None):
         chain_desc = chain_desc.strip()
 
         # connect(N1, N2): 两个命名节点间画连接线
@@ -565,6 +670,17 @@ class Circuit:
             last = ref_obj
             chain_desc = chain_desc[len(ref_token):].strip()
             if chain_desc.startswith("->"): chain_desc = chain_desc[2:].strip()
+            # 扇出偏移：同一节点多次引用时，后续连线向下偏移避免重叠
+            if _fanout_count is not None and ref_token in named:
+                key = id(named[ref_token])
+                cnt = _fanout_count.get(key, 0)
+                if cnt > 0:
+                    d.add(elm.Line().at(self._get_anchor(last)).down(cnt * 0.3))
+                    d.add(elm.Dot())
+                    last = type('_OffsetAnchor', (), {'end': (
+                        self._get_anchor(last)[0],
+                        self._get_anchor(last)[1] - cnt * 0.3)})()
+                _fanout_count[key] = cnt + 1
         else:
             # 链首不是节点引用 → 独立信号路径，重置 last
             last = None
