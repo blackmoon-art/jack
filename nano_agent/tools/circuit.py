@@ -402,12 +402,20 @@ class Circuit:
             # 过滤：只保留 allowed 集中的元件
             comp_map = {k: v for k, v in full_map.items() if k in allowed}
 
-            # ── 两遍渲染：先布局计算位置，再精确放置 ──
+            named: dict[str, object] = {}
+            last = None
+            direction = "right"
+            _input_usage: dict[int, int] = {}
+            _fanout_count: dict[int, int] = {}
+
             chains = self._split_chains(description)
             if not chains:
                 return "Error: no components in circuit description"
-            named, layout = self._layout_circuit(chains, comp_map, comp_set)
-            self._render_layout(layout, named, d, elm, comp_map, valid_names_str)
+
+            for chain_desc in chains:
+                last, direction = self._draw_chain(
+                    chain_desc, comp_map, named, last, d, elm, "right",
+                    valid_names_str, _input_usage, _fanout_count)
 
             ts = datetime.now().strftime("%Y%m%d_%H%M%S")
             prefix = {"digital": "digital", "analog": "analog", "block": "block"}
@@ -425,150 +433,6 @@ class Circuit:
         except Exception as e:
             logger.exception(f"Circuit drawing failed: {e}")
             return f"Error drawing circuit: {e}"
-
-    # ── 网格布局引擎 ────────────────────────────────
-
-    @staticmethod
-    def _layout_circuit(chains: list[str], comp_map: dict,
-                        comp_set: str) -> tuple[dict, list]:
-        """两遍渲染第一遍：解析所有链，计算组件网格位置。
-
-        方向标记影响布局：
-          right（默认）→ col+1, row 不变
-          down → col 不变, row+1
-          up → col 不变, row-1
-        connect() → 在命名节点间添加边
-        """
-        named = {}
-        nodes = []
-        edges = []
-        connect_edges = []  # (from_name, to_name)
-
-        for chain_desc in chains:
-            chain_desc = chain_desc.strip()
-            if not chain_desc:
-                continue
-
-            # ── connect() 链 ──
-            if chain_desc.startswith("connect("):
-                import re as _re_layout
-                m = _re_layout.match(
-                    r'connect\(\s*(\S+?)\s*,\s*(\S+?)\s*\)', chain_desc)
-                if m:
-                    connect_edges.append((m.group(1), m.group(2)))
-                continue
-
-            # ── 常规链 ──
-            first_token = chain_desc.split("->")[0].strip().split()[0] if chain_desc else ""
-            if first_token and first_token in named:
-                prev = named[first_token]
-                chain_desc = chain_desc[len(first_token):].strip()
-                if chain_desc.startswith("->"):
-                    chain_desc = chain_desc[2:].strip()
-                col = prev.get("col", 0)
-                row = prev.get("row", 0)
-                prev_id = prev["id"]
-            else:
-                prev_id = None
-                col, row = 0, 0
-
-            dir_col, dir_row = 1, 0  # default: right
-
-            parts = Circuit._parse_parts(chain_desc)
-            for pt, pd in parts:
-                if pt == "direction":
-                    if pd == "down":
-                        dir_col, dir_row = 0, 1
-                    elif pd == "up":
-                        dir_col, dir_row = 0, -1
-                    elif pd == "left":
-                        dir_col, dir_row = -1, 0
-                    else:  # right
-                        dir_col, dir_row = 1, 0
-                elif pt == "series":
-                    n, v, lbl, node_name, comp_anchor = Circuit._parse_comp(pd)
-                    col += dir_col
-                    row += dir_row
-
-                    node_id = len(nodes)
-                    nodes.append({
-                        "id": node_id, "name": n, "value": v, "label": lbl,
-                        "col": col, "row": row,
-                        "anchor": comp_anchor,
-                    })
-                    if prev_id is not None:
-                        edges.append((prev_id, node_id))
-                    if node_name:
-                        nodes[-1]["node_name"] = node_name
-                        named[node_name] = nodes[-1]
-                    prev_id = node_id
-
-        # 解析 connect edges
-        for a_name, b_name in connect_edges:
-            a = named.get(a_name)
-            b = named.get(b_name)
-            if a and b:
-                edges.append((a["id"], b["id"]))
-
-        return named, {"nodes": nodes, "edges": edges}
-
-    @staticmethod
-    def _render_layout(layout: dict, named: dict, d, elm, comp_map: dict,
-                       valid_names_str: str):
-        """两遍渲染第二遍：在计算好的位置放置组件并连线。"""
-        nodes = layout["nodes"]
-        edges = layout["edges"]
-        spacing_x, spacing_y = 2.0, 1.5
-
-        placed = {}  # node_id → schemdraw element
-
-        for node in nodes:
-            x = node["col"] * spacing_x
-            y = -node["row"] * spacing_y
-            name = node["name"]
-            value = node.get("value", "")
-            comp_anchor = node.get("anchor")
-
-            # 创建元件
-            comp_entry = comp_map.get(name)
-            if comp_entry is None:
-                el_obj = elm.Line().label(f"[{name}]")
-            elif comp_entry[0] == _BLOCK_FACTORY:
-                box_label = value if value else name.upper().replace("_", " ").title()
-                el_obj = Circuit._make_box(box_label, elm)
-            elif comp_entry[0] == _GATE_FACTORY:
-                gate_label = value if value else name.upper()
-                if gate_label == gate_label.lower():
-                    gate_label = gate_label.upper()
-                el_obj = _make_ieee_gate(name, gate_label, elm)
-            else:
-                cls_, kwargs = comp_entry
-                kwargs = dict(kwargs)
-                if value:
-                    kwargs["label"] = value
-                try:
-                    el_obj = cls_(**kwargs)
-                except Exception:
-                    el_obj = elm.Line().label(f"[{name}]")
-
-            el_obj = el_obj.at((x, y))
-            d.add(el_obj)
-            placed[node["id"]] = el_obj
-
-        # 连线
-        for from_id, to_id in edges:
-            f_elem = placed[from_id]
-            t_elem = placed[to_id]
-            try:
-                from_anchor = f_elem.end if hasattr(f_elem, 'end') else (0, 0)
-                # 目标元件：用 start 或 _get_anchor
-                try:
-                    to_anchor = getattr(t_elem, 'start', None) or t_elem.end
-                except Exception:
-                    to_anchor = (0, 0)
-                d.add(elm.Line().at(from_anchor).to(to_anchor))
-            except Exception:
-                pass
 
     # ── 链拆分 ────────────────────────────────────────
 
@@ -706,11 +570,12 @@ class Circuit:
                 key = id(named[ref_token])
                 cnt = _fanout_count.get(key, 0)
                 if cnt > 0:
-                    d.add(elm.Line().at(self._get_anchor(last)).down(cnt * 0.3))
+                    offset = cnt * 1.0
+                    d.add(elm.Line().at(self._get_anchor(last)).down(offset))
                     d.add(elm.Dot())
                     last = type('_OffsetAnchor', (), {'end': (
                         self._get_anchor(last)[0],
-                        self._get_anchor(last)[1] - cnt * 0.3)})()
+                        self._get_anchor(last)[1] - offset)})()
                 _fanout_count[key] = cnt + 1
         else:
             # 链首不是节点引用 → 独立信号路径，重置 last
@@ -864,23 +729,18 @@ class Circuit:
                 el_obj = comp_cls(**kwargs)
             elif name in ("ground", "gnd"):
                 el_obj = comp_cls(**kwargs)
-                if direction != "right":
-                    dir_method = getattr(el_obj, direction, None)
-                    if dir_method is not None:
-                        el_obj = dir_method()
+                dir_method = getattr(el_obj, direction, None)
+                if dir_method is not None: el_obj = dir_method()
                 el_obj = el_obj.at(self._get_anchor(last))
             elif comp_anchor:
                 el_obj = comp_cls(**kwargs)
-                if direction != "right":
-                    dir_method = getattr(el_obj, direction, None)
-                    if dir_method is not None:
-                        el_obj = dir_method()
+                dir_method = getattr(el_obj, direction, None)
+                if dir_method is not None: el_obj = dir_method()
                 el_obj = el_obj.anchor(comp_anchor).at(self._get_anchor(last))
             else:
                 el_obj = comp_cls(**kwargs)
-                if direction != "right":
-                    dir_method = getattr(el_obj, direction, None)
-                    if dir_method is not None: el_obj = dir_method()
+                dir_method = getattr(el_obj, direction, None)
+                if dir_method is not None: el_obj = dir_method()
                 el_obj = el_obj.at(self._get_anchor(last))
             d.add(el_obj); return el_obj
         except Exception as e:
@@ -911,7 +771,7 @@ class Circuit:
                     if node_name: named[node_name] = br_last
                 branch_ends.append(br_last.end); last = br_last
             else:
-                offset = 0.6 * bi
+                offset = 1.2 * bi
                 d.add(elm.Line().at(split_point).up(offset)); d.add(elm.Dot())
                 draw_dir = getattr(elm, direction)
                 br_start = draw_dir(); d.add(br_start)
