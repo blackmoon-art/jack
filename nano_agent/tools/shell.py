@@ -17,7 +17,7 @@ _SAFE_COMMAND_PREFIXES = [
     "curl", "wget", "diff", "sort", "uniq", "cut", "sed", "awk", "tr",
     "which", "command", "type", "file", "stat", "du", "df",
     "pip", "pip3", "poetry", "uv", "cargo",
-    "nano", "ngspice", "iverilog", "vvp",
+    "nano",
 ]
 _SAFE_COMMAND_PREFIXES_TUPLE = tuple(_SAFE_COMMAND_PREFIXES)
 

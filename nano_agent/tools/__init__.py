@@ -27,8 +27,6 @@ from .diagram import Diagram
 from .ai_image import AIImage
 from .circuit import Circuit
 from .logic_svg import LogicSVG
-from .analog_svg import AnalogSVG
-from .analog_pipeline import AnalogPipeline
 from .image_analyze import ImageAnalyzer
 from .document_parse import DocumentParser
 
@@ -55,8 +53,6 @@ class ToolRegistry:
         "_ai_image": AIImage,
         "_circuit": Circuit,
         "_logic_svg": LogicSVG,
-        "_analog_svg": AnalogSVG,
-        "_analog_pipeline": AnalogPipeline,
         "_ppt": PPT,
         "_image_analyze": ImageAnalyzer,
         "_document_parse": DocumentParser,
@@ -89,8 +85,6 @@ class ToolRegistry:
         self._ai_image = AIImage(work_dir, charts_dir=charts_dir)
         self._circuit = Circuit(work_dir, charts_dir=charts_dir)
         self._logic_svg = LogicSVG(work_dir, charts_dir=charts_dir)
-        self._analog_svg = AnalogSVG(work_dir, charts_dir=charts_dir)
-        self._analog_pipeline = AnalogPipeline(work_dir, charts_dir=charts_dir)
         self._enable_analog = enable_analog_circuit
         self._enable_digital = enable_digital_circuit
         self._image_analyze = ImageAnalyzer(work_dir)

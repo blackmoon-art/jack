@@ -134,10 +134,6 @@ class Config:
     # ── 安全模式 ──
     public_mode: bool = field(default_factory=lambda: _env_bool("AGENT_PUBLIC_MODE"))
 
-    # ── 仿真 ──
-    ngspice_path: str = field(default_factory=lambda: _env("NGSPICE_PATH", "ngspice"))
-    sim_timeout: int = field(default_factory=lambda: _env_int("AGENT_SIM_TIMEOUT", 30))
-
     # NOTE: 策略自动选择的关键词和 classify prompt 由各策略类的
     # auto_keywords 元数据和 Agent._auto_select_strategy 管理，
     # 不再在 Config 中重复定义。
