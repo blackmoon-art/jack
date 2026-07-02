@@ -62,73 +62,89 @@ class TestFormatToolCall(unittest.TestCase):
 
 
 class TestLLMRetry(unittest.TestCase):
-    """LLM.chat 重试逻辑。"""
+    """LLM.chat 重试逻辑 — 通过 mock provider.chat 测试。"""
 
-    @patch.object(LLM, '_chat_openai')
-    def test_success_no_retry(self, mock_chat):
-        mock_chat.return_value = {"text": "ok", "tool_calls": [], "stop_reason": "stop"}
+    @patch.object(LLM, '_get_provider')
+    def test_success_no_retry(self, mock_get_provider):
+        mock_provider = MagicMock()
+        mock_provider.chat.return_value = {"text": "ok", "tool_calls": [],
+                                            "stop_reason": "stop", "reasoning_content": ""}
+        mock_get_provider.return_value = mock_provider
         llm = _make_test_llm()
         result = llm.chat(messages=[], tools=[], system="")
         self.assertEqual(result["text"], "ok")
-        self.assertEqual(mock_chat.call_count, 1)
+        self.assertEqual(mock_provider.chat.call_count, 1)
 
-    @patch.object(LLM, '_chat_openai')
+    @patch.object(LLM, '_get_provider')
     @patch('nano_agent.llm.time.sleep')
-    def test_retry_on_429(self, mock_sleep, mock_chat):
+    def test_retry_on_429(self, mock_sleep, mock_get_provider):
         """429 应该触发重试。"""
         error = Exception("rate limit exceeded")
         error.status_code = 429
-        mock_chat.side_effect = [error, {"text": "ok", "tool_calls": [], "stop_reason": "stop"}]
+        mock_provider = MagicMock()
+        mock_provider.chat.side_effect = [error, {"text": "ok", "tool_calls": [],
+                                                    "stop_reason": "stop", "reasoning_content": ""}]
+        mock_get_provider.return_value = mock_provider
         llm = _make_test_llm()
         result = llm.chat(messages=[], tools=[], system="")
         self.assertEqual(result["text"], "ok")
-        self.assertEqual(mock_chat.call_count, 2)
+        self.assertEqual(mock_provider.chat.call_count, 2)
 
-    @patch.object(LLM, '_chat_openai')
+    @patch.object(LLM, '_get_provider')
     @patch('nano_agent.llm.time.sleep')
-    def test_retry_on_500(self, mock_sleep, mock_chat):
+    def test_retry_on_500(self, mock_sleep, mock_get_provider):
         """5xx 应该触发重试。"""
         error = Exception("server error")
         error.status_code = 503
-        mock_chat.side_effect = [error, {"text": "ok", "tool_calls": [], "stop_reason": "stop"}]
+        mock_provider = MagicMock()
+        mock_provider.chat.side_effect = [error, {"text": "ok", "tool_calls": [],
+                                                    "stop_reason": "stop", "reasoning_content": ""}]
+        mock_get_provider.return_value = mock_provider
         llm = _make_test_llm()
         result = llm.chat(messages=[], tools=[], system="")
         self.assertEqual(result["text"], "ok")
 
-    @patch.object(LLM, '_chat_openai')
+    @patch.object(LLM, '_get_provider')
     @patch('nano_agent.llm.time.sleep')
-    def test_no_retry_on_400(self, mock_sleep, mock_chat):
+    def test_no_retry_on_400(self, mock_sleep, mock_get_provider):
         """400 不应该重试。"""
         error = Exception("bad request")
         error.status_code = 400
-        mock_chat.side_effect = error
+        mock_provider = MagicMock()
+        mock_provider.chat.side_effect = error
+        mock_get_provider.return_value = mock_provider
         llm = _make_test_llm()
         with self.assertRaises(Exception):
             llm.chat(messages=[], tools=[], system="")
-        self.assertEqual(mock_chat.call_count, 1)
+        self.assertEqual(mock_provider.chat.call_count, 1)
 
-    @patch.object(LLM, '_chat_openai')
+    @patch.object(LLM, '_get_provider')
     @patch('nano_agent.llm.time.sleep')
-    def test_max_3_retries(self, mock_sleep, mock_chat):
+    def test_max_3_retries(self, mock_sleep, mock_get_provider):
         """最多重试 3 次。"""
         error = Exception("timeout")
         error.status_code = 504
-        mock_chat.side_effect = error
+        mock_provider = MagicMock()
+        mock_provider.chat.side_effect = error
+        mock_get_provider.return_value = mock_provider
         llm = _make_test_llm()
         with self.assertRaises(Exception):
             llm.chat(messages=[], tools=[], system="")
-        self.assertEqual(mock_chat.call_count, 3)
+        self.assertEqual(mock_provider.chat.call_count, 3)
 
-    @patch.object(LLM, '_chat_openai')
+    @patch.object(LLM, '_get_provider')
     @patch('nano_agent.llm.time.sleep')
-    def test_retry_after_header_respected(self, mock_sleep, mock_chat):
+    def test_retry_after_header_respected(self, mock_sleep, mock_get_provider):
         """429 带 Retry-After header 时用 header 值。"""
         error = Exception("rate limited")
         error.status_code = 429
         mock_response = MagicMock()
         mock_response.headers = {"Retry-After": "5"}
         error.response = mock_response
-        mock_chat.side_effect = [error, {"text": "ok", "tool_calls": [], "stop_reason": "stop"}]
+        mock_provider = MagicMock()
+        mock_provider.chat.side_effect = [error, {"text": "ok", "tool_calls": [],
+                                                    "stop_reason": "stop", "reasoning_content": ""}]
+        mock_get_provider.return_value = mock_provider
         llm = _make_test_llm()
         llm.chat(messages=[], tools=[], system="")
         mock_sleep.assert_called()

@@ -43,6 +43,10 @@ class StrategyContext:
     system_prompt_fn: Callable[[], str] | None = None
     """构建 system prompt 的函数（委托到 Agent._system_prompt）"""
 
+    # ── 请求追踪 ──
+    trace_id: str = ""
+    """请求级唯一标识。贯穿 Agent → LLM → Tools 全链路。"""
+
     # ── 跨策略通信 ──
     pipeline_state: dict = field(default_factory=dict)
     """跨策略共享状态。Meta 策略初始化一次，所有子策略通过同一个

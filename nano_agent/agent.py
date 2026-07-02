@@ -23,11 +23,13 @@ import json
 import logging
 import threading
 import time as _time
+import uuid
 from pathlib import Path
 from typing import Any, Callable
 
 from .config import Config
 from .llm import LLM
+from .logging_config import set_trace_id
 from .memory import Memory
 from .orient import Orient
 from .tools import ToolRegistry
@@ -95,6 +97,13 @@ class Agent:
         self._local.visual_routed = False
         self._local.prompt_cache = None  # reset per request
         self._local.prompt_cache_key = ()
+
+        # trace_id: 请求全链路追踪
+        trace_id = uuid.uuid4().hex[:8]
+        set_trace_id(trace_id)
+        self._local.trace_id = trace_id
+        logger.info(f"Request start: strategy={strategy}, task_len={len(task)}")
+
         self._emit("text", {"text": f"Task: {task}\nStrategy: {strategy}"})
 
         # auto 模式：LLM 根据用户意图自动选策略
@@ -120,6 +129,8 @@ class Agent:
         self._emit("done", {"text": final})
         self.memory.save_context(task, final)
         self.memory.save_persistent(task, final)
+        logger.info(f"Request done: strategy={strategy}, "
+                     f"result_len={len(final)}")
         self._local.on_event = None
         self._local.current_orient_fn = None
         return final
@@ -142,6 +153,7 @@ class Agent:
             agent_loop=self._agent_loop, orient_fn=getattr(self._local, 'current_orient_fn', None),
             model_override=getattr(self._local, 'model_override', None),
             system_prompt_fn=self._system_prompt,
+            trace_id=getattr(self._local, 'trace_id', ''),
         )
 
     def _run_strategy(self, strategy_cls, task: str, **kwargs) -> str:
