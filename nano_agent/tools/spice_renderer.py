@@ -566,7 +566,10 @@ class SpiceRenderer:
         url = f"/charts/{fp.name}"
 
         spice_block = f"\n\n**SPICE Netlist:**\n```spice\n{spice.strip()}\n```"
-        return f"![{title or 'Analog Circuit'}]({url})\n{url}{spice_block}{ngspice_msg}"
+        sim_hint = ("\n\n💡 **Next:** Call `simulate_spice` with this SPICE netlist "
+                    "to verify performance (cutoff, gain, rise time, etc.) "
+                    "and iteratively optimize.")
+        return f"![{title or 'Analog Circuit'}]({url})\n{url}{spice_block}{ngspice_msg}{sim_hint}"
 
     def _render_schemdraw(self, graph: dict, layout: dict, title: str = "") -> str:
         """Generate schemdraw Drawing and render to SVG string."""

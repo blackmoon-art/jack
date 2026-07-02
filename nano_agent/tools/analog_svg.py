@@ -817,7 +817,10 @@ class AnalogSVG:
         guide = tmpl.get("guide", "")
         spice_block = f"\n\n**SPICE Netlist:**\n```spice\n{spice}\n```" if spice else ""
         guide_text = f"\n{guide}" if guide else ""
-        return f"![{svg_title}]({url})\n{url}{guide_text}{spice_block}"
+        sim_hint = ("\n\n💡 **Next:** Call `simulate_spice` with the SPICE netlist above "
+                    "to verify AC/transient performance (cutoff frequency, gain, etc.) "
+                    "and iteratively optimize the circuit.")
+        return f"![{svg_title}]({url})\n{url}{guide_text}{spice_block}{sim_hint}"
 
     def draw_analog_spice(self, spice: str, title: str = "") -> str:
         """Parse SPICE netlist → render SVG directly (no template matching).
@@ -841,7 +844,9 @@ class AnalogSVG:
         url = f"/charts/{fp.name}"
 
         spice_block = f"\n\n**SPICE Netlist:**\n```spice\n{spice.strip()}\n```"
-        return f"![{title or 'Analog Circuit'}]({url})\n{url}{spice_block}"
+        sim_hint = ("\n\n💡 **Next:** Call `simulate_spice` with this SPICE netlist "
+                    "to verify performance and optimize the circuit iteratively.")
+        return f"![{title or 'Analog Circuit'}]({url})\n{url}{spice_block}{sim_hint}"
 
     @staticmethod
     def _match_template(desc: str):
