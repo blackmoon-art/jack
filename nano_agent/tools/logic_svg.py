@@ -521,8 +521,29 @@ class LogicSVG:
                                    "stroke-linejoin":"round","stroke-linecap":"round"})
 
     def _draw_wire(self, svg, x1, y1, x2, y2):
-        mid = (x1+x2)/2
-        d = f"M{x1},{y1} L{mid},{y1} L{mid},{y2} L{x2},{y2}"
+        """Orthogonal routing with gap-aware midpoints to avoid gate overlap.
+
+        Short wires use direct routing. Long wires use top highway.
+        Medium wires route vertical segment through column gap (not through gates).
+        """
+        dist = abs(x1 - x2)
+        if dist > self.COL_GAP * 1.2:
+            # Long: top highway above all gates
+            highway_y = 14
+            d = (f"M{x1},{y1} L{x1},{highway_y} "
+                 f"L{x2},{highway_y} L{x2},{y2}")
+        elif dist > self.COL_GAP * 0.3:
+            # Medium: route vertical segment in column gap, not through gates
+            # Snap midpoint to nearest COL_GAP/2 boundary (between columns)
+            mid_raw = (x1 + x2) / 2
+            mid = round(mid_raw / (self.COL_GAP / 2)) * (self.COL_GAP / 2)
+            mid = max(x1 + 15, min(x2 - 15, mid))  # keep between source/dest
+            d = f"M{x1},{y1} L{mid},{y1} L{mid},{y2} L{x2},{y2}"
+        elif dist > 10:
+            mid = (x1 + x2) / 2
+            d = f"M{x1},{y1} L{mid},{y1} L{mid},{y2} L{x2},{y2}"
+        else:
+            d = f"M{x1},{y1} L{x2},{y2}"
         ET.SubElement(svg, "path", {"d":d,"fill":"none","stroke":self.COLORS["wire"],
                                      "stroke-width":"1.5","stroke-linejoin":"round"})
 
