@@ -352,6 +352,20 @@ class Agent:
             return schemas
 
         tool_name, tool_params = route
+
+        # ── 电路兜底分类：LLM 判断 digital / analog / block ──
+        if tool_name == "__classify_circuit__":
+            from .visual_router import classify_circuit_type
+            task = tool_params.get("task", "")
+            if not task:
+                task = next(
+                    (m.get("content", "") for m in reversed(messages)
+                     if m.get("role") == "user"), ""
+                )
+            tool_name = classify_circuit_type(task, self.llm)
+            tool_params = {}
+            logger.info(f"[Visual Router] Circuit classified as: {tool_name}")
+
         _NO_DATA = {"geometry", "wireframe", "contour", "cat", "regression", "function"}
         can_direct = (
             tool_name == "generate_chart"

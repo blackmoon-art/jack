@@ -106,8 +106,9 @@ class TestLayer1ExactMatch(unittest.TestCase):
         self.assertEqual(result[0], "mermaid_chart")
 
     def test_draw_circuit(self):
+        """通用电路关键词 → LLM 分类触发器（不再盲猜模拟电路）"""
         result = route_visual("画电路原理图")
-        self.assertEqual(result[0], "draw_analog_spice")
+        self.assertEqual(result[0], "__classify_circuit__")
 
     def test_ai_image(self):
         result = route_visual("画一只猫")

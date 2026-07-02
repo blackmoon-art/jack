@@ -155,10 +155,10 @@ _EXACT_ROUTES: list[tuple[str, str, dict]] = [
      "fmcw|radar.*if|雷达.*中频|rf.*receiver|发射机|transmitter|"
      "接收机|receiver.*chain",
      "draw_analog_spice", {}),
-    # 通用电路 (兜底) → SPICE + schemdraw SVG
+    # 通用电路 (兜底) → LLM 轻量分类 (digital / analog / block)
     ("电路|原理图|schematic|circuit|电路图|接线图|电路设计|"
      "电子电路|pcb|布线",
-     "draw_analog_spice", {}),
+     "__classify_circuit__", {}),
     # AI 图片
     ("照片|photo|艺术|art|画一只|画个猫|画只|画张|画一幅|"
      "realistic|digital art|油画|水彩|素描|卡通|anime|插画",
@@ -219,6 +219,47 @@ def reset_stats():
     """重置统计（测试用）。"""
     for k in _stats:
         _stats[k] = 0
+
+
+# ── 电路分类器（LLM 轻量兜底）─────────────────────────
+
+_CIRCUIT_CLASSIFY_PROMPT = (
+    "Classify this circuit request into exactly one category. "
+    "Reply with ONLY one word: digital, analog, or block.\n\n"
+    "- digital: logic gates, flip-flops, synchronizers, FIFO, mux, "
+    "clock controllers, OCC, DFT, scan chains, state machines, "
+    "counters, decoders, encoders, ALU, registers, digital ICs\n"
+    "- analog: filters, amplifiers, op-amps, transistors, oscillators, "
+    "power supplies, rectifiers, voltage dividers, bias circuits, "
+    "switching converters, buck, boost, LDO\n"
+    "- block: system block diagrams, signal chains, RF chains, "
+    "architectural diagrams, mixed-signal top-level, SoC diagrams\n\n"
+    "Request: {task}\nCategory:"
+)
+
+
+def classify_circuit_type(task: str, llm) -> str:
+    """用一次轻量 LLM 调用判断电路类型，返回正确的工具名。
+
+    仅在关键词全不命中时调用（~200 tokens）。
+    """
+    prompt = _CIRCUIT_CLASSIFY_PROMPT.format(task=task)
+    try:
+        resp = llm.chat(
+            messages=[{"role": "user", "content": prompt}],
+            tools=[],
+            system="Reply with exactly one word: digital, analog, or block.",
+        )
+        text = resp.get("text", "").strip().lower()
+    except Exception:
+        return "draw_analog_spice"  # LLM 不可用时的安全兜底
+
+    if "block" in text:
+        return "draw_block"
+    elif "analog" in text:
+        return "draw_analog_spice"
+    else:
+        return "draw_logic"  # 数字电路默认（新领域术语更可能是数字）
 
 
 # ── 公共接口 ──────────────────────────────────────────

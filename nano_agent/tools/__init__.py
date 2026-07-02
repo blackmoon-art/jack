@@ -31,6 +31,7 @@ from .analog_svg import AnalogSVG
 from .spice_renderer import SpiceRenderer
 from .image_analyze import ImageAnalyzer
 from .document_parse import DocumentParser
+from .spice_simulator import SpiceSimulator
 
 logger = logging.getLogger("nano_agent.tools")
 
@@ -60,6 +61,7 @@ class ToolRegistry:
         "_ppt": PPT,
         "_image_analyze": ImageAnalyzer,
         "_document_parse": DocumentParser,
+        "_spice_simulator": SpiceSimulator,
     }
 
     def __init__(self, work_dir: str, bash_timeout: int = 120,
@@ -95,6 +97,7 @@ class ToolRegistry:
         self._enable_digital = enable_digital_circuit
         self._image_analyze = ImageAnalyzer(work_dir)
         self._document_parse = DocumentParser(work_dir)
+        self._spice_simulator = SpiceSimulator(work_dir, charts_dir=charts_dir)
 
         # 自动注册工具
         self._tools: dict[str, dict[str, Any]] = {}
