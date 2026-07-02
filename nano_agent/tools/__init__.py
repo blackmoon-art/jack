@@ -119,9 +119,8 @@ class ToolRegistry:
                 if attr_name == "_circuit":
                     if name == "draw_digital" and not self._enable_digital:
                         continue
-                    if name == "draw_analog" and not self._enable_analog:
-                        continue
-                    if name == "draw_block" and not self._enable_analog:
+                    # draw_analog / draw_block 已被 analog_svg (SPICE) 替代
+                    if name in ("draw_analog", "draw_block"):
                         continue
                 func = getattr(instance, method_name)
                 self._register(name, desc, func, properties, required=required)
