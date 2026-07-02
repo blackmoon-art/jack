@@ -926,13 +926,28 @@ class AnalogSVG:
             return True, ""  # 仿真不可用时放行，不阻塞出图
 
     def draw_analog_spice(self, spice: str, title: str = "") -> str:
-        """Parse SPICE netlist → render SVG directly (no template matching).
+        """Parse SPICE netlist → sim verify → render SVG.
 
-        Accepts any valid SPICE netlist with R/C/L/D/V/X components.
-        The LLM can hand-write SPICE for custom topologies.
+        Only returns the circuit diagram if ngspice simulation succeeds.
+        If simulation fails, returns the error so the LLM can fix and retry.
         """
+        spice_stripped = spice.strip()
+
+        # ── SPICE 仿真验证 ──
+        sim_ok, sim_output = self._run_sim_check(spice_stripped)
+        if not sim_ok:
+            return (
+                f"❌ **Simulation failed — diagram blocked.**\n\n"
+                f"**SPICE Netlist:**\n```spice\n{spice_stripped}\n```\n\n"
+                f"**Simulation Error:**\n```\n{sim_output[:1500]}\n```\n\n"
+                f"🔧 **Fix the SPICE errors above** and call `draw_analog_spice` "
+                f"again with the corrected netlist. Once simulation passes, "
+                f"the diagram will be shown automatically."
+            )
+
+        # 仿真通过 → 渲染 SVG
         try:
-            components = _parse_spice(spice)
+            components = _parse_spice(spice_stripped)
             if not components:
                 return "Error: no valid SPICE components found. " \
                        "Supported: R, C, L, D, V, X (op-amp subcircuit)."
@@ -946,10 +961,11 @@ class AnalogSVG:
         fp.write_text(svg, encoding="utf-8")
         url = f"/charts/{fp.name}"
 
-        spice_block = f"\n\n**SPICE Netlist:**\n```spice\n{spice.strip()}\n```"
-        sim_hint = ("\n\n💡 **Next:** Call `simulate_spice` with this SPICE netlist "
-                    "to verify performance and optimize the circuit iteratively.")
-        return f"![{title or 'Analog Circuit'}]({url})\n{url}{spice_block}{sim_hint}"
+        spice_block = f"\n\n**SPICE Netlist:**\n```spice\n{spice_stripped}\n```"
+        sim_block = f"\n\n✅ **Simulation verified** — ngspice ran successfully."
+        sim_hint = ("\n\n💡 **Next:** Call `simulate_spice` for detailed AC/transient "
+                    "analysis and iterative optimization.")
+        return f"![{title or 'Analog Circuit'}]({url})\n{url}{sim_block}{spice_block}{sim_hint}"
 
     @staticmethod
     def _match_template(desc: str):
