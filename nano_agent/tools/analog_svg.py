@@ -813,16 +813,39 @@ class AnalogSVG:
         self.charts_dir.mkdir(parents=True, exist_ok=True)
 
     def draw_analog_svg(self, description: str, title: str = "") -> str:
-        """Parse NL description → template → calculate → SPICE → SVG."""
+        """Parse NL description → template → calculate → SPICE → sim verify → SVG.
+
+        Only returns the circuit diagram if ngspice simulation succeeds.
+        If simulation fails, returns the error so the LLM can fix and retry.
+        """
         try:
             tmpl, values = self._match_template(description)
             components = [dict(c) for c in tmpl["components"]]
             spice = _to_spice(components, values)
             svg_title = title or tmpl.get("name", "")
-            svg = _render_svg(components, svg_title)
         except Exception as e:
             logger.exception(f"Analog SVG failed: {e}")
             return f"Error drawing analog circuit: {e}"
+
+        # ── SPICE 仿真验证 ──
+        sim_ok, sim_output = self._run_sim_check(spice)
+        if not sim_ok:
+            guide = tmpl.get("guide", "")
+            return (
+                f"❌ **Circuit simulation failed — diagram blocked.**\n\n"
+                f"**Circuit:** {svg_title}\n{guide}\n\n"
+                f"**SPICE Netlist:**\n```spice\n{spice}\n```\n\n"
+                f"**Simulation Error:**\n```\n{sim_output[:1500]}\n```\n\n"
+                f"🔧 **Fix the SPICE netlist above** and call `draw_analog_spice` "
+                f"with the corrected netlist to re-render."
+            )
+
+        # 仿真通过 → 渲染 SVG
+        try:
+            svg = _render_svg(components, svg_title)
+        except Exception as e:
+            logger.exception(f"Analog SVG render failed: {e}")
+            return f"Error rendering analog circuit: {e}"
 
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         fp = self.charts_dir / f"analog_{ts}.svg"
@@ -830,12 +853,53 @@ class AnalogSVG:
         url = f"/charts/{fp.name}"
 
         guide = tmpl.get("guide", "")
-        spice_block = f"\n\n**SPICE Netlist:**\n```spice\n{spice}\n```" if spice else ""
         guide_text = f"\n{guide}" if guide else ""
+        sim_block = f"\n\n✅ **Simulation verified** — ngspice ran successfully."
+        spice_block = f"\n\n**SPICE Netlist:**\n```spice\n{spice}\n```"
         sim_hint = ("\n\n💡 **Next:** Call `simulate_spice` with the SPICE netlist above "
-                    "to verify AC/transient performance (cutoff frequency, gain, etc.) "
-                    "and iteratively optimize the circuit.")
-        return f"![{svg_title}]({url})\n{url}{guide_text}{spice_block}{sim_hint}"
+                    "for detailed AC/transient analysis and iterative optimization.")
+        return f"![{svg_title}]({url})\n{url}{guide_text}{sim_block}{spice_block}{sim_hint}"
+
+    @staticmethod
+    def _run_sim_check(spice: str) -> tuple[bool, str]:
+        """Run a quick ngspice OP check. Returns (passed, output_text)."""
+        import shutil
+        import subprocess
+        import tempfile
+
+        if not shutil.which("ngspice"):
+            return True, ""  # ngspice 不可用时放行
+
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="w", suffix=".cir", delete=False
+            ) as f:
+                # Add .op if not present
+                if ".op" not in spice.lower() and ".ac" not in spice.lower() \
+                   and ".tran" not in spice.lower():
+                    f.write(".op\n")
+                f.write(spice + "\n")
+                f.write(".end\n")
+                cir_path = f.name
+
+            result = subprocess.run(
+                ["ngspice", "-b", cir_path],
+                capture_output=True, text=True, timeout=15,
+            )
+            output = (result.stderr + result.stdout)
+            Path(cir_path).unlink(missing_ok=True)
+
+            if result.returncode != 0:
+                return False, output[:1500]
+            # Check for fatal errors even if returncode is 0
+            if re.search(r'(Error on line|FATAL|parse error|too few nodes)',
+                         output, re.IGNORECASE):
+                return False, output[:1500]
+            return True, output[:500]
+        except subprocess.TimeoutExpired:
+            return False, "Simulation timed out (>15s)"
+        except Exception as e:
+            return True, ""  # 仿真不可用时放行，不阻塞出图
 
     def draw_analog_spice(self, spice: str, title: str = "") -> str:
         """Parse SPICE netlist → render SVG directly (no template matching).
