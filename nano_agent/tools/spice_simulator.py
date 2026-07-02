@@ -29,10 +29,10 @@ _OPAMP_SUBCKT = """
 .subckt opamp in_p in_n out vcc vss
 * Simple behavioral opamp: gain=100k, single-pole at 10Hz
 G1 0 n1 in_p in_n 1
-R1 n1 0 100k
-C1 n1 0 1.59e-4
-E1 out 0 n1 0 1
-Rout out 0 75
+Rop1 n1 0 100k
+Cop1 n1 0 1.59e-4
+Eop1 out 0 n1 0 1
+Rop2 out 0 75
 .ends opamp
 """
 
@@ -41,6 +41,55 @@ _DIODE_MODEL = """
 """
 
 _GROUND_NAMES = {"0", "gnd", "GND"}
+
+# ngspice-46 Homebrew (Apple Silicon) has a broken .subckt parser.
+# Detect once and use inline E-source replacement if subcircuits are broken.
+_subckt_ok: bool | None = None
+
+
+def _check_subckt_support() -> bool:
+    """One-time check: does ngspice on this platform support .subckt?"""
+    global _subckt_ok
+    if _subckt_ok is not None:
+        return _subckt_ok
+    import subprocess as _sp
+    import tempfile as _tf
+    test_spice = ".subckt test 1 2\nR1 1 2 1k\n.ends\nX1 3 4 test\n.op\n.end\n"
+    with _tf.NamedTemporaryFile(mode="w", suffix=".cir", delete=False) as _f:
+        _f.write(test_spice)
+        _f.flush()
+        try:
+            _r = _sp.run(["ngspice", "-b", _f.name],
+                         capture_output=True, text=True, timeout=5)
+            _subckt_ok = "Mismatch" not in _r.stderr and "Mismatch" not in _r.stdout
+        except Exception:
+            _subckt_ok = False
+        Path(_f.name).unlink(missing_ok=True)
+    return _subckt_ok
+
+
+def _replace_opamp_with_e_source(spice_text: str) -> str:
+    """Replace X... opamp with inline behavioral E-source (gain=100k).
+
+    Opamp pin order: in_p in_n out vcc vss
+    We model it as: E<name> out 0 in_p in_n 100k
+    (ignoring vcc/vss for small-signal AC analysis).
+    """
+    result = []
+    for line in spice_text.split("\n"):
+        stripped = line.strip()
+        tokens = stripped.split()
+        if tokens and tokens[0].upper().startswith("X") and len(tokens) >= 6:
+            # X<name> in_p in_n out vcc vss model
+            xname = tokens[0][1:]  # strip leading X
+            in_p, in_n, out = tokens[1], tokens[2], tokens[3]
+            # E source: E<name> N+ N- NC+ NC- gain
+            # VCVS: V(N+,N-) = gain * (V(NC+) - V(NC-))
+            # Opamp: Vout = gain * (V(in+) - V(in-))
+            result.append(f"E{xname} {out} 0 {in_p} {in_n} 100k")
+        else:
+            result.append(line)
+    return "\n".join(result)
 
 
 def _check_ngspice() -> bool:
@@ -105,10 +154,19 @@ def _prep_netlist(spice_text: str, analysis: str = "") -> tuple[str, str]:
         r'\.(ac|tran|op)\b', text, re.IGNORECASE))
 
     # Inject opamp/diode models if needed
-    has_opamp = bool(re.search(r'\bX\w+\b', text))
-    has_diode = bool(re.search(r'\bD\w+\b', text))
-    if has_opamp and ".subckt opamp" not in text.lower():
-        text = _OPAMP_SUBCKT.strip() + "\n" + text
+    # Match component lines specifically (X/D at line start, not in values like "DC 0")
+    has_opamp = bool(re.search(r'^X\w+', text, re.MULTILINE))
+    has_diode = bool(re.search(r'^D\w+', text, re.MULTILINE))
+
+    if has_opamp:
+        if _check_subckt_support():
+            # ngspice supports .subckt — inject behavioral opamp model
+            if ".subckt opamp" not in text.lower():
+                text = _OPAMP_SUBCKT.strip() + "\n" + text
+        else:
+            # ngspice subcircuit broken (Homebrew Apple Silicon) — use inline E-source
+            text = _replace_opamp_with_e_source(text)
+
     if has_diode and ".model" not in text.lower():
         text = _DIODE_MODEL.strip() + "\n" + text
 
@@ -126,7 +184,7 @@ def _prep_netlist(spice_text: str, analysis: str = "") -> tuple[str, str]:
 
     # Add .print commands
     if analysis == "ac" and nodes:
-        node_exprs = " ".join(f"vdb({n}) vp({n})" for n in nodes[:5])
+        node_exprs = " ".join(f"vm({n}) vp({n})" for n in nodes[:5])
         text += f"\n.print ac {node_exprs}"
     elif analysis == "tran" and nodes:
         node_exprs = " ".join(f"v({n})" for n in nodes[:5])
@@ -245,7 +303,7 @@ def _parse_ac_output(output: str) -> dict:
                 h = parts[j]
                 if h == "frequency":
                     continue  # skip independent variable column
-                if h.startswith("vdb(") or h.startswith("vp("):
+                if h.startswith("vm(") or h.startswith("vdb(") or h.startswith("vp("):
                     current_cols.append(h)
             continue
 
@@ -297,9 +355,22 @@ def _parse_ac_output(output: str) -> dict:
     if result["frequencies"]:
         result["freq_range"] = (result["frequencies"][0], result["frequencies"][-1])
 
-    # Build ordered data columns
+    # Build ordered data columns, converting vm() to dB
     for col_name, idx_vals in data_cols_seen.items():
-        result["data"][col_name] = [idx_vals.get(i, 0.0) for i in range(num_rows)]
+        vals = [idx_vals.get(i, 0.0) for i in range(num_rows)]
+        if col_name.startswith("vm("):
+            # Convert linear magnitude to dB: 20*log10(|v|)
+            # Rename column to vdb() for downstream consistency
+            db_name = col_name.replace("vm(", "vdb(", 1)
+            db_vals = []
+            for v in vals:
+                if abs(v) > 1e-15:
+                    db_vals.append(20.0 * math.log10(abs(v)))
+                else:
+                    db_vals.append(-200.0)  # effectively -inf
+            result["data"][db_name] = db_vals
+        else:
+            result["data"][col_name] = vals
 
     return result
 
@@ -406,13 +477,30 @@ def _compute_ac_metrics(ac_data: dict) -> dict:
         metrics["warnings"].append("No dB data found")
         return metrics
 
-    # Pick the best dB column: prefer one that shows attenuation (not flat 0dB source)
+    # Pick the best dB column: prefer one with meaningful signal (not source/dc nodes)
+    # Skip columns at -200dB (DC-only nodes, effectively 0V) and flat 0dB sources
     best_db_col = db_cols[0]
+    best_score = -999
     for col in db_cols:
         vals = ac_data["data"].get(col, [])
-        if vals and min(vals) < -0.01:
+        if not vals:
+            continue
+        vmin, vmax = min(vals), max(vals)
+        # Skip DC-only nodes (stuck at -200dB) and pure source nodes (flat 0dB)
+        if vmin < -190 or (abs(vmax - vmin) < 0.001 and abs(vmax) < 0.001):
+            continue
+        # Prefer the column with the most interesting signal:
+        # - If frequency-dependent (filter): pick the one with most dynamic range
+        # - If flat (amplifier): pick the one closest to 0dB (highest gain, likely output)
+        dynamic_range = abs(vmax - vmin)
+        if dynamic_range > 0.5:
+            score = dynamic_range  # clear frequency shaping
+        else:
+            # Flat response: prefer highest gain (least negative dB)
+            score = max(vmax, -190)  # clamp -200 sentinel
+        if score > best_score:
+            best_score = score
             best_db_col = col
-            break
 
     db_data = ac_data["data"][best_db_col]
     # Match phase column to the chosen dB column
@@ -716,7 +804,7 @@ def _format_result(analysis: str, success: bool, error_msg: str,
                 header = "| Freq (Hz) |"
                 sep = "|-----------|"
                 for c in cols[:3]:
-                    label = re.sub(r'vdb\((.+)\)', r'Gain dB (\1)', c)
+                    label = re.sub(r'v[md]b\((.+)\)', r'Gain dB (\1)', c)
                     label = re.sub(r'vp\((.+)\)', r'Phase° (\1)', label)
                     header += f" {label} |"
                     sep += "-----------|"

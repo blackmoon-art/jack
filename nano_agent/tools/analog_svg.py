@@ -127,7 +127,8 @@ _CIRCUIT_TEMPLATES = {
             {"type": "V", "name": "Vin", "nodes": ["in", "0"], "value": "AC 1"},
             {"type": "R", "name": "R1", "nodes": ["in", "n1"], "value": "?"},
             {"type": "R", "name": "Rf", "nodes": ["n1", "out"], "value": "?"},
-            {"type": "X", "name": "U1", "nodes": ["n1", "0", "out", "vcc", "0"], "model": "opamp"},
+            # in+=0(GND), in-=n1(feedback summing node)
+            {"type": "X", "name": "U1", "nodes": ["0", "n1", "out", "vcc", "0"], "model": "opamp"},
         ],
         "params": {"gain": ("Voltage gain (absolute value)", "10"), "R1": ("Input resistance", "1k")},
         "calculate": "inverting_amp",
@@ -135,13 +136,13 @@ _CIRCUIT_TEMPLATES = {
     ("amplifier", "non_inverting"): {
         "name": "Non-Inverting Amplifier",
         "keywords_cn": ["同相放大", "同相放大器", "正向放大", "正比例放大", "non.inverting"],
-        "keywords_cn": ["同相放大", "同相放大器", "正向放大", "正比例放大", "non.inverting"],
         "guide": "A non-inverting op-amp amplifier. Gain = 1 + Rf/R1.",
         "components": [
             {"type": "V", "name": "Vin", "nodes": ["in", "0"], "value": "AC 1"},
             {"type": "R", "name": "R1", "nodes": ["n1", "0"], "value": "?"},
             {"type": "R", "name": "Rf", "nodes": ["n1", "out"], "value": "?"},
-            {"type": "X", "name": "U1", "nodes": ["n1", "in", "out", "vcc", "0"], "model": "opamp"},
+            # in+=in(signal), in-=n1(feedback divider: R1 to GND, Rf to out)
+            {"type": "X", "name": "U1", "nodes": ["in", "n1", "out", "vcc", "0"], "model": "opamp"},
         ],
         "params": {"gain": ("Voltage gain", "11"), "R1": ("R1 resistance", "1k")},
         "calculate": "non_inverting_amp",
@@ -149,15 +150,17 @@ _CIRCUIT_TEMPLATES = {
     ("amplifier", "differential"): {
         "name": "Differential Amplifier",
         "keywords_cn": ["差分放大", "差分放大器", "差动放大", "减法器", "differential"],
-        "guide": "A differential op-amp amplifier. Vout = (Rf/R1) * (V2 - V1).",
+        "guide": "A differential op-amp amplifier. Vout = (Rf/R1) * (V2 - V1). "
+                 "Simulate with V1=AC 1, V2=DC 0 to measure differential gain.",
         "components": [
             {"type": "V", "name": "V1", "nodes": ["in1", "0"], "value": "AC 1"},
-            {"type": "V", "name": "V2", "nodes": ["in2", "0"], "value": "AC 1"},
+            {"type": "V", "name": "V2", "nodes": ["in2", "0"], "value": "DC 0"},
             {"type": "R", "name": "R1", "nodes": ["in1", "n1"], "value": "?"},
             {"type": "R", "name": "R2", "nodes": ["in2", "n2"], "value": "?"},
             {"type": "R", "name": "Rf", "nodes": ["n1", "out"], "value": "?"},
             {"type": "R", "name": "Rg", "nodes": ["n2", "0"], "value": "?"},
-            {"type": "X", "name": "U1", "nodes": ["n1", "n2", "out", "vcc", "0"], "model": "opamp"},
+            # n1=in-(反馈), n2=in+(参考) — 负反馈接法
+            {"type": "X", "name": "U1", "nodes": ["n2", "n1", "out", "vcc", "0"], "model": "opamp"},
         ],
         "params": {"gain": ("Differential gain", "10"), "R1": ("Input resistance", "1k")},
         "calculate": "differential_amp",
@@ -174,7 +177,8 @@ _CIRCUIT_TEMPLATES = {
             {"type": "R", "name": "R2", "nodes": ["in2", "n1"], "value": "?"},
             {"type": "R", "name": "R3", "nodes": ["in3", "n1"], "value": "?"},
             {"type": "R", "name": "Rf", "nodes": ["n1", "out"], "value": "?"},
-            {"type": "X", "name": "U1", "nodes": ["n1", "0", "out", "vcc", "0"], "model": "opamp"},
+            # in+=0(GND), in-=n1(summing junction)
+            {"type": "X", "name": "U1", "nodes": ["0", "n1", "out", "vcc", "0"], "model": "opamp"},
         ],
         "params": {"gain": ("Gain per channel (absolute)", "1"), "R1": ("Input resistance", "1k")},
         "calculate": "summing_amp",
