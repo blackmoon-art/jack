@@ -105,6 +105,7 @@ class LogicSVG:
     W, H = 80, 50
     PIN = 10
     IY = 12
+    PORT_W, PORT_H = 40, 24  # 输入/输出端口矩形尺寸
     COL_GAP, ROW_GAP = 140, 100
     MOD_W, MOD_H = 120, 80
     COLORS = {"bg": "#1a1a2e", "fg": "#e0e0e0", "grid": "#333",
@@ -308,33 +309,19 @@ class LogicSVG:
                     for ri, gi in enumerate(sub_col):
                         gy = y + ri * self.ROW_GAP
                         self._draw_gate(svg, gx, gy, gates[gi]["type"], "")
-                        gate_outputs[gates[gi]["output"]] = (gx + self.W // 2 + self.PIN, gy)
+                        gate_outputs[gates[gi]["output"]] = (gx + self.W // 2 + self.PIN + self.PORT_W // 2, gy)
                     col_idx += 1
 
-            # ── 主输入标签和端口点 ──
+            # ── 主输入端口（圆角矩形）──
             for sig, (px, py) in input_pin_pos.items():
-                ET.SubElement(svg, "circle", {
-                    "cx": str(px), "cy": str(py), "r": "3",
-                    "fill": "#3b82f6", "stroke": "none",
-                })
-                ET.SubElement(svg, "text", {
-                    "x": str(px + 6), "y": str(py + 4), "text-anchor": "start",
-                    "fill": "#3b82f6", "font-family": "monospace", "font-size": "9",
-                }).text = sig
+                self._draw_port(svg, px, py, sig, True)
 
-            # ── 主输出标签 ──
+            # ── 主输出端口（圆角矩形）──
             for out_sig in all_outputs:
                 if out_sig in gate_outputs:
                     ox, oy = gate_outputs[out_sig]
-                    ex = ox + self.W // 2 + self.PIN
-                    ET.SubElement(svg, "circle", {
-                        "cx": str(ex), "cy": str(oy), "r": "3",
-                        "fill": "#10b981", "stroke": "none",
-                    })
-                    ET.SubElement(svg, "text", {
-                        "x": str(ex + 8), "y": str(oy + 4), "text-anchor": "start",
-                        "fill": "#10b981", "font-family": "monospace", "font-size": "9",
-                    }).text = out_sig
+                    ex = ox + self.W // 2 + self.PIN + self.PORT_W // 2
+                    self._draw_port(svg, ex, oy, out_sig, False)
 
             y = gate_y_end
 
@@ -478,6 +465,25 @@ class LogicSVG:
             ET.SubElement(svg, "text", {"x":str(tx),"y":str(py+3),"text-anchor":align,
                                          "fill":color,"font-family":"monospace","font-size":"7"
                                          }).text = port
+
+    # ═══════════ 端口绘制 ═══════════
+
+    def _draw_port(self, svg, x, y, name, is_input):
+        """绘制输入/输出端口（圆角矩形）。"""
+        pw, ph = self.PORT_W, self.PORT_H
+        px = x - pw // 2
+        py = y - ph // 2
+        color = "#3b82f6" if is_input else "#10b981"
+        ET.SubElement(svg, "rect", {
+            "x": str(px), "y": str(py), "width": str(pw), "height": str(ph),
+            "rx": "4", "fill": self.COLORS["port_fill"],
+            "stroke": color, "stroke-width": "1.2",
+        })
+        ET.SubElement(svg, "text", {
+            "x": str(x), "y": str(y + 2), "text-anchor": "middle",
+            "fill": color, "font-family": "monospace",
+            "font-size": "9", "dy": "0.3em",
+        }).text = name
 
     # ═══════════ 门绘制 (保留) ═══════════
 
