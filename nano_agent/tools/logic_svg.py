@@ -1,404 +1,317 @@
-"""逻辑门 SVG 渲染器 — 零依赖，纯 Python stdlib。
+"""逻辑门 / RTL / 模块级 SVG 渲染器。
 
-DSL 格式 (每行一个门):
-  GATE(input1, input2, ...) = output_name
+支持三种 DSL 格式（自动检测）:
 
-支持的门:
-  AND, OR, NOT, NAND, NOR, XOR, XNOR, BUF
+1. 门级 netlist:
+   XOR(A, B) = Sum
+   AND(A, B) = Carry
 
-示例 — 半加器:
-  XOR(A, B) = Sum
-  AND(A, B) = Carry
+2. JSON 模块描述:
+   {"id":"u1","type":"FIFO","depth":1024,"width":32,"wr_clk":"clk_a","rd_clk":"clk_b"}
 
-示例 — 全加器:
-  XOR(A, B) = g1
-  XOR(g1, Cin) = Sum
-  AND(A, B) = g2
-  AND(g1, Cin) = g3
-  OR(g2, g3) = Cout
-
-示例 — 2级同步器:
-  BUF(async_in) = s1
-  BUF(s1, clk) = synced
+3. 混合: 门级 + JSON (用空行分隔)
+   XOR(A, B) = Sum
+   {"id":"reg0","type":"REGISTER","width":8,"clk":"clk","d":"data_in","q":"data_out"}
 """
 
+import json
 import re
 import xml.etree.ElementTree as ET
 from datetime import datetime
 from pathlib import Path
 
+# ── 模块类型定义 ──────────────────────────────────
+
+_MODULE_DEFS = {
+    "REGISTER":  {"shape": "rect", "ports": ["D", "Q", "CLK", "RST", "EN"], "label": "REG"},
+    "DFF":       {"shape": "rect", "ports": ["D", "Q", "CLK", "RST"], "label": "DFF"},
+    "JKFF":      {"shape": "rect", "ports": ["J", "K", "Q", "CLK", "RST"], "label": "JK"},
+    "TFF":       {"shape": "rect", "ports": ["T", "Q", "CLK", "RST"], "label": "TFF"},
+    "LATCH":     {"shape": "rect", "ports": ["D", "Q", "EN"], "label": "LAT"},
+    "COUNTER":   {"shape": "rect", "ports": ["Q", "CLK", "RST", "EN", "LD"], "label": "CNT"},
+    "MUX":       {"shape": "trapezoid", "ports": ["A", "B", "SEL", "Y"], "label": "MUX"},
+    "DEMUX":     {"shape": "trapezoid", "ports": ["D", "SEL", "Y0", "Y1"], "label": "DMX"},
+    "ENCODER":   {"shape": "rect", "ports": ["D", "Y"], "label": "ENC"},
+    "DECODER":   {"shape": "rect", "ports": ["A", "Y"], "label": "DEC"},
+    "ALU":       {"shape": "rect", "ports": ["A", "B", "OP", "Y", "FLAGS"], "label": "ALU"},
+    "RAM":       {"shape": "rect", "ports": ["ADDR", "DIN", "DOUT", "WE", "CLK"], "label": "RAM"},
+    "ROM":       {"shape": "rect", "ports": ["ADDR", "DOUT", "CLK"], "label": "ROM"},
+    "FIFO":      {"shape": "rect", "ports": ["DIN", "DOUT", "WR_CLK", "RD_CLK", "WR_EN", "RD_EN", "FULL", "EMPTY"], "label": "FIFO"},
+    "FSM":       {"shape": "rect", "ports": ["IN", "OUT", "STATE", "CLK", "RST"], "label": "FSM"},
+    "BUS":       {"shape": "rect", "ports": ["M", "S0", "S1", "S2", "S3"], "label": "BUS"},
+    "ARBITER":   {"shape": "rect", "ports": ["REQ", "GNT", "CLK"], "label": "ARB"},
+    "PIPELINE":  {"shape": "rect", "ports": ["DIN", "DOUT", "CLK", "STALL"], "label": "PIPE"},
+}
+
+# 端口方向: I=input, O=output, B=bidir
+_PORT_DIRS = {
+    "CLK": "I", "RST": "I", "EN": "I", "WE": "I", "WR_EN": "I", "RD_EN": "I",
+    "STALL": "I", "LD": "I",
+    "D": "I", "DIN": "I", "A": "I", "B": "I", "OP": "I", "SEL": "I",
+    "ADDR": "I", "REQ": "I", "T": "I", "J": "I", "K": "I",
+    "Q": "O", "DOUT": "O", "Y": "O", "Y0": "O", "Y1": "O", "Y2": "O", "Y3": "O",
+    "FLAGS": "O", "FULL": "O", "EMPTY": "O", "GNT": "O", "STATE": "O",
+    "M": "B", "S0": "B", "S1": "B", "S2": "B", "S3": "B",
+}
+
 
 class LogicSVG:
     TOOLS = [
         ("draw_logic",
-         "Draw digital logic circuit diagrams as SVG. "
-         "Pure logic gate netlist. One gate per line.\n"
+         "Draw digital logic diagrams (gate-level or RTL/module-level).\n"
+         "Auto-detects format:\n"
          "\n"
-         "**Format:** `GATE(input1, input2, ...) = output`\n"
-         "**Gates:** AND, OR, NOT, NAND, NOR, XOR, XNOR, BUF\n"
-         "NOT has 1 input. BUF can have 1 or 2 (with clk).\n"
-         "First use of a name = input port. Reuse = internal wire.\n"
-         "\n"
-         "**Half-adder:**\n"
+         "**Gate netlist:** one gate per line\n"
          "`XOR(A, B) = Sum\nAND(A, B) = Carry`\n"
          "\n"
-         "**Full-adder:**\n"
-         "`XOR(A, B) = g1\nXOR(g1, Cin) = Sum\nAND(A, B) = g2\nAND(g1, Cin) = g3\nOR(g2, g3) = Cout`\n"
+         "**JSON modules:** one JSON object per line\n"
+         '`{"id":"reg0","type":"REGISTER","width":8,"clk":"clk","d":"din","q":"dout"}`\n'
          "\n"
-         "**Synchronizer:**\n"
-         "`BUF(async_in, clk) = s1\nBUF(s1, clk) = synced`",
+         "**Module types:** REGISTER, DFF, JKFF, TFF, LATCH, COUNTER, "
+         "MUX, DEMUX, ENCODER, DECODER, ALU, RAM, ROM, FIFO, FSM, BUS, ARBITER, PIPELINE\n"
+         "\n"
+         "**Attributes:** width, depth, signed, clock_domain, reset_type, bus_width, delay",
          "draw_logic",
          {"description": {"type": "string",
                           "description":
-                          "Logic gate netlist. One gate per line. "
-                          "GATE(input1, input2) = output. "
-                          "Gates: AND,OR,NOT,NAND,NOR,XOR,XNOR,BUF. "
-                          "Example: 'XOR(A,B)=Sum\\nAND(A,B)=Carry' for half-adder"},
+                          "Gate netlist or JSON modules. Gates: AND/OR/NOT/NAND/NOR/XOR/XNOR/BUF. "
+                          "JSON: {'id':'u1','type':'REGISTER','clk':'clk','d':'in','q':'out'}. "
+                          "Module types: REGISTER,DFF,JKFF,TFF,LATCH,COUNTER,MUX,DEMUX,"
+                          "ENCODER,DECODER,ALU,RAM,ROM,FIFO,FSM,BUS,ARBITER,PIPELINE"},
           "title": {"type": "string", "description": "Diagram title"}},
          ["description"]),
     ]
 
-    # ── 门形状定义 ──────────────────────────────────
-    GATE_SHAPES = {
-        "AND":   ("and",   False),
-        "NAND":  ("and",   True),
-        "OR":    ("or",    False),
-        "NOR":   ("or",    True),
-        "XOR":   ("xor",   False),
-        "XNOR":  ("xor",   True),
-        "NOT":   ("not",   True),
-        "BUF":   ("buf",   False),
-    }
+    # SVG constants
+    W, H = 80, 50
+    PIN = 10
+    IY = 10
+    COL_GAP, ROW_GAP = 120, 80
+    MOD_W, MOD_H = 120, 80
+    COLORS = {"bg": "#1a1a2e", "fg": "#e0e0e0", "grid": "#333",
+              "gate_fill": "#2a2a4e", "gate_stroke": "#7c3aed",
+              "wire": "#7c3aed", "port_fill": "#0f172a",
+              "port_stroke": "#3b82f6", "text": "#e0e0e0"}
 
     def __init__(self, work_dir: str = "", charts_dir: str = ""):
         if charts_dir:
             self.charts_dir = Path(charts_dir)
         else:
-            web_static = Path(__file__).parent.parent.parent / "web" / "static"
-            self.charts_dir = web_static / "charts"
+            self.charts_dir = Path(__file__).parent.parent.parent / "web" / "static" / "charts"
         self.charts_dir.mkdir(parents=True, exist_ok=True)
 
     def draw_logic(self, description: str, title: str = "") -> str:
-        """解析 DSL → 布局 → 渲染 SVG。"""
         try:
-            gates, inputs, outputs = self._parse(description)
-            if not gates:
-                return "Error: no valid gates found. Format: GATE(a,b) = out"
-            svg = self._render(gates, inputs, outputs, title)
+            gates, modules = self._parse_mixed(description)
+            if not gates and not modules:
+                return "Error: no valid gates or modules found"
+            svg = self._render_mixed(gates, modules, title)
         except Exception as e:
             return f"Error drawing logic: {e}"
-
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"logic_{ts}.svg"
-        filepath = self.charts_dir / filename
-        filepath.write_text(svg, encoding="utf-8")
-        url = f"/charts/{filename}"
+        fp = self.charts_dir / f"logic_{ts}.svg"
+        fp.write_text(svg, encoding="utf-8")
+        url = f"/charts/{fp.name}"
         return f"![{title or 'Logic'}]({url})\n{url}"
 
-    # ── DSL 解析 ───────────────────────────────────
+    # ═══════════ 解析 ═══════════
 
     @staticmethod
-    def _parse(desc: str) -> tuple[list, set, set]:
-        """解析 DSL，返回 (gates, inputs, outputs)。"""
-        gates = []
-        all_inputs = set()
-        all_outputs = set()
-        internal = set()
-
+    def _parse_mixed(desc: str) -> tuple[list, list]:
+        gates, modules = [], []
         for line in desc.strip().split("\n"):
             line = line.strip()
             if not line or line.startswith("#"):
                 continue
-            m = re.match(
-                r'(AND|OR|NOT|NAND|NOR|XOR|XNOR|BUF)'
-                r'\(([^)]+)\)\s*=\s*(\w+)', line, re.IGNORECASE)
-            if not m:
-                continue
-            gtype = m.group(1).upper()
-            raw_inputs = [x.strip() for x in m.group(2).split(",")]
-            output = m.group(3).strip()
-
-            gate = {"type": gtype, "inputs": raw_inputs, "output": output}
-            gates.append(gate)
-            all_outputs.add(output)
-            for inp in raw_inputs:
-                all_inputs.add(inp)
-
-        # 纯输入 = 在 inputs 中但不在 outputs 中
-        true_inputs = all_inputs - all_outputs
-        # 纯输出 = 在 outputs 中但不在 inputs 中
-        true_outputs = all_outputs - all_inputs
-        # 都在 = 内部
-        internal = all_inputs & all_outputs
-
-        return gates, true_inputs, true_outputs
-
-    # ── SVG 渲染 ───────────────────────────────────
-
-    W, H = 80, 50       # 门尺寸
-    IX, IY = 2, 10      # 输入引脚间距
-    PIN = 10            # 引脚突出长度
-    PORT_W, PORT_H = 48, 28  # 端口尺寸
-    COL_GAP = 120       # 列间距
-    ROW_GAP = 80        # 行间距
-    WIRE_SPREAD = 12    # 多线时的垂直展开距离
-    COLORS = {
-        "bg": "#1a1a2e", "fg": "#e0e0e0", "grid": "#333",
-        "gate_fill": "#2a2a4e", "gate_stroke": "#7c3aed",
-        "wire": "#7c3aed", "port_fill": "#0f172a",
-        "port_stroke": "#3b82f6", "text": "#e0e0e0",
-        "title": "#e0e0e0",
-    }
-    FONT = "monospace"
-
-    def _render(self, gates, inputs, outputs, title="") -> str:
-        """布局 + 渲染 SVG。"""
-        LogicSVG._wire_seq = 0  # 重置连线序号
-
-        # ── 布局：拓扑排序 + 分层 ──
-        # 构建 name → 生成它的 gate index
-        produced_by = {}
-        for i, g in enumerate(gates):
-            produced_by[g["output"]] = i
-
-        # 计算每个 gate 的深度（最长输入路径 + 1），处理环形
-        depth = {}
-        visiting = set()
-        def get_depth(gi):
-            if gi in depth:
-                return depth[gi]
-            if gi in visiting:
-                return 1  # 环形回路：放在第一层
-            visiting.add(gi)
-            g = gates[gi]
-            max_in = 0
-            for inp in g["inputs"]:
-                if inp in produced_by:
-                    max_in = max(max_in, get_depth(produced_by[inp]))
-            visiting.discard(gi)
-            depth[gi] = max_in + 1
-            return depth[gi]
-
-        for i in range(len(gates)):
-            get_depth(i)
-
-        # 按深度分组 → 每列的行号
-        cols = {}
-        for i, g in enumerate(gates):
-            d = depth[i]
-            if d not in cols:
-                cols[d] = []
-            cols[d].append(i)
-
-        # 输入端口在深度 0
-        max_depth = max(cols.keys()) if cols else 0
-        total_cols = max_depth + 1
-        if inputs:
-            total_cols += 1  # 输入列
-
-        # 计算 SVG 尺寸
-        max_gates_in_col = max(len(v) for v in cols.values()) if cols else 1
-        svg_w = total_cols * self.COL_GAP + 100
-        svg_h = max(max_gates_in_col, len(inputs), len(outputs)) * self.ROW_GAP + 80
-
-        # ── 构建 SVG ──
-        svg = ET.Element("svg", {
-            "xmlns": "http://www.w3.org/2000/svg",
-            "viewBox": f"0 0 {svg_w} {svg_h}",
-            "width": str(svg_w), "height": str(svg_h),
-        })
-        ET.SubElement(svg, "rect", {
-            "width": str(svg_w), "height": str(svg_h),
-            "fill": self.COLORS["bg"],
-        })
-
-        # 标题
-        if title:
-            ET.SubElement(svg, "text", {
-                "x": str(svg_w // 2), "y": "24",
-                "text-anchor": "middle", "fill": self.COLORS["title"],
-                "font-family": self.FONT, "font-size": "14",
-                "font-weight": "bold",
-            }).text = title
-
-        # ── 放置 gate 和记录位置 ──
-        gate_positions = {}  # gate_index → (cx, cy)
-        port_positions = {}  # port_name → (x, y, is_input)
-
-        # 输入列 (深度 -1)
-        input_col_x = 60
-        input_names = sorted(inputs)
-        for ri, name in enumerate(input_names):
-            y = 50 + ri * self.ROW_GAP + self.ROW_GAP // 2
-            port_positions[name] = (input_col_x, y, True)
-            self._draw_port(svg, input_col_x, y, name, True)
-
-        # Gate 列
-        for d in sorted(cols.keys()):
-            gx = 60 + (d + (1 if inputs else 0)) * self.COL_GAP
-            for ri, gi in enumerate(cols[d]):
-                g = gates[gi]
-                gy = 50 + ri * self.ROW_GAP + self.ROW_GAP // 2
-                gate_positions[gi] = (gx, gy)
-                self._draw_gate(svg, gx, gy, g["type"], g.get("label", ""))
-                # 输出端口
-                out_name = g["output"]
-                out_x = gx + self.W // 2 + self.PIN
-                out_y = gy
-                port_positions[out_name] = (out_x, out_y, False)
-
-        # 输出列
-        output_col_x = 60 + (max_depth + (1 if inputs else 0)) * self.COL_GAP + 40
-        output_names = sorted(outputs)
-        for ri, name in enumerate(output_names):
-            y = 50 + ri * self.ROW_GAP + self.ROW_GAP // 2
-            port_positions[name] = (output_col_x, y, False)
-            self._draw_port(svg, output_col_x, y, name, False)
-
-        # ── 连线 ──
-        for gi, g in enumerate(gates):
-            gx, gy = gate_positions[gi]
-            # 输入线
-            nin = len(g["inputs"])
-            for ii, inp_name in enumerate(g["inputs"]):
-                if inp_name in port_positions:
-                    px, py, _ = port_positions[inp_name]
-                    # 门输入引脚位置
-                    iy_off = (ii - (nin - 1) / 2) * self.IY
-                    gix = gx - self.W // 2 - self.PIN
-                    giy = gy + iy_off
-                    self._draw_wire(svg, px, py, gix, giy)
-
-            # 输出线 → 连接到使用该输出的门
-            out_name = g["output"]
-            if out_name in port_positions:
-                ox, oy, _ = port_positions[out_name]
+            if line.startswith("{"):
+                try:
+                    m = json.loads(line)
+                    if "type" in m:
+                        modules.append(m)
+                except json.JSONDecodeError:
+                    pass
             else:
-                ox, oy = gx + self.W // 2, gy
-            # 检查是否有 gate 用这个输出作为输入
-            for gj, g2 in enumerate(gates):
-                if out_name in g2["inputs"]:
-                    break
+                m = re.match(r'(AND|OR|NOT|NAND|NOR|XOR|XNOR|BUF)\(([^)]+)\)\s*=\s*(\w+)', line, re.IGNORECASE)
+                if m:
+                    gates.append({"type": m.group(1).upper(),
+                                  "inputs": [x.strip() for x in m.group(2).split(",")],
+                                  "output": m.group(3).strip()})
+        return gates, modules
 
-        # 输出端口连线 (从最后的 gate 输出到输出端口)
-        for gi, g in enumerate(gates):
-            out_name = g["output"]
-            if out_name in outputs and out_name in port_positions:
-                gx, gy = gate_positions[gi]
-                ox, oy, _ = port_positions[out_name]
-                self._draw_wire(svg, gx + self.W // 2 + self.PIN, gy,
-                                ox - self.PORT_W // 2, oy)
+    # ═══════════ 门级 DSL 解析 (保留兼容) ═══════════
 
+    @staticmethod
+    def _parse_gate_dsl(desc: str) -> tuple[list, set, set]:
+        gates = []; all_in, all_out = set(), set()
+        for line in desc.strip().split("\n"):
+            line = line.strip()
+            if not line or line.startswith("#") or line.startswith("{"):
+                continue
+            m = re.match(r'(AND|OR|NOT|NAND|NOR|XOR|XNOR|BUF)\(([^)]+)\)\s*=\s*(\w+)', line, re.IGNORECASE)
+            if not m: continue
+            g = {"type": m.group(1).upper(), "inputs": [x.strip() for x in m.group(2).split(",")], "output": m.group(3).strip()}
+            gates.append(g); all_out.add(g["output"])
+            for inp in g["inputs"]: all_in.add(inp)
+        return gates, all_in - all_out, all_out - all_in
+
+    # ═══════════ 混合渲染 ═══════════
+
+    GATE_SHAPES = {"AND":("and",False),"NAND":("and",True),"OR":("or",False),"NOR":("or",True),
+                   "XOR":("xor",False),"XNOR":("xor",True),"NOT":("not",True),"BUF":("buf",False)}
+
+    def _render_mixed(self, gates, modules, title=""):
+        svg_w, svg_h = 800, max(400, len(gates) * 70 + len(modules) * 120)
+        svg = ET.Element("svg", {"xmlns":"http://www.w3.org/2000/svg",
+                                 "viewBox":f"0 0 {svg_w} {svg_h}",
+                                 "width":str(svg_w),"height":str(svg_h)})
+        ET.SubElement(svg, "rect", {"width":str(svg_w),"height":str(svg_h),"fill":self.COLORS["bg"]})
+        if title:
+            ET.SubElement(svg, "text", {"x":str(svg_w//2),"y":"24","text-anchor":"middle",
+                                        "fill":self.COLORS["text"],"font-family":"monospace",
+                                        "font-size":"14","font-weight":"bold"}).text = title
+
+        y = 50
+        # 门级
+        if gates:
+            g_gates, inputs, outputs = self._parse_gate_dsl("\n".join(
+                f"{g['type']}({','.join(g['inputs'])}) = {g['output']}" for g in gates))
+            # 拓扑排序
+            produced = {g["output"]:i for i,g in enumerate(gates)}
+            depth, visiting = {}, set()
+            def get_depth(gi):
+                if gi in depth: return depth[gi]
+                if gi in visiting: return 1
+                visiting.add(gi)
+                d = max((get_depth(produced[i]) for i in gates[gi]["inputs"] if i in produced), default=0) + 1
+                visiting.discard(gi); depth[gi] = d; return d
+            for i in range(len(gates)): get_depth(i)
+            cols = {}
+            for i,g in enumerate(gates): cols.setdefault(depth[i],[]).append(i)
+            placed = {}
+            for d in sorted(cols):
+                gx = 80 + d * self.COL_GAP
+                for ri, gi in enumerate(cols[d]):
+                    gy = y + ri * self.ROW_GAP
+                    placed[gi] = (gx, gy)
+                    self._draw_gate(svg, gx, gy, gates[gi]["type"], "")
+                    out_name = gates[gi]["output"]
+                    # draw wires
+                    nin = len(gates[gi]["inputs"])
+                    for ii, inp in enumerate(gates[gi]["inputs"]):
+                        src = next((placed[p] for p,n in [(produced.get(inp),inp) for inp in [inp]] if p in placed), None)
+                        if src:
+                            iy_off = (ii-(nin-1)/2)*self.IY
+                            self._draw_wire(svg, src[0]+self.W//2+self.PIN, src[1],
+                                            gx-self.W//2-self.PIN, gy+iy_off)
+            y += (max(len(v) for v in cols.values()) if cols else 1) * self.ROW_GAP + 20
+
+        # 模块级
+        for mi, mod in enumerate(modules):
+            mtype = mod.get("type","REGISTER").upper()
+            mid = mod.get("id", f"u{mi}")
+            mx = 80 + (mi % 3) * (self.MOD_W + 80)
+            my = y + (mi // 3) * (self.MOD_H + 60)
+            self._draw_module(svg, mx, my, mtype, mid, mod)
         return ET.tostring(svg, encoding="unicode")
 
-    # ── 门形状绘制 ─────────────────────────────────
+    # ═══════════ 模块绘制 ═══════════
+
+    def _draw_module(self, svg, x, y, mtype, mid, attrs):
+        mdef = _MODULE_DEFS.get(mtype, {"shape":"rect","ports":[],"label":mtype[:3]})
+        ports = mdef.get("ports", [])
+        w, h = self.MOD_W, self.MOD_H
+        rx = x - w//2; ry = y - h//2
+
+        # 模块主体
+        ET.SubElement(svg, "rect", {"x":str(rx),"y":str(ry),"width":str(w),"height":str(h),
+                                     "rx":"6","fill":self.COLORS["gate_fill"],
+                                     "stroke":self.COLORS["gate_stroke"],"stroke-width":"1.5"})
+        ET.SubElement(svg, "text", {"x":str(x),"y":str(y-8),"text-anchor":"middle",
+                                     "fill":self.COLORS["text"],"font-family":"monospace","font-size":"11",
+                                     "font-weight":"bold"}).text = f"{mdef['label']}"
+        ET.SubElement(svg, "text", {"x":str(x),"y":str(y+6),"text-anchor":"middle",
+                                     "fill":self.COLORS["port_stroke"],"font-family":"monospace","font-size":"8"
+                                     }).text = mid
+
+        # 显示属性
+        attr_text = []
+        if "width" in attrs: attr_text.append(f"W={attrs['width']}")
+        if "depth" in attrs: attr_text.append(f"D={attrs['depth']}")
+        if "signed" in attrs: attr_text.append("signed" if attrs["signed"] else "unsigned")
+        if "reset_type" in attrs: attr_text.append(attrs["reset_type"])
+        if "clock_domain" in attrs: attr_text.append(f"@{attrs['clock_domain']}")
+        if attr_text:
+            ET.SubElement(svg, "text", {"x":str(x),"y":str(y+h//2-4),"text-anchor":"middle",
+                                         "fill":self.COLORS["text"],"font-family":"monospace","font-size":"7"
+                                         }).text = ", ".join(attr_text[:3])
+
+        # 端口
+        for pi, port in enumerate(ports):
+            py = ry + (pi + 1) * h / (len(ports) + 1)
+            pdir = _PORT_DIRS.get(port, "I")
+            color = "#3b82f6" if pdir == "I" else "#10b981" if pdir == "O" else "#f59e0b"
+            # 引脚短线
+            if pdir == "I":
+                self._line(svg, rx-8, py, rx, py)
+            elif pdir == "O":
+                self._line(svg, rx+w, py, rx+w+8, py)
+            else:
+                self._line(svg, rx-6, py, rx, py)
+            # 端口名
+            align = "end" if pdir == "I" else "start" if pdir == "O" else "end"
+            tx = rx - 10 if pdir == "I" else rx + w + 10 if pdir == "O" else rx - 8
+            ET.SubElement(svg, "text", {"x":str(tx),"y":str(py+3),"text-anchor":align,
+                                         "fill":color,"font-family":"monospace","font-size":"7"
+                                         }).text = port
+
+    # ═══════════ 门绘制 (保留) ═══════════
 
     def _draw_gate(self, svg, cx, cy, gtype, label=""):
         shape, bubble = self.GATE_SHAPES.get(gtype, ("and", False))
-        x = cx - self.W // 2
-        y = cy - self.H // 2
-
+        x, y = cx - self.W//2, cy - self.H//2
         g = ET.SubElement(svg, "g")
 
         if shape == "and":
-            # D-shape
-            d = (f"M{x},{y + self.H} L{x},{y} "
-                 f"A{self.W},{self.H // 2} 0 0,1 {x},{y + self.H} Z")
-            ET.SubElement(g, "path", {
-                "d": d, "fill": self.COLORS["gate_fill"],
-                "stroke": self.COLORS["gate_stroke"], "stroke-width": "1.5",
-            })
+            d = f"M{x},{y+self.H} L{x},{y} A{self.W},{self.H//2} 0 0,1 {x},{y+self.H} Z"
+            self._add_path(g, d)
         elif shape == "or":
-            # Shield — 左(x)宽，右(x+W)尖
             r = self.W * 0.5
-            d = (f"M{x},{y} "
-                 f"Q{x + self.W * 0.5},{y + self.H * 0.15} {x + self.W},{cy} "
-                 f"Q{x + self.W * 0.5},{y + self.H * 0.85} {x},{y + self.H} "
-                 f"Q{x - r},{cy} {x},{y} Z")
-            ET.SubElement(g, "path", {
-                "d": d, "fill": self.COLORS["gate_fill"],
-                "stroke": self.COLORS["gate_stroke"], "stroke-width": "1.5",
-            })
+            d = (f"M{x},{y} Q{x+self.W*0.5},{y+self.H*0.15} {x+self.W},{cy} "
+                 f"Q{x+self.W*0.5},{y+self.H*0.85} {x},{y+self.H} Q{x-r},{cy} {x},{y} Z")
+            self._add_path(g, d)
         elif shape == "xor":
             r = self.W * 0.5
-            d = (f"M{x},{y} "
-                 f"Q{x + self.W * 0.4},{y + self.H * 0.1} {x + self.W},{cy} "
-                 f"Q{x + self.W * 0.4},{y + self.H * 0.9} {x},{y + self.H} "
-                 f"Q{x - r},{cy} {x},{y} Z")
-            ET.SubElement(g, "path", {
-                "d": d, "fill": self.COLORS["gate_fill"],
-                "stroke": self.COLORS["gate_stroke"], "stroke-width": "1.5",
-            })
-            # XOR 额外输入弧线
-            ed = (f"M{x - self.W * 0.02},{y} "
-                  f"Q{x - r * 0.7},{cy} {x - self.W * 0.02},{y + self.H}")
-            ET.SubElement(g, "path", {
-                "d": ed, "fill": "none",
-                "stroke": self.COLORS["gate_stroke"], "stroke-width": "1.2",
-            })
-        elif shape in ("not", "buf"):
-            # Triangle
-            d = (f"M{x},{y} L{x},{y + self.H} L{x + self.W * 0.7},{cy} Z")
-            ET.SubElement(g, "path", {
-                "d": d, "fill": self.COLORS["gate_fill"],
-                "stroke": self.COLORS["gate_stroke"], "stroke-width": "1.5",
-            })
+            d = (f"M{x},{y} Q{x+self.W*0.4},{y+self.H*0.1} {x+self.W},{cy} "
+                 f"Q{x+self.W*0.4},{y+self.H*0.9} {x},{y+self.H} Q{x-r},{cy} {x},{y} Z")
+            self._add_path(g, d)
+            ed = f"M{x-self.W*0.02},{y} Q{x-r*0.7},{cy} {x-self.W*0.02},{y+self.H}"
+            ET.SubElement(g, "path", {"d":ed,"fill":"none","stroke":self.COLORS["gate_stroke"],"stroke-width":"1.2"})
+        elif shape in ("not","buf"):
+            d = f"M{x},{y} L{x},{y+self.H} L{x+self.W*0.7},{cy} Z"
+            self._add_path(g, d)
 
-        # 气泡 (在输出侧，右侧)
         if bubble:
             bx = x + self.W + 6 if shape != "not" else x + self.W * 0.8
-            ET.SubElement(g, "circle", {
-                "cx": str(bx), "cy": str(cy), "r": "4",
-                "fill": "none", "stroke": self.COLORS["gate_stroke"],
-                "stroke-width": "1.2",
-            })
+            ET.SubElement(g, "circle", {"cx":str(bx),"cy":str(cy),"r":"4",
+                                         "fill":"none","stroke":self.COLORS["gate_stroke"],"stroke-width":"1.2"})
+        ET.SubElement(g, "text", {"x":str(cx),"y":str(cy+2),"text-anchor":"middle",
+                                   "fill":self.COLORS["text"],"font-family":"monospace","font-size":"8",
+                                   "dy":"0.3em"}).text = label or gtype[:3]
 
-        # 标签
-        if label:
-            ET.SubElement(g, "text", {
-                "x": str(cx), "y": str(cy + 2), "text-anchor": "middle",
-                "fill": self.COLORS["text"], "font-family": self.FONT,
-                "font-size": "8", "dy": "0.3em",
-            }).text = label
-        else:
-            ET.SubElement(g, "text", {
-                "x": str(cx), "y": str(cy + 2), "text-anchor": "middle",
-                "fill": self.COLORS["text"], "font-family": self.FONT,
-                "font-size": "8", "dy": "0.3em",
-            }).text = gtype[:3] if gtype != "BUF" else "BUF"
+    # ═══════════ 辅助 ═══════════
 
-    # ── 端口 ────────────────────────────────────────
-
-    def _draw_port(self, svg, x, y, name, is_input):
-        pw, ph = self.PORT_W, self.PORT_H
-        if is_input:
-            px = x - pw // 2
-        else:
-            px = x - pw // 2
-        py = y - ph // 2
-
-        ET.SubElement(svg, "rect", {
-            "x": str(px), "y": str(py), "width": str(pw), "height": str(ph),
-            "rx": "4", "fill": self.COLORS["port_fill"],
-            "stroke": self.COLORS["port_stroke"], "stroke-width": "1.2",
-        })
-        ET.SubElement(svg, "text", {
-            "x": str(x), "y": str(y + 2), "text-anchor": "middle",
-            "fill": self.COLORS["port_stroke"], "font-family": self.FONT,
-            "font-size": "10", "dy": "0.35em", "font-weight": "bold",
-        }).text = name
-
-    # ── 连线 ────────────────────────────────────────
-
-    _wire_seq = 0  # 全局连线序号，用于错开避免重叠
+    def _add_path(self, g, d):
+        ET.SubElement(g, "path", {"d":d,"fill":self.COLORS["gate_fill"],
+                                   "stroke":self.COLORS["gate_stroke"],"stroke-width":"1.5",
+                                   "stroke-linejoin":"round","stroke-linecap":"round"})
 
     def _draw_wire(self, svg, x1, y1, x2, y2):
-        """画正交连线（水平→垂直→水平），自动错开避免重叠。"""
-        LogicSVG._wire_seq += 1
-        spread = (LogicSVG._wire_seq % 5 - 2) * self.WIRE_SPREAD * 0.3
-        mid_x = (x1 + x2) / 2 + spread
-        d = f"M{x1},{y1} L{mid_x},{y1} L{mid_x},{y2} L{x2},{y2}"
-        ET.SubElement(svg, "path", {
-            "d": d, "fill": "none", "stroke": self.COLORS["wire"],
-            "stroke-width": "1.5", "stroke-linejoin": "round",
-        })
+        mid = (x1+x2)/2
+        d = f"M{x1},{y1} L{mid},{y1} L{mid},{y2} L{x2},{y2}"
+        ET.SubElement(svg, "path", {"d":d,"fill":"none","stroke":self.COLORS["wire"],
+                                     "stroke-width":"1.5","stroke-linejoin":"round"})
+
+    @staticmethod
+    def _line(svg, x1, y1, x2, y2):
+        ET.SubElement(svg, "line", {"x1":str(x1),"y1":str(y1),"x2":str(x2),"y2":str(y2),
+                                     "stroke":"#7c3aed","stroke-width":"1.2","stroke-linecap":"round"})
