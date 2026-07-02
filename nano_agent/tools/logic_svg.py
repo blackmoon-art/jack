@@ -43,10 +43,11 @@ class LogicSVG:
          "Pure logic gate netlist. One gate per line.\n"
          "\n"
          "**Format:** `GATE(input1, input2, ...) = output`\n"
-         "**Gates:** AND, OR, NOT, NAND, NOR, XOR, XNOR, BUF, DFF, MUX\n"
+         "**Gates:** AND, OR, NOT, NAND, NOR, XOR, XNOR, BUF, DFF, MUX, BOX\n"
          "NOT has 1 input. BUF can have 1 or 2 (with clk).\n"
          "DFF(D, clk) = Q  — D flip-flop, clk input has triangle marker.\n"
          "MUX(A, B, sel) = Y  — 2:1 multiplexer.\n"
+         "BOX(in1, in2, ...) = Name  — generic functional block (counter, register, ALU, etc.).\n"
          "First use of a name = input port. Reuse = internal wire.\n"
          "\n"
          "**Half-adder:**\n"
@@ -62,7 +63,10 @@ class LogicSVG:
          "`DFF(D, clk) = Q`\n"
          "\n"
          "**Multiplexer:**\n"
-         "`MUX(A, B, sel) = Y`",
+         "`MUX(A, B, sel) = Y`\n"
+         "\n"
+         "**Functional block (any digital block):**\n"
+         "`BOX(in1, in2, clk) = Counter4bit`",
          "draw_logic",
          {"description": {"type": "string",
                           "description":
@@ -88,6 +92,7 @@ class LogicSVG:
         "BUF":   ("buf",   False),
         "DFF":   ("dff",   False),
         "MUX":   ("mux",   False),
+        "BOX":   ("box",   False),
     }
 
     def __init__(self, work_dir: str = "", charts_dir: str = ""):
@@ -130,7 +135,7 @@ class LogicSVG:
             if not line or line.startswith("#"):
                 continue
             m = re.match(
-                r'(AND|OR|NOT|NAND|NOR|XOR|XNOR|BUF|DFF|MUX)'
+                r'(AND|OR|NOT|NAND|NOR|XOR|XNOR|BUF|DFF|MUX|BOX)'
                 r'\(([^)]+)\)\s*=\s*(\w+)', line, re.IGNORECASE)
             if not m:
                 continue
@@ -418,6 +423,14 @@ class LogicSVG:
                 "text-anchor": "middle", "fill": self.COLORS["port_stroke"],
                 "font-family": self.FONT, "font-size": "7",
             }).text = "sel"
+
+        elif shape == "box":
+            # Rectangle with label (generic functional block)
+            ET.SubElement(g, "rect", {
+                "x": str(x), "y": str(y), "width": str(self.W), "height": str(self.H),
+                "fill": self.COLORS["gate_fill"],
+                "stroke": self.COLORS["gate_stroke"], "stroke-width": "1.5",
+            })
 
         # 气泡 (在输出侧，右侧)
         if bubble:

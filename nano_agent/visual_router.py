@@ -121,14 +121,14 @@ _EXACT_ROUTES: list[tuple[str, str, dict]] = [
      "真值表|truth.*table|逻辑表达式|boolean.*expr|"
      "and.*gate|or.*gate|not.*gate|nand.*gate|nor.*gate|xor.*gate",
      "draw_logic", {}),
-    # 数字电路 (fallback)
+    # 数字电路 → 纯 Python SVG (draw_logic)
     ("数字电路|逻辑门|门电路|digital.*circuit|logic.*gate|"
      "and gate|nand gate|nor gate|xor gate|半加器|全加器|触发器|"
      "flip.flop|dff|latch|寄存器|译码器|多路复用|encoder|decoder|mux|"
      "fifo|异步.*fifo|async.*fifo|gray.*code|格雷码|同步器|synchronizer|两级同步|"
      "clock.*domain|counter|ram|双口|dpram|demux|三态|tristate|"
      "alu|算术逻辑|移位|shift|编码器|锁存器|数字滤波",
-     "draw_digital", {}),
+     "draw_logic", {}),
     # 模拟电路
     ("模拟电路|analog.*circuit|"
      "滤波器|filter.*circuit|运放|运放电路|放大电路|有源滤波|无源滤波|"

@@ -1,5 +1,9 @@
 """Analog circuit — NL → Template → SPICE → SVG pipeline.
 
+Two entry points:
+  draw_analog_svg  — NL description → template match → SPICE → SVG (auto-calc values)
+  draw_analog_spice — raw SPICE netlist → SVG (custom topologies, LLM-written SPICE)
+
 6-stage architecture:
   NL → Intent Parser → Template Selector → Parameter Calculator → SPICE Generator → SVG Renderer
 
@@ -323,6 +327,90 @@ def _to_spice(components: list[dict], values: dict) -> str:
             lines.append(f"{name} {nid_str} {model}")
 
     return "\n".join(lines)
+
+
+# ═══════════ SPICE Parser ═══════════
+
+def _parse_spice(spice_text: str) -> list[dict]:
+    """Parse SPICE netlist into component dicts ready for _render_svg()."""
+    components = []
+    node_map = {"0": "0", "gnd": "0", "GND": "0"}
+    next_id = 1
+
+    # Control/simulation lines to skip
+    _SKIP_PREFIXES = (
+        ".model", ".subckt", ".ends", ".op", ".ac", ".tran", ".dc",
+        ".end", ".probe", ".plot", ".print", ".options", ".temp",
+        ".include", ".lib", ".param", ".func", ".global", ".ic",
+        ".nodeset", ".save", ".measure", ".alter",
+    )
+
+    for line in spice_text.strip().split("\n"):
+        line = line.strip()
+        if not line or line.startswith("*") or line.startswith("#"):
+            continue
+        if line.lower().startswith(_SKIP_PREFIXES):
+            continue
+
+        tokens = line.split()
+        if len(tokens) < 2:
+            continue
+
+        first = tokens[0]
+        ctype = first[0].upper()
+        cname = first
+
+        if ctype not in ("R", "C", "L", "D", "V", "X"):
+            continue
+
+        if ctype in ("R", "C", "L"):
+            # Rname n1 n2 value
+            if len(tokens) < 4:
+                continue
+            raw_nodes = tokens[1:3]
+            value = tokens[3]
+            model = ""
+
+        elif ctype == "D":
+            # Dname n+ n- [model]
+            raw_nodes = tokens[1:3]
+            value = ""
+            model = ""
+
+        elif ctype == "V":
+            # Vname n+ n- value... (value can contain spaces like "AC 1")
+            if len(tokens) < 4:
+                continue
+            raw_nodes = tokens[1:3]
+            value = " ".join(tokens[3:])
+            model = ""
+
+        elif ctype == "X":
+            # Xname node1 node2 ... model_name
+            if len(tokens) < 3:
+                continue
+            raw_nodes = tokens[1:-1]
+            model = tokens[-1]
+            value = ""
+
+        # Map nodes
+        filled_nodes = []
+        for n in raw_nodes:
+            ns = str(n)
+            if ns not in node_map:
+                node_map[ns] = str(next_id)
+                next_id += 1
+            filled_nodes.append(node_map[ns])
+
+        components.append({
+            "type": ctype,
+            "name": cname,
+            "filled_nodes": filled_nodes,
+            "filled_value": value,
+            "filled_model": model,
+        })
+
+    return components
 
 
 # ═══════════ SVG Renderer ═══════════
@@ -671,6 +759,34 @@ class AnalogSVG:
                           "half_wave, full_wave_bridge, voltage_divider"},
           "title": {"type": "string", "description": "Optional diagram title"}},
          ["description"]),
+
+        ("draw_analog_spice",
+         "Draw analog circuits from a raw SPICE netlist. "
+         "Use this when you want to draw a custom circuit topology "
+         "not covered by draw_analog_svg templates.\n"
+         "\n"
+         "**Supported components:** R, C, L, D, V, X (op-amp subcircuit)\n"
+         "**Format:** Standard SPICE netlist, one component per line.\n"
+         "\n"
+         "**Examples:**\n"
+         "- RC low-pass: `Vin in 0 AC 1\\nR1 in out 1k\\nC1 out 0 10n`\n"
+         "- Sallen-Key: `Vin in 0 AC 1\\nR1 in n1 10k\\nR2 n1 n2 10k\\n"
+         "C1 n1 out 1n\\nC2 n2 0 1n\\nXU1 n2 out out vcc 0 opamp`\n"
+         "- Differential amp: `V1 in1 0 AC 1\\nV2 in2 0 AC 1\\n"
+         "R1 in1 n1 1k\\nR2 in2 n2 1k\\nRf n1 out 10k\\nRg n2 0 10k\\n"
+         "XU1 n1 n2 out vcc 0 opamp`\n"
+         "\n"
+         "**Node naming:** Use any string node names. Node '0' is ground. "
+         "AC voltage sources define signal inputs for layout.",
+         "draw_analog_spice",
+         {"spice": {"type": "string",
+                    "description":
+                    "SPICE netlist. One component per line. "
+                    "R/C/L: name n1 n2 value. V: name n+ n- value. "
+                    "X: name nodes... model. Node 0 = ground. "
+                    "Example: 'Vin in 0 AC 1\\nR1 in out 1k\\nC1 out 0 10n'"},
+          "title": {"type": "string", "description": "Optional diagram title"}},
+         ["spice"]),
     ]
 
     def __init__(self, work_dir: str = "", charts_dir: str = ""):
@@ -702,6 +818,30 @@ class AnalogSVG:
         spice_block = f"\n\n**SPICE Netlist:**\n```spice\n{spice}\n```" if spice else ""
         guide_text = f"\n{guide}" if guide else ""
         return f"![{svg_title}]({url})\n{url}{guide_text}{spice_block}"
+
+    def draw_analog_spice(self, spice: str, title: str = "") -> str:
+        """Parse SPICE netlist → render SVG directly (no template matching).
+
+        Accepts any valid SPICE netlist with R/C/L/D/V/X components.
+        The LLM can hand-write SPICE for custom topologies.
+        """
+        try:
+            components = _parse_spice(spice)
+            if not components:
+                return "Error: no valid SPICE components found. " \
+                       "Supported: R, C, L, D, V, X (op-amp subcircuit)."
+            svg = _render_svg(components, title)
+        except Exception as e:
+            logger.exception(f"Analog SPICE render failed: {e}")
+            return f"Error rendering SPICE circuit: {e}"
+
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        fp = self.charts_dir / f"analog_{ts}.svg"
+        fp.write_text(svg, encoding="utf-8")
+        url = f"/charts/{fp.name}"
+
+        spice_block = f"\n\n**SPICE Netlist:**\n```spice\n{spice.strip()}\n```"
+        return f"![{title or 'Analog Circuit'}]({url})\n{url}{spice_block}"
 
     @staticmethod
     def _match_template(desc: str):
