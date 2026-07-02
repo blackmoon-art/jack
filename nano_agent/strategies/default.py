@@ -12,7 +12,7 @@ Default 策略 — 标准 agent loop，带流式快速路径。
 import json
 import logging
 
-from ..visual_router import is_visual_request, get_all_visual_keywords
+from ..visual_router import is_visual_request, get_all_visual_keywords, route_visual
 from .base import BaseStrategy
 
 logger = logging.getLogger("nano_agent.strategies.default")
@@ -160,6 +160,9 @@ class DefaultStrategy(BaseStrategy):
         logger.info(f"VISUAL: '{task[:50]}'")
         self.emit("text", {"text": "🔧 正在生成图片..."})
 
+        # 查询视觉路由，获取匹配的工具
+        route = route_visual(task)
+
         # 确定目标工具集合
         visual_tools = self._get_visual_tool_names()
         tool_hint = ", ".join(sorted(visual_tools)) if visual_tools else "generate_chart, mermaid_chart"
@@ -174,10 +177,21 @@ class DefaultStrategy(BaseStrategy):
                 if txt:
                     ctx += f"[{role}]: {txt}\n"
 
-        override = (
-            "Call a drawing tool NOW. Context:\n{ctx}\n"
-            "User said: '{task}'. You MUST call one of: {tools}."
-        ).format(ctx=ctx.strip(), task=task[:200], tools=tool_hint)
+        # 如果路由匹配成功，给出精确的工具+参数提示
+        if route:
+            r_tool, r_params = route
+            params_hint = f" (params hint: {r_params})" if r_params else ""
+            override = (
+                f"Call the '{r_tool}' tool NOW to draw this.{params_hint}\n"
+                f"User request: '{task}'. "
+                f"Pass the user's description directly as the argument. "
+                f"Do NOT just describe what you would do — actually call the tool."
+            )
+        else:
+            override = (
+                "Call a drawing tool NOW. Context:\n{ctx}\n"
+                "User said: '{task}'. You MUST call one of: {tools}."
+            ).format(ctx=ctx.strip(), task=task[:200], tools=tool_hint)
 
         # step_callback: 画图工具调用后下一次 LLM 响应时终止循环，防止画两次
         # 增加兜底上限 5 次：若 LLM 连续调用非视觉工具，超限后强制终止
