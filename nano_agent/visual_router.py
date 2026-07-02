@@ -125,8 +125,8 @@ _EXACT_ROUTES: list[tuple[str, str, dict]] = [
     ("数字电路|逻辑门|门电路|digital.*circuit|logic.*gate|"
      "and gate|nand gate|nor gate|xor gate|半加器|全加器|触发器|"
      "flip.flop|dff|latch|寄存器|译码器|多路复用|encoder|decoder|mux|"
-     "fifo|异步.*fifo|async.*fifo|gray.*code|格雷码|同步器|synchronizer|两级同步|"
-     "clock.*domain|counter|ram|双口|dpram|demux|三态|tristate|"
+     "gray.*code|格雷码|同步器|synchronizer|两级同步|"
+     "clock.*domain|counter|demux|三态|tristate|"
      "alu|算术逻辑|移位|shift|编码器|锁存器|数字滤波",
      "draw_logic", {}),
     # 模拟电路 → NL→模板→SPICE→SVG (draw_analog_svg, 内置自动计算)
@@ -150,7 +150,8 @@ _EXACT_ROUTES: list[tuple[str, str, dict]] = [
      "共模|CMRR",
      "draw_analog_svg", {}),
     # 数字 IP / 复杂模块 → 框图 (非门级网表)
-    ("occ|dft|bist|jtag|scan.*chain|"
+    ("fifo|异步.*fifo|async.*fifo|ram|双口|dpram|"
+     "occ|dft|bist|jtag|scan.*chain|"
      "时钟控制|clock.*control|时钟管理|clock.*manage|"
      "pll|dll|时钟树|clock.*tree|"
      "power.*manage|电源管理|pmu|ldo.*ctrl|复位.*电路|reset.*circuit",
