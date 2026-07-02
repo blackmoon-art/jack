@@ -4,7 +4,9 @@ DSL 格式 (每行一个门):
   GATE(input1, input2, ...) = output_name
 
 支持的门:
-  AND, OR, NOT, NAND, NOR, XOR, XNOR, BUF
+  组合逻辑: AND, OR, NOT, NAND, NOR, XOR, XNOR, BUF
+  时序逻辑: DFF
+  复合单元: MUX
 
 示例 — 半加器:
   XOR(A, B) = Sum
@@ -20,6 +22,12 @@ DSL 格式 (每行一个门):
 示例 — 2级同步器:
   BUF(async_in) = s1
   BUF(s1, clk) = synced
+
+示例 — D触发器:
+  DFF(D, clk) = Q
+
+示例 — 多路选择器:
+  MUX(A, B, sel) = Y
 """
 
 import re
@@ -35,8 +43,10 @@ class LogicSVG:
          "Pure logic gate netlist. One gate per line.\n"
          "\n"
          "**Format:** `GATE(input1, input2, ...) = output`\n"
-         "**Gates:** AND, OR, NOT, NAND, NOR, XOR, XNOR, BUF\n"
+         "**Gates:** AND, OR, NOT, NAND, NOR, XOR, XNOR, BUF, DFF, MUX\n"
          "NOT has 1 input. BUF can have 1 or 2 (with clk).\n"
+         "DFF(D, clk) = Q  — D flip-flop, clk input has triangle marker.\n"
+         "MUX(A, B, sel) = Y  — 2:1 multiplexer.\n"
          "First use of a name = input port. Reuse = internal wire.\n"
          "\n"
          "**Half-adder:**\n"
@@ -46,13 +56,21 @@ class LogicSVG:
          "`XOR(A, B) = g1\nXOR(g1, Cin) = Sum\nAND(A, B) = g2\nAND(g1, Cin) = g3\nOR(g2, g3) = Cout`\n"
          "\n"
          "**Synchronizer:**\n"
-         "`BUF(async_in, clk) = s1\nBUF(s1, clk) = synced`",
+         "`BUF(async_in, clk) = s1\nBUF(s1, clk) = synced`\n"
+         "\n"
+         "**D flip-flop:**\n"
+         "`DFF(D, clk) = Q`\n"
+         "\n"
+         "**Multiplexer:**\n"
+         "`MUX(A, B, sel) = Y`",
          "draw_logic",
          {"description": {"type": "string",
                           "description":
                           "Logic gate netlist. One gate per line. "
                           "GATE(input1, input2) = output. "
-                          "Gates: AND,OR,NOT,NAND,NOR,XOR,XNOR,BUF. "
+                          "Gates: AND,OR,NOT,NAND,NOR,XOR,XNOR,BUF,DFF,MUX. "
+                          "DFF(D, clk)=Q for D flip-flop. "
+                          "MUX(A,B,sel)=Y for 2:1 multiplexer. "
                           "Example: 'XOR(A,B)=Sum\\nAND(A,B)=Carry' for half-adder"},
           "title": {"type": "string", "description": "Diagram title"}},
          ["description"]),
@@ -68,6 +86,8 @@ class LogicSVG:
         "XNOR":  ("xor",   True),
         "NOT":   ("not",   True),
         "BUF":   ("buf",   False),
+        "DFF":   ("dff",   False),
+        "MUX":   ("mux",   False),
     }
 
     def __init__(self, work_dir: str = "", charts_dir: str = ""):
@@ -110,7 +130,7 @@ class LogicSVG:
             if not line or line.startswith("#"):
                 continue
             m = re.match(
-                r'(AND|OR|NOT|NAND|NOR|XOR|XNOR|BUF)'
+                r'(AND|OR|NOT|NAND|NOR|XOR|XNOR|BUF|DFF|MUX)'
                 r'\(([^)]+)\)\s*=\s*(\w+)', line, re.IGNORECASE)
             if not m:
                 continue
@@ -241,6 +261,11 @@ class LogicSVG:
                 gy = 50 + ri * self.ROW_GAP + self.ROW_GAP // 2
                 gate_positions[gi] = (gx, gy)
                 self._draw_gate(svg, gx, gy, g["type"], g.get("label", ""))
+                # DFF 时钟三角标记 (clk 始终是 inputs[1])
+                if g["type"] == "DFF" and len(g["inputs"]) >= 2:
+                    nin = len(g["inputs"])
+                    clk_off = (1 - (nin - 1) / 2) * self.IY
+                    self._draw_clock_triangle(svg, gx, gy + clk_off)
                 # 输出端口
                 out_name = g["output"]
                 out_x = gx + self.W // 2 + self.PIN
@@ -290,6 +315,21 @@ class LogicSVG:
                                 ox - self.PORT_W // 2, oy)
 
         return ET.tostring(svg, encoding="unicode")
+
+    def _draw_clock_triangle(self, svg, cx, cy):
+        """在 DFF 左边缘画时钟三角标记（向内指向门体）。"""
+        gate_left = cx - self.W // 2
+        pin_x = gate_left - self.PIN
+        tri_w = self.PIN  # 三角形宽度 = pin 长度
+        tri_h = 5
+        d = (f"M{pin_x},{cy - tri_h} "
+             f"L{pin_x},{cy + tri_h} "
+             f"L{gate_left},{cy} Z")
+        ET.SubElement(svg, "path", {
+            "d": d, "fill": "none",
+            "stroke": self.COLORS["gate_stroke"], "stroke-width": "1.2",
+            "stroke-linejoin": "round",
+        })
 
     # ── 门形状绘制 ─────────────────────────────────
 
@@ -343,6 +383,41 @@ class LogicSVG:
                 "d": d, "fill": self.COLORS["gate_fill"],
                 "stroke": self.COLORS["gate_stroke"], "stroke-width": "1.5",
             })
+        elif shape == "dff":
+            # Rectangular box (standard sequential element symbol)
+            ET.SubElement(g, "rect", {
+                "x": str(x), "y": str(y), "width": str(self.W), "height": str(self.H),
+                "fill": self.COLORS["gate_fill"],
+                "stroke": self.COLORS["gate_stroke"], "stroke-width": "1.5",
+            })
+        elif shape == "mux":
+            # Trapezoid: wide left (inputs), narrow right (output)
+            left_margin = 5
+            right_margin = self.H * 0.25
+            d = (f"M{x},{y + left_margin} "
+                 f"L{x},{y + self.H - left_margin} "
+                 f"L{x + self.W},{y + self.H - right_margin} "
+                 f"L{x + self.W},{y + right_margin} Z")
+            ET.SubElement(g, "path", {
+                "d": d, "fill": self.COLORS["gate_fill"],
+                "stroke": self.COLORS["gate_stroke"], "stroke-width": "1.5",
+                "stroke-linejoin": "round",
+            })
+            # "0" / "1" 标签 (标记 sel=0 选哪个输入, sel=1 选哪个)
+            nin = 2  # 数据输入: A, B
+            for ii in range(nin):
+                iy_off = (ii - (nin - 1) / 2) * self.IY
+                ET.SubElement(g, "text", {
+                    "x": str(x + 8), "y": str(cy + iy_off + 3),
+                    "text-anchor": "start", "fill": self.COLORS["text"],
+                    "font-family": self.FONT, "font-size": "7",
+                }).text = str(ii)
+            # sel 标签在底部
+            ET.SubElement(g, "text", {
+                "x": str(cx), "y": str(y + self.H + 11),
+                "text-anchor": "middle", "fill": self.COLORS["port_stroke"],
+                "font-family": self.FONT, "font-size": "7",
+            }).text = "sel"
 
         # 气泡 (在输出侧，右侧)
         if bubble:
