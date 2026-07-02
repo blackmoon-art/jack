@@ -321,6 +321,10 @@ def _intent_match(task: str, task_lower: str) -> tuple[str, dict] | None:
     return None
 
 
+# ── 预编译：is_visual_request 宽松检查，避免重复遍历 _INTENT_PATTERNS ──
+_LOOSE_VISUAL_KEYWORD = re.compile(r"画|图|plot|chart|graph|draw|visual|可视化|展示")
+
+
 def is_visual_request(task: str) -> bool:
     """快速判断任务是否是画图请求。委托给 route_visual 避免匹配逻辑重复。
 
@@ -328,12 +332,13 @@ def is_visual_request(task: str) -> bool:
     """
     if route_visual(task) is not None:
         return True
-    # 补充：纯意图动词 + 画图暗示词
     task_lower = task.lower()
+    # 没有画图暗示词 → 快速返回，避免遍历 _INTENT_PATTERNS
+    if not _LOOSE_VISUAL_KEYWORD.search(task_lower):
+        return False
     for verb_pat, _, _, _ in _INTENT_PATTERNS:
         if re.search(verb_pat, task_lower):
-            if re.search(r"画|图|plot|chart|graph|draw|visual|可视化|展示", task_lower):
-                return True
+            return True
     return False
 
 

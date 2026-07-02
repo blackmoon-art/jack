@@ -328,6 +328,77 @@ class Agent:
                     return route_visual(content)
         return None
 
+    def _preflight_visual_route(self, messages: list, schemas: list) -> list:
+        """视觉路由预检：首次进入 agent_loop 时检查并注入 hint。
+
+        提取自 _agent_loop，避免视觉路由逻辑占用核心循环 1/4 代码量。
+        所有策略（Default/ReAct/Plan-Execute/Reflexion/ToT）统一受益。
+
+        两种命中模式:
+          - can_direct: 无数据图表类型（geometry/wireframe/contour/cat/regression/function），
+            直接构造 tool_call 执行，跳过 LLM。
+          - need_llm: 需要 LLM 生成内容的图表类型（flowchart/bar/line 等），
+            注入 hint 到最后一个 user 消息，排除其他视觉工具。
+
+        Returns:
+            可能被过滤后的 schemas 列表（need_llm 模式下排除被路由命中的其他视觉工具）。
+        """
+        if getattr(self._local, 'visual_routed', False):
+            return schemas
+        self._local.visual_routed = True
+
+        route = self._try_visual_route(messages)
+        if not route:
+            return schemas
+
+        tool_name, tool_params = route
+        _NO_DATA = {"geometry", "wireframe", "contour", "cat", "regression", "function"}
+        can_direct = (
+            tool_name == "generate_chart"
+            and tool_params.get("chart_type", "") in _NO_DATA
+        )
+
+        if can_direct:
+            self._emit("text", {"text": "🎨 正在生成图表..."})
+            if tool_params.get("chart_type") == "geometry" and "labels" not in tool_params:
+                last_user = next(
+                    (m.get("content", "") for m in reversed(messages)
+                     if m.get("role") == "user"), ""
+                )
+                if last_user:
+                    tool_params["labels"] = last_user[:200]
+
+            import json as _json
+            tool_call = {"name": tool_name, "arguments": tool_params, "id": "routed_visual"}
+            messages.append({
+                "role": "assistant", "content": "",
+                "reasoning_content": "",
+                "tool_calls": [{
+                    "id": "routed_visual", "type": "function",
+                    "function": {"name": tool_name,
+                                  "arguments": _json.dumps(tool_params, ensure_ascii=False)},
+                }],
+            })
+            self.execute_tool(tool_call, messages)
+            return schemas
+
+        # 需要 LLM 生成内容 → 注入 hint 到最后一个 user 消息
+        params_hint = f" (params hint: {tool_params})" if tool_params else ""
+        hint = (
+            f"\n[Visual hint: Use the '{tool_name}' tool{params_hint}."
+            f" Generate appropriate content.]"
+            f"\nIMPORTANT: Do NOT use generate_chart, mermaid_chart, draw_circuit,"
+            f" or any other visual tool for this task. Only use '{tool_name}'."
+        )
+        _ALL_VISUAL = {"generate_chart", "mermaid_chart", "draw_circuit",
+                       "create_ppt", "ai_image", "image_analyze"}
+        route_exclude = [t for t in _ALL_VISUAL if t != tool_name]
+        schemas = [s for s in schemas if s["function"]["name"] not in route_exclude]
+        if messages and messages[-1].get("role") == "user":
+            messages[-1]["content"] += hint
+
+        return schemas
+
     def _agent_loop(self, messages: list, exclude_tools: list | None = None,
                     system_prompt: str | None = None,
                     step_callback: Callable[[str, list], str | None] | None = None,
@@ -356,58 +427,8 @@ class Agent:
         prompt = system_prompt or self._system_prompt()
         response: dict[str, Any] | None = None  # 防止 max_iterations=0 时 NameError
 
-        # ── 视觉路由预检：首次进入 agent_loop 时注入 hint ──
-        route_exclude = []
-        if not getattr(self._local, 'visual_routed', False):
-            self._local.visual_routed = True
-            route = self._try_visual_route(messages)
-            if route:
-                tool_name, tool_params = route
-                # 直接可执行的 chart 类型（无需 data）
-                _NO_DATA = {"geometry", "wireframe", "contour", "cat", "regression", "function"}
-                can_direct = (
-                    tool_name == "generate_chart"
-                    and tool_params.get("chart_type", "") in _NO_DATA
-                )
-                if can_direct:
-                    self._emit("text", {"text": "🎨 正在生成图表..."})
-                    # geometry 类型需要 labels 关键词来选择演示图
-                    if tool_params.get("chart_type") == "geometry" and "labels" not in tool_params:
-                        # 从最后一条 user 消息提取任务文本作为 labels
-                        last_user = next(
-                            (m.get("content", "") for m in reversed(messages)
-                             if m.get("role") == "user"), ""
-                        )
-                        if last_user:
-                            tool_params["labels"] = last_user[:200]
-                    import json as _json
-                    tool_call = {"name": tool_name, "arguments": tool_params, "id": "routed_visual"}
-                    messages.append({
-                        "role": "assistant", "content": "",
-                        "reasoning_content": "",  # DeepSeek 思考模式要求回传
-                        "tool_calls": [{
-                            "id": "routed_visual", "type": "function",
-                            "function": {"name": tool_name,
-                                          "arguments": _json.dumps(tool_params, ensure_ascii=False)},
-                        }],
-                    })
-                    self.execute_tool(tool_call, messages)
-                else:
-                    # 需要 LLM 生成内容 → 注入 hint 到最后一个 user 消息
-                    params_hint = f" (params hint: {tool_params})" if tool_params else ""
-                    hint = (
-                        f"\n[Visual hint: Use the '{tool_name}' tool{params_hint}."
-                        f" Generate appropriate content.]"
-                        f"\nIMPORTANT: Do NOT use generate_chart, mermaid_chart, draw_circuit,"
-                        f" or any other visual tool for this task. Only use '{tool_name}'."
-                    )
-                    # 排除其他视觉工具，避免 LLM 选错
-                    _ALL_VISUAL = {"generate_chart", "mermaid_chart", "draw_circuit",
-                                   "create_ppt", "ai_image", "image_analyze"}
-                    route_exclude = [t for t in _ALL_VISUAL if t != tool_name]
-                    schemas = [s for s in schemas if s["function"]["name"] not in route_exclude]
-                    if messages and messages[-1].get("role") == "user":
-                        messages[-1]["content"] += hint
+        # ── 视觉路由预检（提取到独立方法）──
+        schemas = self._preflight_visual_route(messages, schemas)
 
         loop_start = _time.monotonic()
         for _ in range(self.config.max_iterations):

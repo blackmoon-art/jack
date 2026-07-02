@@ -12,9 +12,6 @@ Default 策略 — 标准 agent loop，带流式快速路径。
 import json
 import logging
 
-from ..config import Config
-from ..llm import LLM
-from ..tools import ToolRegistry
 from ..visual_router import is_visual_request, get_all_visual_keywords
 from .base import BaseStrategy
 
@@ -183,16 +180,25 @@ class DefaultStrategy(BaseStrategy):
         ).format(ctx=ctx.strip(), task=task[:200], tools=tool_hint)
 
         # step_callback: 画图工具调用后下一次 LLM 响应时终止循环，防止画两次
-        _draw_done = [False]
+        # 增加兜底上限 5 次：若 LLM 连续调用非视觉工具，超限后强制终止
+        _state = {"draw_done": False, "attempts": 0}
 
         def _visual_step(text: str, tool_calls: list) -> str | None:
-            if _draw_done[0]:
+            _state["attempts"] += 1
+            if _state["draw_done"]:
                 return text  # 已经画过了，终止循环
+            if _state["attempts"] > 5:
+                # 兜底：5 次仍无画图工具调用，强制终止
+                logger.warning(
+                    f"_force_visual: {_state['attempts']} attempts without "
+                    f"visual tool call, forcing stop"
+                )
+                return text
             if tool_calls:
                 for tc in tool_calls:
                     name = tc.get("name", "")
                     if name in _target_tools:
-                        _draw_done[0] = True
+                        _state["draw_done"] = True
                         break
             return None  # 继续循环
 

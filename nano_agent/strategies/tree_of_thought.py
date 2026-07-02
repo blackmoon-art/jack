@@ -23,9 +23,6 @@ Tree-of-Thought 策略 — 多路径探索 + 评估 + 选择最优 + 回溯。
 import json
 import logging
 
-from ..config import Config
-from ..llm import LLM
-from ..tools import ToolRegistry
 from .base import BaseStrategy
 
 logger = logging.getLogger("nano_agent.strategies.tot")
@@ -40,11 +37,11 @@ class TreeOfThoughtStrategy(BaseStrategy):
                      '探索', '所有可能', '穷举', '候选')
     auto_priority = 2
 
-    def __init__(self, config: Config, llm: LLM, tools: ToolRegistry,
-                 num_candidates: int = None, score_threshold: int = None, **kwargs):
-        super().__init__(config, llm, tools, **kwargs)
-        self.num_candidates = num_candidates if num_candidates is not None else config.tot_num_candidates
-        self.score_threshold = score_threshold if score_threshold is not None else config.tot_score_threshold
+    def __init__(self, *args, num_candidates: int = None,
+                 score_threshold: int = None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.num_candidates = num_candidates if num_candidates is not None else self.config.tot_num_candidates
+        self.score_threshold = score_threshold if score_threshold is not None else self.config.tot_score_threshold
         self._explored_paths: list[dict] = []    # 记录探索路径
 
     def generate_candidates(self, task: str, context: str = "") -> list[dict]:

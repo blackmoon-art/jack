@@ -386,8 +386,14 @@ class Circuit:
             base, anchor_name = token.split(".", 1)
             base, anchor_name = base.strip(), anchor_name.strip()
             if base in named:
-                try: return getattr(named[base], anchor_name)
-                except AttributeError: return Circuit._get_anchor(named[base])
+                try:
+                    return getattr(named[base], anchor_name)
+                except AttributeError:
+                    logger.warning(
+                        f"Anchor '{anchor_name}' not found on element '{base}'. "
+                        f"Valid anchors: {[a for a in dir(named[base]) if not a.startswith('_')]}. "
+                        f"Falling back to 'end' anchor.")
+                    return Circuit._get_anchor(named[base])
         if token in named:
             return Circuit._get_anchor(named[token])
         return None
@@ -661,6 +667,10 @@ class Circuit:
             if comp_cls == _GATE_FACTORY:
                 gate_label = value if value else ""
                 gate = self._make_native_gate(name, gate_label, elm)
+                if direction != "right":
+                    dir_method = getattr(gate, direction, None)
+                    if dir_method is not None:
+                        gate = dir_method()
                 if last is not None:
                     gate = gate.at(self._get_anchor(last))
                 d.add(gate); return gate

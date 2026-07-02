@@ -20,9 +20,6 @@ Reflexion 策略 — 自我反思 + 失败重试 + 教训学习。
 import json
 import logging
 
-from ..config import Config
-from ..llm import LLM
-from ..tools import ToolRegistry
 from .base import BaseStrategy
 
 logger = logging.getLogger("nano_agent.strategies.reflexion")
@@ -42,10 +39,9 @@ class ReflexionStrategy(BaseStrategy):
                      '质量', '审查', 'review', '检查', '验证', '确保')
     auto_priority = 2
 
-    def __init__(self, config: Config, llm: LLM, tools: ToolRegistry,
-                 max_retries: int = None, **kwargs):
-        super().__init__(config, llm, tools, **kwargs)
-        self.max_retries = max_retries if max_retries is not None else config.reflexion_max_retries
+    def __init__(self, *args, max_retries: int = None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.max_retries = max_retries if max_retries is not None else self.config.reflexion_max_retries
         self.lesson_memory: list[str] = []  # 精准教训（只有 LESSON 行）
         self._trace_id: int = 0  # 当前轨迹 ID
 

@@ -160,7 +160,31 @@ class LogicSVG:
                    "XOR":("xor",False),"XNOR":("xor",True),"NOT":("not",True),"BUF":("buf",False)}
 
     def _render_mixed(self, gates, modules, title=""):
-        svg_w, svg_h = 800, max(400, len(gates) * 70 + len(modules) * 120)
+        # 预计算高度
+        gate_cols = {}
+        gate_max_in_col = 1
+        gate_y_end = 50
+        if gates:
+            # 拓扑排序（直接用已解析的 gates，无需 round-trip）
+            produced = {g["output"]: i for i, g in enumerate(gates)}
+            depth, visiting = {}, set()
+            def get_depth(gi):
+                if gi in depth: return depth[gi]
+                if gi in visiting: return 1  # 环路检测
+                visiting.add(gi)
+                d = max((get_depth(produced[i]) for i in gates[gi]["inputs"] if i in produced), default=0) + 1
+                visiting.discard(gi); depth[gi] = d; return d
+            for i in range(len(gates)): get_depth(i)
+            for i, g in enumerate(gates):
+                gate_cols.setdefault(depth[i], []).append(i)
+            gate_max_in_col = max(len(v) for v in gate_cols.values()) if gate_cols else 1
+            gate_y_end = 50 + gate_max_in_col * self.ROW_GAP + 20
+
+        module_rows = (len(modules) + 2) // 3 if modules else 0
+        module_height = module_rows * (self.MOD_H + 60)
+        svg_h = max(400, gate_y_end + module_height + 40)
+
+        svg_w = 800
         svg = ET.Element("svg", {"xmlns":"http://www.w3.org/2000/svg",
                                  "viewBox":f"0 0 {svg_w} {svg_h}",
                                  "width":str(svg_w),"height":str(svg_h)})
@@ -171,47 +195,90 @@ class LogicSVG:
                                         "font-size":"14","font-weight":"bold"}).text = title
 
         y = 50
-        # 门级
+        placed = {}         # gate_index → (gx, gy)
+        gate_outputs = {}   # output_signal_name → (gx+W//2+PIN, gy)
+
+        # ── 门级 ──
         if gates:
-            g_gates, inputs, outputs = self._parse_gate_dsl("\n".join(
-                f"{g['type']}({','.join(g['inputs'])}) = {g['output']}" for g in gates))
-            # 拓扑排序
-            produced = {g["output"]:i for i,g in enumerate(gates)}
-            depth, visiting = {}, set()
-            def get_depth(gi):
-                if gi in depth: return depth[gi]
-                if gi in visiting: return 1
-                visiting.add(gi)
-                d = max((get_depth(produced[i]) for i in gates[gi]["inputs"] if i in produced), default=0) + 1
-                visiting.discard(gi); depth[gi] = d; return d
-            for i in range(len(gates)): get_depth(i)
-            cols = {}
-            for i,g in enumerate(gates): cols.setdefault(depth[i],[]).append(i)
-            placed = {}
-            for d in sorted(cols):
+            for d in sorted(gate_cols):
                 gx = 80 + d * self.COL_GAP
-                for ri, gi in enumerate(cols[d]):
+                for ri, gi in enumerate(gate_cols[d]):
                     gy = y + ri * self.ROW_GAP
                     placed[gi] = (gx, gy)
-                    self._draw_gate(svg, gx, gy, gates[gi]["type"], "")
-                    out_name = gates[gi]["output"]
-                    # draw wires
+
+                    # 画门间连线（先画线，门体覆盖其上）
                     nin = len(gates[gi]["inputs"])
                     for ii, inp in enumerate(gates[gi]["inputs"]):
-                        src = next((placed[p] for p,n in [(produced.get(inp),inp) for inp in [inp]] if p in placed), None)
-                        if src:
-                            iy_off = (ii-(nin-1)/2)*self.IY
-                            self._draw_wire(svg, src[0]+self.W//2+self.PIN, src[1],
-                                            gx-self.W//2-self.PIN, gy+iy_off)
-            y += (max(len(v) for v in cols.values()) if cols else 1) * self.ROW_GAP + 20
+                        src_idx = produced.get(inp)
+                        if src_idx is not None and src_idx in placed:
+                            src = placed[src_idx]
+                            iy_off = (ii - (nin - 1) / 2) * self.IY
+                            self._draw_wire(svg,
+                                            src[0] + self.W // 2 + self.PIN, src[1],
+                                            gx - self.W // 2 - self.PIN, gy + iy_off)
 
-        # 模块级
+                    # 画门体
+                    self._draw_gate(svg, gx, gy, gates[gi]["type"], "")
+
+                    # 记录输出位置（用于门→模块连线）
+                    gate_outputs[gates[gi]["output"]] = (gx + self.W // 2 + self.PIN, gy)
+
+            y = gate_y_end
+
+        # ── 门→模块连线 ──
+        module_pin_positions = {}  # (mi, port_name) → (px, py, pdir)
         for mi, mod in enumerate(modules):
-            mtype = mod.get("type","REGISTER").upper()
+            mtype = mod.get("type", "REGISTER").upper()
+            mid = mod.get("id", f"u{mi}")
+            mdef = _MODULE_DEFS.get(mtype, {"shape": "rect", "ports": [], "label": mtype[:3]})
+            ports = mdef.get("ports", [])
+            mx = 80 + (mi % 3) * (self.MOD_W + 80)
+            my = y + (mi // 3) * (self.MOD_H + 60)
+            rx = mx - self.MOD_W // 2
+            ry = my - self.MOD_H // 2
+            h = self.MOD_H
+
+            for pi, port in enumerate(ports):
+                pdir = _PORT_DIRS.get(port, "I")
+                py = ry + (pi + 1) * h / (len(ports) + 1)
+                if pdir == "I":
+                    module_pin_positions[(mi, port)] = (rx, py, pdir)
+                elif pdir == "O":
+                    module_pin_positions[(mi, port)] = (rx + self.MOD_W, py, pdir)
+                else:
+                    module_pin_positions[(mi, port)] = (rx, py, pdir)
+
+        # 画门→模块连线
+        for mi, mod in enumerate(modules):
+            mtype = mod.get("type", "REGISTER").upper()
+            mdef = _MODULE_DEFS.get(mtype, {"shape": "rect", "ports": [], "label": mtype[:3]})
+            ports = mdef.get("ports", [])
+            for port in ports:
+                pdir = _PORT_DIRS.get(port, "I")
+                if pdir != "I":
+                    continue
+                # 检查端口值是否匹配某个门输出
+                signal = mod.get(port.lower()) or mod.get(port)
+                if signal and signal in gate_outputs:
+                    if (mi, port) in module_pin_positions:
+                        gx_out, gy_out = gate_outputs[signal]
+                        px, py, _ = module_pin_positions[(mi, port)]
+                        # 直角走线：门输出 → 模块输入
+                        mid_x = (gx_out + px) / 2
+                        d = f"M{gx_out},{gy_out} L{mid_x},{gy_out} L{mid_x},{py} L{px},{py}"
+                        ET.SubElement(svg, "path", {
+                            "d": d, "fill": "none", "stroke": self.COLORS["wire"],
+                            "stroke-width": "1.5", "stroke-linejoin": "round",
+                        })
+
+        # ── 模块级 ──
+        for mi, mod in enumerate(modules):
+            mtype = mod.get("type", "REGISTER").upper()
             mid = mod.get("id", f"u{mi}")
             mx = 80 + (mi % 3) * (self.MOD_W + 80)
             my = y + (mi // 3) * (self.MOD_H + 60)
             self._draw_module(svg, mx, my, mtype, mid, mod)
+
         return ET.tostring(svg, encoding="unicode")
 
     # ═══════════ 模块绘制 ═══════════

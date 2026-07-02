@@ -15,9 +15,6 @@ ReAct 策略 — Reasoning + Acting：Function Calling + 显式 Thought。
 import json
 import logging
 
-from ..config import Config
-from ..llm import LLM
-from ..tools import ToolRegistry
 from .base import BaseStrategy
 
 logger = logging.getLogger("nano_agent.strategies.react")
@@ -38,10 +35,9 @@ class ReActStrategy(BaseStrategy):
     auto_keywords = ('逐步', 'step by step', '推理过程', '思考步骤', '审计', 'debug步骤')
     auto_priority = 1
 
-    def __init__(self, config: Config, llm: LLM, tools: ToolRegistry,
-                 max_steps: int = None, **kwargs):
-        super().__init__(config, llm, tools, **kwargs)
-        self.max_steps = max_steps if max_steps is not None else config.react_max_steps
+    def __init__(self, *args, max_steps: int = None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.max_steps = max_steps if max_steps is not None else self.config.react_max_steps
         self.thought_trail: list[dict] = []
 
     # ── ReAct 系统提示词 ─────────────────────────────────

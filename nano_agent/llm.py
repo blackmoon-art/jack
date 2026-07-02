@@ -33,19 +33,18 @@ def _create_openai_client(cfg: Config):
 # ── 工具函数（模块级，不依赖 LLM 实例）──────────────────
 
 def clean_json_response(text: str) -> str:
-    """清理 LLM 返回的 JSON 文本：去 markdown 代码块包裹。"""
+    """清理 LLM 返回的 JSON 文本：去 markdown 代码块包裹。
+
+    使用正则匹配 ``` 代码块，处理嵌套和异常格式。
+    支持 ```json / ``` 开头，容错不完整的结尾。
+    """
+    import re
     text = text.strip()
-    if '```' in text:
-        start = text.find('```')
-        if start >= 0:
-            after_start = text.index('```', start) + 3
-            newline_pos = text.find('\n', after_start)
-            if newline_pos >= 0 and newline_pos - after_start < 20:
-                after_start = newline_pos + 1
-            end = text.rfind('```')
-            if end > after_start:
-                text = text[after_start:end]
-    return text.strip()
+    # 匹配 ```json\\n ... \\n``` 或 ``` ... ```，非贪婪匹配首个代码块
+    m = re.search(r'```(?:json)?\s*\n?(.*?)\n?```', text, re.DOTALL)
+    if m:
+        return m.group(1).strip()
+    return text
 
 
 def format_tool_call_for_message(tc: dict) -> dict:
