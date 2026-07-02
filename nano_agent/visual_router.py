@@ -155,10 +155,10 @@ _EXACT_ROUTES: list[tuple[str, str, dict]] = [
      "fmcw|radar.*if|雷达.*中频|rf.*receiver|发射机|transmitter|"
      "接收机|receiver.*chain",
      "draw_block", {}),
-    # 通用电路 (兜底)
-    ("电路|原理图|schematic|circuit|电路图|接线图|电路设计|"
-     "电子电路|pcb|布线",
-     "draw_analog_svg", {}),
+    # 通用电路 — 不兜底，交给 LLM 选择工具
+    # 如果 Layer 1 没命中模拟/数字/框图的具体关键词，不做自动路由。
+    # LLM 会看到 draw_analog_svg / draw_logic / draw_digital 三个工具，
+    # 根据上下文自行选择最合适的。
     # AI 图片
     ("照片|photo|艺术|art|画一只|画个猫|画只|画张|画一幅|"
      "realistic|digital art|油画|水彩|素描|卡通|anime|插画",

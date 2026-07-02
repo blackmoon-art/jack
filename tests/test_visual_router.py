@@ -106,8 +106,19 @@ class TestLayer1ExactMatch(unittest.TestCase):
         self.assertEqual(result[0], "mermaid_chart")
 
     def test_draw_circuit(self):
+        """通用"电路图"不兜底，交给 LLM 选择工具。"""
         result = route_visual("画电路原理图")
+        self.assertIsNone(result, "Generic circuit query should fallback to LLM")
+
+    def test_draw_analog_specific(self):
+        """具体模拟电路关键词仍命中。"""
+        result = route_visual("画个RC低通滤波器电路图")
         self.assertEqual(result[0], "draw_analog_svg")
+
+    def test_draw_logic_specific(self):
+        """具体数字逻辑关键词仍命中。"""
+        result = route_visual("画个半加器电路图")
+        self.assertEqual(result[0], "draw_logic")
 
     def test_ai_image(self):
         result = route_visual("画一只猫")
