@@ -417,13 +417,43 @@ def _check_ngspice() -> bool:
     return shutil.which("ngspice") is not None
 
 
+# Minimal universal opamp model for Ngspice validation
+_OPAMP_SUBCKT = """
+.subckt opamp in_p in_n out vcc vss
+* Simple behavioral opamp: gain=100k, single-pole at 10Hz
+G1 0 n1 in_p in_n 1
+R1 n1 0 100k
+C1 n1 0 1.59e-4
+E1 out 0 n1 0 1
+Rout out 0 75
+.ends opamp
+"""
+
+_DIODE_MODEL = """
+.model DEFAULT_D D (IS=1e-14 RS=1 N=1)
+"""
+
+
 def _validate_with_ngspice(spice_text: str, work_dir: Path) -> tuple[bool, str]:
     """Run ngspice in batch mode to validate a SPICE netlist.
 
+    Auto-injects a basic opamp model and .op analysis.
     Returns (is_valid, error_message).
     """
+    # Prepare netlist: inject models + .op analysis
+    full_spice = spice_text.strip()
+    has_opamp = "XU" in full_spice or " X" in full_spice
+    has_diode = full_spice.upper().startswith("D")
+
+    if has_opamp and ".subckt opamp" not in full_spice.lower():
+        full_spice = _OPAMP_SUBCKT + "\n" + full_spice
+    if has_diode and ".model" not in full_spice.lower():
+        full_spice = _DIODE_MODEL + "\n" + full_spice
+
+    full_spice += "\n.op\n.end\n"
+
     cir_path = work_dir / "_validate.cir"
-    cir_path.write_text(spice_text + "\n.end\n")
+    cir_path.write_text(full_spice)
 
     try:
         result = subprocess.run(
@@ -431,22 +461,30 @@ def _validate_with_ngspice(spice_text: str, work_dir: Path) -> tuple[bool, str]:
             capture_output=True, text=True, timeout=15,
             cwd=str(work_dir),
         )
-        stderr = result.stderr
-        stdout = result.stdout
+        output = result.stderr + result.stdout
 
-        # Check for ERROR keywords
-        for line in (stderr + stdout).split("\n"):
-            if "ERROR" in line.upper() or "FATAL" in line.upper():
-                return False, line.strip()
+        # Check for critical errors
+        errors = []
+        for line in output.split("\n"):
+            upper = line.upper()
+            if ("ERROR" in upper or "FATAL" in upper) and "WARNING" not in upper:
+                # Skip false positives
+                if "no errors" in upper.lower() or "0 error" in upper.lower():
+                    continue
+                errors.append(line.strip())
+
+        if errors:
+            return False, errors[0]  # Return first error
 
         return True, ""
     except subprocess.TimeoutExpired:
-        return False, "Ngspice validation timed out"
+        return False, "Ngspice validation timed out (>15s)"
     except FileNotFoundError:
-        return True, ""  # ngspice not installed — skip validation
+        return True, ""  # ngspice not installed — skip
     finally:
-        # Cleanup
-        for pat in ("_validate.cir", "_validate.out", "_validate.raw"):
+        # Cleanup temp files
+        for pat in ("_validate.cir", "_validate.out", "_validate.raw",
+                     "_validate.log", "_validate.tr0", "_validate.ac0"):
             p = work_dir / pat
             if p.exists():
                 p.unlink(missing_ok=True)
@@ -496,6 +534,13 @@ class SpiceRenderer:
         Fallback: if schemdraw is not installed, uses pure-Python SVG.
         """
         try:
+            # Stage 0: Ngspice validation (skip if not installed)
+            ngspice_msg = ""
+            if _check_ngspice():
+                valid, err = _validate_with_ngspice(spice, self.charts_dir)
+                if not valid:
+                    ngspice_msg = f"\n\n⚠️ **Ngspice validation failed:** {err}"
+
             # Stage 1: Build connectivity graph
             graph = _build_graph(spice)
             if not graph["components"]:
@@ -521,7 +566,7 @@ class SpiceRenderer:
         url = f"/charts/{fp.name}"
 
         spice_block = f"\n\n**SPICE Netlist:**\n```spice\n{spice.strip()}\n```"
-        return f"![{title or 'Analog Circuit'}]({url})\n{url}{spice_block}"
+        return f"![{title or 'Analog Circuit'}]({url})\n{url}{spice_block}{ngspice_msg}"
 
     def _render_schemdraw(self, graph: dict, layout: dict, title: str = "") -> str:
         """Generate schemdraw Drawing and render to SVG string."""
