@@ -119,15 +119,17 @@ _EXACT_ROUTES: list[tuple[str, str, dict]] = [
     # 逻辑门 SVG (数字电路首选)
     ("半加器|全加器|逻辑电路|logic.*circuit|half.*adder|full.*adder|"
      "真值表|truth.*table|逻辑表达式|boolean.*expr|"
-     "and.*gate|or.*gate|not.*gate|nand.*gate|nor.*gate|xor.*gate",
+     "and.*gate|or.*gate|not.*gate|nand.*gate|nor.*gate|xor.*gate|"
+     "选择器|数据选择器|多路选择器|多路复用|mux|demux|"
+     "译码器|decoder|编码器|encoder|alu|算术逻辑|"
+     "触发器|flip.flop|dff|latch|寄存器|"
+     "fifo|异步.*fifo|async.*fifo|gray.*code|格雷码|同步器|synchronizer|"
+     "计数器|counter|移位|shift|锁存器|数字滤波|ram|双口|dpram|三态|tristate",
      "draw_logic", {}),
     # 数字电路 (fallback)
-    ("数字电路|逻辑门|门电路|digital.*circuit|logic.*gate|"
-     "and gate|nand gate|nor gate|xor gate|半加器|全加器|触发器|"
-     "flip.flop|dff|latch|寄存器|译码器|多路复用|encoder|decoder|mux|"
-     "fifo|异步.*fifo|async.*fifo|gray.*code|格雷码|同步器|synchronizer|两级同步|"
-     "clock.*domain|counter|ram|双口|dpram|demux|三态|tristate|"
-     "alu|算术逻辑|移位|shift|编码器|锁存器|数字滤波",
+    ("数字电路|门电路|digital.*circuit|logic.*gate|"
+     "and gate|nand gate|nor gate|xor gate|半加器|全加器|"
+     "clock.*domain",
      "draw_digital", {}),
     # 模拟电路
     ("模拟电路|analog.*circuit|"

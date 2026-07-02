@@ -217,64 +217,78 @@ class LogicSVG:
         y = 50
         placed = {}         # gate_index → (gx, gy)
         gate_outputs = {}   # output_signal_name → (gx+W//2+PIN, gy)
+        input_pin_pos = {}  # primary_input_signal → (x, y) — port on left edge
 
         # ── 门级 ──
         if gates:
+            # 主输入信号 → 在左边缘分配端口位置
+            all_inputs = sorted(set(
+                inp for g in gates for inp in g["inputs"] if inp not in produced
+            ))
+            input_x = 20
+            input_spacing = 36
+            for si, sig in enumerate(all_inputs):
+                input_pin_pos[sig] = (input_x, 50 + si * input_spacing)
+
+            # 记录主输出（不被任何门用作输入的输出信号）
+            all_outputs = sorted(set(
+                g["output"] for g in gates
+                if not any(g["output"] in g2["inputs"] for g2 in gates)
+            ))
+
             for d in sorted(gate_cols):
                 gx = 80 + d * self.COL_GAP
                 for ri, gi in enumerate(gate_cols[d]):
                     gy = y + ri * self.ROW_GAP
                     placed[gi] = (gx, gy)
 
-                    # 画门间连线（先画线，门体覆盖其上）
                     nin = len(gates[gi]["inputs"])
                     for ii, inp in enumerate(gates[gi]["inputs"]):
                         src_idx = produced.get(inp)
+                        iy_off = (ii - (nin - 1) / 2) * self.IY
+                        dst_x = gx - self.W // 2 - self.PIN
+                        dst_y = gy + iy_off
                         if src_idx is not None and src_idx in placed:
+                            # 门→门连线
                             src = placed[src_idx]
-                            iy_off = (ii - (nin - 1) / 2) * self.IY
                             self._draw_wire(svg,
                                             src[0] + self.W // 2 + self.PIN, src[1],
-                                            gx - self.W // 2 - self.PIN, gy + iy_off)
+                                            dst_x, dst_y)
+                        elif inp in input_pin_pos:
+                            # 主输入端口→门输入连线
+                            px, py = input_pin_pos[inp]
+                            self._draw_wire(svg, px, py, dst_x, dst_y)
 
                     # 画门体
                     self._draw_gate(svg, gx, gy, gates[gi]["type"], "")
 
-                    # 记录输出位置（用于门→模块连线）
+                    # 记录输出位置
                     gate_outputs[gates[gi]["output"]] = (gx + self.W // 2 + self.PIN, gy)
 
-            # ── 主 I/O 标签 ──
-            if gates:
-                all_inputs = set()
-                produced = {g["output"] for g in gates}
-                for g in gates:
-                    for inp in g["inputs"]:
-                        if inp not in produced:
-                            all_inputs.add(inp)
-                io_y = 50
-                for inp_sig in sorted(all_inputs):
+            # ── 主输入标签和端口点 ──
+            for sig, (px, py) in input_pin_pos.items():
+                ET.SubElement(svg, "circle", {
+                    "cx": str(px), "cy": str(py), "r": "3",
+                    "fill": "#3b82f6", "stroke": "none",
+                })
+                ET.SubElement(svg, "text", {
+                    "x": str(px + 6), "y": str(py + 4), "text-anchor": "start",
+                    "fill": "#3b82f6", "font-family": "monospace", "font-size": "9",
+                }).text = sig
+
+            # ── 主输出标签 ──
+            for out_sig in all_outputs:
+                if out_sig in gate_outputs:
+                    ox, oy = gate_outputs[out_sig]
+                    ex = ox + self.W // 2 + self.PIN
+                    ET.SubElement(svg, "circle", {
+                        "cx": str(ex), "cy": str(oy), "r": "3",
+                        "fill": "#10b981", "stroke": "none",
+                    })
                     ET.SubElement(svg, "text", {
-                        "x": "16", "y": str(io_y), "text-anchor": "start",
-                        "fill": "#3b82f6", "font-family": "monospace", "font-size": "9",
-                    }).text = inp_sig
-                    io_y += 18
-                # 主输出信号
-                all_outputs = set()
-                for g in gates:
-                    used_as_input = any(g["output"] in g2["inputs"] for g2 in gates if g2 != g)
-                    if not used_as_input:
-                        all_outputs.add(g["output"])
-                if all_outputs:
-                    out_x = max(v[0] for v in gate_outputs.values()) + 50 if gate_outputs else svg_w - 60
-                    io_y = 50
-                    for out_sig in sorted(all_outputs):
-                        if out_sig in gate_outputs:
-                            ox, oy = gate_outputs[out_sig]
-                            ET.SubElement(svg, "text", {
-                                "x": str(ox + self.W//2 + self.PIN + 8), "y": str(oy + 4),
-                                "text-anchor": "start",
-                                "fill": "#10b981", "font-family": "monospace", "font-size": "9",
-                            }).text = out_sig
+                        "x": str(ex + 8), "y": str(oy + 4), "text-anchor": "start",
+                        "fill": "#10b981", "font-family": "monospace", "font-size": "9",
+                    }).text = out_sig
 
             y = gate_y_end
 

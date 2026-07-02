@@ -118,8 +118,10 @@ class AnalogSVG:
                                "nodes": rest[:2], "value": rest[2] if len(rest) > 2 else ""})
             elif prefix == "V":
                 # V<name> <n+> <n-> [AC|DC] [value]
-                vtype = rest[2] if len(rest) > 2 else "DC"
-                val = rest[3] if len(rest) > 3 else (rest[2] if vtype == "DC" else "")
+                if len(rest) >= 3 and rest[2].upper() == "AC":
+                    val = "AC " + (rest[3] if len(rest) > 3 else "1")
+                else:
+                    val = " ".join(rest[2:]) if len(rest) > 2 else "DC 0"
                 comps.append({"type": "vsource", "name": name,
                                "nodes": rest[:2], "value": val})
             elif prefix == "I":
@@ -183,26 +185,33 @@ class AnalogSVG:
             for nid in nids:
                 node_comps[nid].append(c["name"])
 
-        # 找源节点: GND (0) + V/I 源的 "输出" 节点 (n2 是 source 的正端)
-        sources = {0}  # GND 总是源
+        # 找源节点: AC 信号源的输出节点（GND 不作为源，避免短路 BFS）
+        sources = set()
         for c in comps:
-            if c["type"] in ("vsource", "isource"):
-                nids = comp_nids[c["name"]]
-                if len(nids) >= 2:
-                    # V/I 源: n1 是正端(+) 输出，n2 是负端(-)
-                    sources.add(nids[0])
+            if c["type"] == "vsource":
+                val = c.get("value", "").upper()
+                if "AC" in val or "SIN" in val or "PULSE" in val:
+                    nids = comp_nids[c["name"]]
+                    if len(nids) >= 2:
+                        sources.add(nids[0])  # positive terminal
+        # 无信号源时，从所有非 GND 节点出发（兜底）
+        if not sources:
+            for cname, nids in comp_nids.items():
+                for nid in nids:
+                    if nid != 0:
+                        sources.add(nid)
+            if sources:
+                sources = {min(sources)}  # 只取最小，避免多源全在 level 0
 
-        # BFS 分配层级
-        comp_level = {}  # comp_name → level
-        node_level = {}  # nid → level (源节点=0)
+        # BFS 分配层级（GND=0 不参与传播，避免所有元件通过 GND 短路到 level 0）
+        comp_level = {}
+        node_level = {}
+        visited_nodes = set(sources)
+        visited_comps = set()
         for s in sources:
             node_level[s] = 0
 
-        # 从源节点开始 BFS
-        visited_nodes = set(sources)
-        visited_comps = set()
         queue = deque(sources)
-
         while queue:
             nid = queue.popleft()
             nlev = node_level.get(nid, 0)
@@ -211,9 +220,8 @@ class AnalogSVG:
                     continue
                 visited_comps.add(cname)
                 comp_level[cname] = nlev
-                # 该元件的其他节点进入下一层
                 for other_nid in comp_nids[cname]:
-                    if other_nid not in visited_nodes:
+                    if other_nid != 0 and other_nid not in visited_nodes:
                         visited_nodes.add(other_nid)
                         node_level[other_nid] = nlev + 1
                         queue.append(other_nid)
