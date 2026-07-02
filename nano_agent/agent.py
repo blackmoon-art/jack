@@ -259,6 +259,13 @@ class Agent:
             if verify:
                 result_text = result_text + "\n" + verify
 
+        # 电路文本审查：LLM 检查 DSL/SPICE 是否匹配用户意图
+        if is_success:
+            reject = self._verify_circuit_result(name, result_text, messages)
+            if reject:
+                result_text = reject
+                is_success = False
+
         # Orient 可在上层（_agent_loop）显式执行
         content = result_text
         if enable_orient:
@@ -290,6 +297,87 @@ class Agent:
     _CHART_TOOLS = {"generate_chart", "draw_circuit", "draw_digital",
                     "draw_analog", "draw_block", "mermaid_chart",
                     "stock_chart", "ai_image"}
+
+    # ── 电路文本验证 (LLM 审查 DSL/SPICE 是否匹配用户意图) ──
+    _CIRCUIT_TOOLS = {"draw_logic", "draw_analog_svg", "draw_analog_spice",
+                      "draw_block", "draw_digital", "draw_analog"}
+
+    _CIRCUIT_VERIFY_PROMPT = (
+        "Check if this circuit diagram code matches the user's request. "
+        "Look for: correct circuit type (filter/amplifier/logic/block), "
+        "correct topology, reasonable component values.\n\n"
+        "User request: {task}\n\n"
+        "Generated code:\n{code}\n\n"
+        "Reply with ONLY one word: PASS or FAIL.\n"
+        "PASS = circuit matches the request. FAIL = wrong circuit type, "
+        "wrong topology, or nonsensical component values.\n"
+        "Result:"
+    )
+
+    def _verify_circuit_result(self, tool_name: str, result: str,
+                                messages: list) -> str | None:
+        """对电路工具输出做 LLM 文本审查。不匹配时返回错误消息替代原结果。
+
+        Returns:
+            None = 通过审查，正常显示
+            str  = 审查失败，用此错误消息替代原结果
+        """
+        if tool_name not in self._CIRCUIT_TOOLS:
+            return None
+
+        # 提取 SPICE / DSL 代码
+        import re as _re_verify
+        code = result
+        # 优先提取代码块
+        m = _re_verify.search(
+            r'```(?:spice|netlist)?\s*\n(.*?)\n```', result, re.DOTALL | re.IGNORECASE
+        )
+        if m:
+            code = m.group(1).strip()
+        # 截断过长的代码
+        code = code[:2000]
+
+        if len(code) < 10:
+            return None  # 没有代码可审查
+
+        # 从 messages 中提取用户原始任务
+        task = ""
+        for msg in reversed(messages):
+            if msg.get("role") == "user":
+                content = msg.get("content", "")
+                # 去掉注入的 hint
+                if "[Visual hint:" in content:
+                    content = content.split("[Visual hint:")[0].strip()
+                if content:
+                    task = content[:500]
+                    break
+
+        if not task:
+            return None
+
+        prompt = self._CIRCUIT_VERIFY_PROMPT.format(task=task, code=code)
+        try:
+            resp = self.llm.chat(
+                messages=[{"role": "user", "content": prompt}],
+                tools=[],
+                system="Reply with exactly one word: PASS or FAIL.",
+                model=getattr(self._local, "model_override", None),
+            )
+            verdict = resp.get("text", "").strip().upper()
+        except Exception:
+            return None  # LLM 不可用时不拦截
+
+        if "FAIL" in verdict:
+            logger.warning(f"[Circuit Verify] FAILED for {tool_name}: "
+                           f"task='{task[:80]}'")
+            return (
+                "❌ Circuit verification failed: the generated diagram "
+                "does not match your request.\n\n"
+                "Please try again with a more specific description, "
+                "or break down the circuit into simpler sub-circuits."
+            )
+
+        return None
 
     def _verify_chart_result(self, tool_name: str, result: str) -> str:
         """对图表工具输出做视觉验证。失败静默返回空字符串。"""
