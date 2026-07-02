@@ -170,92 +170,79 @@ class AnalogSVG:
     # ═══════════ 布局 ═══════════
 
     def _layout(self, comps):
-        """基于 SPICE netlist 的图布局。
-        1. 构建邻接图
-        2. BFS 分配分层 (column)
-        3. 贪心分配行 (row)
-        """
-        # 构建节点邻接关系
-        adj = {}  # node_id → set of node_ids
+        """信号流布局：从信号源出发，沿信号路径分配列和行。"""
+        # 构建邻接关系
+        adj = {}
         for c in comps:
-            for n in c["nodes"]:
-                nid = self._node_id(n)
-                if nid not in adj:
-                    adj[nid] = set()
-            for i in range(len(c["nodes"])):
-                for j in range(i + 1, len(c["nodes"])):
-                    a = self._node_id(c["nodes"][i])
-                    b = self._node_id(c["nodes"][j])
-                    adj.setdefault(a, set()).add(b)
-                    adj.setdefault(b, set()).add(a)
+            nids = [self._node_id(n) for n in c["nodes"]]
+            for i in range(len(nids)):
+                for j in range(i + 1, len(nids)):
+                    adj.setdefault(nids[i], set()).add(nids[j])
+                    adj.setdefault(nids[j], set()).add(nids[i])
 
         if not adj:
             return {}, {}, [], 200, 100
 
-        # BFS 分层: 节点 0 在最后一层，从非 0 节点开始
-        start_nodes = [n for n in adj if n != 0]
-        if not start_nodes:
-            start_nodes = [0]
-        start = start_nodes[0]
+        # 找信号源节点（连接 V 或 I 元件的非 0 节点）
+        src_nodes = set()
+        for c in comps:
+            if c["type"] in ("vsource", "isource"):
+                for n in c["nodes"]:
+                    nid = self._node_id(n)
+                    if nid != 0:
+                        src_nodes.add(nid)
 
-        col = {start: 0}
-        queue = [start]
+        # 从信号源开始 BFS 分层
+        col = {}
+        queue = list(src_nodes) if src_nodes else [min(adj.keys())]
+        for s in queue:
+            col[s] = 0
         while queue:
             u = queue.pop(0)
             for v in adj.get(u, set()):
-                if v not in col:
-                    col[v] = col[u] + 1
+                if v not in col and v != 0:
+                    col[v] = col.get(u, 0) + 1
                     queue.append(v)
+        # 节点 0 放最后一列
+        max_c = max(col.values()) if col else 0
+        if 0 in adj:
+            col[0] = max_c + 1
 
-        # 节点 0 放到最右列
-        if 0 in col and 0 in adj:
-            max_col = max(col.values())
-            col[0] = max_col + 0
-
-        # 按列分组，分配行
+        # 每列内按度数排序（度数高的放中间）
         cols = {}
         for n, c in col.items():
             cols.setdefault(c, []).append(n)
         row = {}
-        current_row = 0
+        r = 0
         for c in sorted(cols.keys()):
-            for n in cols[c]:
-                row[n] = current_row
-                current_row += 1
+            nodes_in_col = sorted(cols[c], key=lambda n: len(adj.get(n, set())), reverse=True)
+            for n in nodes_in_col:
+                row[n] = r
+                r += 1
 
-        # 计算节点坐标
+        # 节点坐标
         nodes = {}
         for n in col:
-            x = 60 + col[n] * self.COL_GAP
-            y = 50 + row[n] * self.ROW_GAP
-            nodes[n] = (x, y)
+            nodes[n] = (60 + col[n] * self.COL_GAP, 50 + row[n] * self.ROW_GAP)
 
-        # 元件位置（两节点中点，节点0在下方）
+        # 元件放在两节点之间
         layout = {}
-        for c in comps:
-            nids = [self._node_id(n) for n in c["nodes"]]
-            valid = [n for n in nids if n in nodes]
-            if len(valid) >= 2:
-                n1, n2 = valid[0], valid[1]
-                x = (nodes[n1][0] + nodes[n2][0]) / 2
-                y = (nodes[n1][1] + nodes[n2][1]) / 2
-                # 方向：水平 vs 垂直
-                dx = abs(nodes[n1][0] - nodes[n2][0])
-                dy = abs(nodes[n1][1] - nodes[n2][1])
-                orient = "h" if dx >= dy else "v"
-                layout[c["name"]] = (x, y, orient)
-            elif len(valid) == 1:
-                layout[c["name"]] = (nodes[valid[0]][0], nodes[valid[0]][1], "h")
-            else:
-                layout[c["name"]] = (100, 100, "h")
-
-        # 边列表
         edges = []
         for c in comps:
             nids = [self._node_id(n) for n in c["nodes"]]
             valid = [n for n in nids if n in nodes]
             if len(valid) >= 2:
-                edges.append((valid[0], valid[1]))
+                a, b = valid[0], valid[1]
+                edges.append((a, b))
+                x = (nodes[a][0] + nodes[b][0]) / 2
+                y = (nodes[a][1] + nodes[b][1]) / 2
+                dx = abs(nodes[a][0] - nodes[b][0])
+                dy = abs(nodes[a][1] - nodes[b][1])
+                # 竖直元件（如 VCC 到 GND）：水平放置
+                orient = "h" if dy > dx * 1.5 else "h"
+                layout[c["name"]] = (x, y, orient)
+            elif len(valid) == 1:
+                layout[c["name"]] = (nodes[valid[0]][0] + 40, nodes[valid[0]][1], "h")
 
         svg_w = (max(col.values()) + 2) * self.COL_GAP
         svg_h = (max(row.values()) + 2) * self.ROW_GAP
