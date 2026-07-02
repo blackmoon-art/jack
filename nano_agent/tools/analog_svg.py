@@ -48,16 +48,19 @@ def _format_value(v: float) -> str:
     if v == 0:
         return "0"
     abs_v = abs(v)
-    for unit, scale in [("p", 1e-12), ("n", 1e-9), ("u", 1e-6),
-                         ("m", 1e-3), ("", 1), ("k", 1e3), ("Meg", 1e6)]:
-        if abs_v >= scale * 0.1 or unit == "Meg":
+    # Iterate largest→smallest, pick first unit where value >= 1
+    for unit, scale in [("Meg", 1e6), ("k", 1e3), ("", 1),
+                         ("m", 1e-3), ("u", 1e-6), ("n", 1e-9), ("p", 1e-12)]:
+        if abs_v >= scale:
             val = v / scale
             if abs(val - round(val)) < 0.001 and abs(val) >= 10:
                 return f"{int(round(val))}{unit}"
             if abs(val) >= 1:
                 return f"{val:.2f}".rstrip("0").rstrip(".") + unit
             return f"{val:.3f}".rstrip("0").rstrip(".") + unit
-    return str(v)
+    # Very small: use pico
+    val = v / 1e-12
+    return f"{val:.1f}".rstrip("0").rstrip(".") + "p"
 
 
 # ═══════════ Circuit Templates ═══════════
@@ -307,7 +310,7 @@ def _to_spice(components: list[dict], values: dict) -> str:
 
     for c in components:
         # Fill value placeholder
-        val = c["value"]
+        val = c.get("value", "")
         if val == "?":
             # Try exact name first ("R1"), then type prefix ("R")
             val = values.get(c["name"], values.get(c["name"].rstrip("0123456789"), "1k"))
@@ -339,7 +342,9 @@ def _to_spice(components: list[dict], values: dict) -> str:
             lines.append(f"{name} {nid_str} {val}")
         elif t == "X":
             model = c.get("filled_model", "opamp")
-            lines.append(f"{name} {nid_str} {model}")
+            # ngspice requires X prefix for subcircuit instances
+            xname = name if name.startswith("X") else "X" + name
+            lines.append(f"{xname} {nid_str} {model}")
 
     return "\n".join(lines)
 
@@ -870,15 +875,34 @@ class AnalogSVG:
         if not shutil.which("ngspice"):
             return True, ""  # ngspice 不可用时放行
 
+        # 注入 op-amp 子电路（如果 SPICE 中用到）
+        _OPAMP = (
+            ".subckt opamp in_p in_n out vcc vss\n"
+            "G1 0 n1 in_p in_n 1\n"
+            "R1 n1 0 100k\n"
+            "C1 n1 0 1.59e-4\n"
+            "E1 out 0 n1 0 1\n"
+            "Rout out 0 75\n"
+            ".ends opamp\n"
+        )
+        _DIODE = ".model DEFAULT_D D (IS=1e-14 RS=1 N=1)\n"
+
         try:
             with tempfile.NamedTemporaryFile(
                 mode="w", suffix=".cir", delete=False
             ) as f:
-                # Add .op if not present
+                # 模型/子电路定义（必须在电路实例化之前）
+                if "opamp" in spice.lower():
+                    f.write("* Op-amp behavioral model\n")
+                    f.write(_OPAMP)
+                if re.search(r'\bD\w*\b', spice):
+                    f.write(_DIODE)
+                # 电路网表
+                f.write(spice + "\n")
+                # 分析命令
                 if ".op" not in spice.lower() and ".ac" not in spice.lower() \
                    and ".tran" not in spice.lower():
                     f.write(".op\n")
-                f.write(spice + "\n")
                 f.write(".end\n")
                 cir_path = f.name
 
