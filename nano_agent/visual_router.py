@@ -148,7 +148,7 @@ _EXACT_ROUTES: list[tuple[str, str, dict]] = [
      "bjt|mosfet|jfet|整流|rectifier|稳压|regulator|"
      "LC谐振|并联谐振|串联谐振|偏置|biasing|分压|"
      "共模|CMRR",
-     "draw_analog", {}),
+     "draw_analog_svg", {}),
     # 系统框图 / 信号链 (RF、混合信号等)
     ("系统框图|block.*diagram|信号链|signal.*chain|rf.*chain|"
      "rf.*front|混频器|mixer|低噪放|lna|中频|if.*signal|"
@@ -158,7 +158,7 @@ _EXACT_ROUTES: list[tuple[str, str, dict]] = [
     # 通用电路 (兜底)
     ("电路|原理图|schematic|circuit|电路图|接线图|电路设计|"
      "电子电路|pcb|布线",
-     "draw_analog", {}),
+     "draw_analog_svg", {}),
     # AI 图片
     ("照片|photo|艺术|art|画一只|画个猫|画只|画张|画一幅|"
      "realistic|digital art|油画|水彩|素描|卡通|anime|插画",
