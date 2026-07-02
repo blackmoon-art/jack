@@ -170,82 +170,48 @@ class AnalogSVG:
     # ═══════════ 布局 ═══════════
 
     def _layout(self, comps):
-        """信号流布局：从信号源出发，沿信号路径分配列和行。"""
-        # 构建邻接关系
-        adj = {}
-        for c in comps:
+        """网格布局：每个元件独立位置，通过节点名连接。
+
+        不需要拓扑分析——SPICE netlist 本身不包含布局信息。
+        元件按顺序排在网格中，相同节点名的引脚用线连接。
+        """
+        COLS = 3  # 每行最多 3 个元件
+        nodes = {}    # node_id → (x, y)
+        layout = {}   # comp_name → (x, y, orient)
+        edges = []    # [(node_a, node_b)]
+        node_edges = set()
+
+        # 逐元件分配位置
+        for i, c in enumerate(comps):
+            col = i % COLS
+            row = i // COLS
+            cx = 120 + col * self.COL_GAP
+            cy = 80 + row * self.ROW_GAP
+            layout[c["name"]] = (cx, cy, "h")
+
+            # 记录该元件连接的节点
             nids = [self._node_id(n) for n in c["nodes"]]
-            for i in range(len(nids)):
-                for j in range(i + 1, len(nids)):
-                    adj.setdefault(nids[i], set()).add(nids[j])
-                    adj.setdefault(nids[j], set()).add(nids[i])
+            for nid in nids:
+                if nid not in nodes:
+                    # 新节点：放在元件附近
+                    if nid == 0:
+                        nodes[nid] = (cx, cy + 30)
+                    else:
+                        nodes[nid] = (cx, cy)
+            for i2 in range(len(nids)):
+                for j2 in range(i2 + 1, len(nids)):
+                    edge = tuple(sorted([nids[i2], nids[j2]]))
+                    node_edges.add(edge)
 
-        if not adj:
-            return {}, {}, [], 200, 100
+        # 节点 0 放底部
+        if 0 in nodes:
+            max_y = max(y for _, y, _ in layout.values()) if layout else 100
+            nodes[0] = (nodes[0][0], max_y + 80)
 
-        # 找信号源节点（连接 V 或 I 元件的非 0 节点）
-        src_nodes = set()
-        for c in comps:
-            if c["type"] in ("vsource", "isource"):
-                for n in c["nodes"]:
-                    nid = self._node_id(n)
-                    if nid != 0:
-                        src_nodes.add(nid)
-
-        # 从信号源开始 BFS 分层
-        col = {}
-        queue = list(src_nodes) if src_nodes else [min(adj.keys())]
-        for s in queue:
-            col[s] = 0
-        while queue:
-            u = queue.pop(0)
-            for v in adj.get(u, set()):
-                if v not in col and v != 0:
-                    col[v] = col.get(u, 0) + 1
-                    queue.append(v)
-        # 节点 0 放最后一列
-        max_c = max(col.values()) if col else 0
-        if 0 in adj:
-            col[0] = max_c + 1
-
-        # 每列内按度数排序（度数高的放中间）
-        cols = {}
-        for n, c in col.items():
-            cols.setdefault(c, []).append(n)
-        row = {}
-        r = 0
-        for c in sorted(cols.keys()):
-            nodes_in_col = sorted(cols[c], key=lambda n: len(adj.get(n, set())), reverse=True)
-            for n in nodes_in_col:
-                row[n] = r
-                r += 1
-
-        # 节点坐标
-        nodes = {}
-        for n in col:
-            nodes[n] = (60 + col[n] * self.COL_GAP, 50 + row[n] * self.ROW_GAP)
-
-        # 元件放在两节点之间
-        layout = {}
-        edges = []
-        for c in comps:
-            nids = [self._node_id(n) for n in c["nodes"]]
-            valid = [n for n in nids if n in nodes]
-            if len(valid) >= 2:
-                a, b = valid[0], valid[1]
-                edges.append((a, b))
-                x = (nodes[a][0] + nodes[b][0]) / 2
-                y = (nodes[a][1] + nodes[b][1]) / 2
-                dx = abs(nodes[a][0] - nodes[b][0])
-                dy = abs(nodes[a][1] - nodes[b][1])
-                # 竖直元件（如 VCC 到 GND）：水平放置
-                orient = "h" if dy > dx * 1.5 else "h"
-                layout[c["name"]] = (x, y, orient)
-            elif len(valid) == 1:
-                layout[c["name"]] = (nodes[valid[0]][0] + 40, nodes[valid[0]][1], "h")
-
-        svg_w = (max(col.values()) + 2) * self.COL_GAP
-        svg_h = (max(row.values()) + 2) * self.ROW_GAP
+        edges = list(node_edges)
+        svg_w = (COLS + 0) * self.COL_GAP + 60
+        max_r = (len(comps) - 1) // COLS if comps else 0
+        svg_h = (max_r + 2) * self.ROW_GAP + 60
         return nodes, layout, edges, max(200, svg_w), max(100, svg_h)
 
     @staticmethod
