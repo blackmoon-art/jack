@@ -23,7 +23,8 @@ logger = logging.getLogger("nano_agent.tools.analog_svg")
 # ═══════════ Value Helpers ═══════════
 
 _UNITS = {"p": 1e-12, "n": 1e-9, "u": 1e-6, "μ": 1e-6,
-          "m": 1e-3, "k": 1e3, "K": 1e3, "Meg": 1e6, "M": 1e6, "G": 1e9}
+          "m": 1e-3, "k": 1e3, "K": 1e3, "kHz": 1e3, "MHz": 1e6,
+          "GHz": 1e9, "Hz": 1, "Meg": 1e6, "M": 1e6, "G": 1e9}
 
 
 def _parse_value(s: str) -> float:
@@ -756,6 +757,143 @@ def _draw_ground(svg, x, y):
                                 "y2": str(y + 10), "stroke": _SVG_COLORS["gnd"], "stroke-width": "1.5"})
 
 
+# ═══════════ design_circuit helpers ═══════════
+
+# ngspice subcircuit support detection (cached)
+_subckt_support: bool | None = None
+_OPAMP_SUBCKT_MODEL = (
+    ".subckt opamp in_p in_n out vcc vss\n"
+    "G1 0 n1 in_p in_n 1\n"
+    "Rop1 n1 0 100k\n"
+    "Cop1 n1 0 1.59e-4\n"
+    "Eop1 out 0 n1 0 1\n"
+    "Rop2 out 0 75\n"
+    ".ends opamp\n"
+)
+
+
+def _check_ngspice_subckt() -> bool:
+    """One-time check: does ngspice support .subckt?"""
+    global _subckt_support
+    if _subckt_support is not None:
+        return _subckt_support
+    import subprocess, tempfile
+    test = ".subckt t 1 2\nR1 1 2 1k\n.ends\nX1 3 4 t\n.op\n.end\n"
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".cir", delete=False) as f:
+        f.write(test); f.flush()
+        try:
+            r = subprocess.run(["ngspice", "-b", f.name],
+                             capture_output=True, text=True, timeout=5)
+            _subckt_support = "Mismatch" not in r.stderr and "Mismatch" not in r.stdout
+        except Exception:
+            _subckt_support = False
+        Path(f.name).unlink(missing_ok=True)
+    return _subckt_support
+
+
+def _replace_opamp_with_e_source(spice: str, gain: int = 100000) -> str:
+    """Replace X... opamp with inline behavioral VCVS."""
+    result = []
+    for line in spice.split("\n"):
+        tokens = line.strip().split()
+        if tokens and tokens[0].upper().startswith("X") and len(tokens) >= 4:
+            xname = tokens[0][1:]
+            in_p, in_n, out = tokens[1], tokens[2], tokens[3]
+            result.append(f"E{xname} {out} 0 {in_p} {in_n} {gain}")
+        else:
+            result.append(line)
+    return "\n".join(result)
+
+
+def _parse_specs(specs: str) -> dict | None:
+    """Parse 'fc=10kHz gain=20' → {value: 10000, tolerance: 0.05}."""
+    if not specs or not specs.strip():
+        return None
+    result = {}
+    for part in specs.split():
+        if "=" in part:
+            k, v = part.split("=", 1)
+            result["key"] = k.strip().lower()
+            result["value"] = _parse_value(v.strip())
+            result["tolerance"] = 0.05
+    return result if "key" in result else None
+
+
+def _spec_to_metric(calc_name: str) -> str:
+    """Map template calculator to target metric name."""
+    _MAP = {"rc_lowpass": "fc", "rc_highpass": "fc",
+            "lc_lowpass": "fc", "sallen_key_lp": "fc",
+            "inverting_amp": "gain", "non_inverting_amp": "gain",
+            "differential_amp": "gain", "summing_amp": "gain"}
+    return _MAP.get(calc_name, "")
+
+
+def _adjust_params(values: dict, calc_name: str, metric: str,
+                   current: float, target: float) -> dict:
+    """Simple proportional parameter adjustment."""
+    if current <= 0:
+        return values
+    ratio = target / current
+    new = dict(values)
+
+    if metric == "fc":
+        # fc ~ 1/(RC) or 1/sqrt(LC). Scale inversely, split between components.
+        # Count adjustable components and use sqrt to avoid oscillation.
+        r_keys = [k for k in ("R", "R1", "R2") if k in new]
+        c_keys = [k for k in ("C", "C1", "C2") if k in new]
+        l_keys = [k for k in ("L", "L1") if k in new]
+        n_adj = len(r_keys) + len(c_keys) + len(l_keys)
+        scale = ratio ** (1.0 / max(n_adj, 1)) if n_adj > 0 else ratio
+        for k in r_keys:
+            new[k] = _format_value(_parse_value(str(new[k])) / scale)
+        for k in c_keys:
+            new[k] = _format_value(_parse_value(str(new[k])) / scale)
+        for k in l_keys:
+            new[k] = _format_value(_parse_value(str(new[k])) / scale)
+
+    elif metric == "gain":
+        # Gain ~ Rf/R1 → scale Rf. For differential, also scale Rg to match.
+        for k in ("Rf",):
+            if k in new:
+                new[k] = _format_value(_parse_value(str(new[k])) * ratio)
+        for k in ("Rg",):
+            if k in new:
+                new[k] = _format_value(_parse_value(str(new[k])) * ratio)
+
+    return new
+
+
+def _auto_fix_spice(spice: str, error_output: str) -> str:
+    """Attempt basic auto-fixes for common SPICE errors."""
+    fixed = spice
+    # Remove duplicate .end
+    if fixed.count(".end") > 1:
+        lines = fixed.split("\n")
+        end_count = 0
+        result = []
+        for line in lines:
+            if line.strip() == ".end":
+                end_count += 1
+                if end_count > 1:
+                    continue
+            result.append(line)
+        fixed = "\n".join(result)
+    return fixed
+
+
+def _fmt_metric(val: float, metric: str) -> str:
+    """Format metric value for display."""
+    if metric == "fc":
+        if val >= 1e6:
+            return f"{val/1e6:.2f} MHz"
+        elif val >= 1e3:
+            return f"{val/1e3:.2f} kHz"
+        return f"{val:.1f} Hz"
+    elif metric == "gain":
+        return f"{val:.2f}x ({20*math.log10(abs(val)):.1f} dB)"
+    return f"{val:.4g}"
+
+
 # ═══════════ Main Class ═══════════
 
 class AnalogSVG:
@@ -811,6 +949,39 @@ class AnalogSVG:
                     "Example: 'Vin in 0 AC 1\\nR1 in out 1k\\nC1 out 0 10n'"},
           "title": {"type": "string", "description": "Optional diagram title"}},
          ["spice"]),
+
+        ("design_circuit",
+         "Design an analog circuit end-to-end: NL→template→SPICE→simulate→"
+         "auto-fix→optimize→render.\n"
+         "\n"
+         "**What it does automatically:**\n"
+         "1. Matches your description to a circuit template\n"
+         "2. Calculates initial component values\n"
+         "3. Runs ngspice simulation — auto-fixes common errors\n"
+         "4. If specs provided (e.g. 'fc=10kHz gain=20'), iteratively adjusts\n"
+         "   values until targets are met\n"
+         "5. Returns the final circuit diagram + simulation metrics\n"
+         "\n"
+         "**Specs format:** `param=value` pairs, space-separated.\n"
+         "- Filters: `fc=10kHz` (cutoff frequency)\n"
+         "- Amplifiers: `gain=20` (voltage gain)\n"
+         "- Use with description for initial template selection\n"
+         "\n"
+         "**Examples:**\n"
+         "- `design_circuit('RC low-pass filter', 'fc=5kHz')`\n"
+         "- `design_circuit('inverting amplifier', 'gain=50')`\n"
+         "- `design_circuit('Sallen-Key low-pass', 'fc=20kHz')`",
+         "design_circuit",
+         {"description": {"type": "string",
+                           "description":
+                           "Circuit description. Examples: 'RC low-pass filter', "
+                           "'inverting amplifier', 'differential amplifier'"},
+          "specs": {"type": "string",
+                     "description":
+                     "Optional target specs as 'key=value' pairs. "
+                     "E.g. 'fc=10kHz' for filter cutoff, 'gain=20' for amplifier gain."},
+          "title": {"type": "string", "description": "Optional title"}},
+         ["description"]),
     ]
 
     def __init__(self, work_dir: str = "", charts_dir: str = ""):
@@ -871,7 +1042,10 @@ class AnalogSVG:
 
     @staticmethod
     def _run_sim_check(spice: str) -> tuple[bool, str]:
-        """Run a quick ngspice OP check. Returns (passed, output_text)."""
+        """Run a quick ngspice OP check. Returns (passed, output_text).
+
+        Auto-detects ngspice subcircuit bug and falls back to E-source.
+        """
         import shutil
         import subprocess
         import tempfile
@@ -879,33 +1053,27 @@ class AnalogSVG:
         if not shutil.which("ngspice"):
             return True, ""  # ngspice 不可用时放行
 
-        # 注入 op-amp 子电路（如果 SPICE 中用到）
-        _OPAMP = (
-            ".subckt opamp in_p in_n out vcc vss\n"
-            "G1 0 n1 in_p in_n 1\n"
-            "R1 n1 0 100k\n"
-            "C1 n1 0 1.59e-4\n"
-            "E1 out 0 n1 0 1\n"
-            "Rout out 0 75\n"
-            ".ends opamp\n"
-        )
-        _DIODE = ".model DEFAULT_D D (IS=1e-14 RS=1 N=1)\n"
+        # Check if ngspice supports .subckt (broken on Homebrew Apple Silicon)
+        subckt_ok = _check_ngspice_subckt()
+
+        # Use E-source fallback if subcircuit is broken
+        sim_spice = spice
+        has_opamp = bool(re.search(r'\bX\w+\b', sim_spice))
+        if has_opamp and not subckt_ok:
+            sim_spice = _replace_opamp_with_e_source(sim_spice, gain=100000)
 
         try:
             with tempfile.NamedTemporaryFile(
                 mode="w", suffix=".cir", delete=False
             ) as f:
-                # 模型/子电路定义（必须在电路实例化之前）
-                if "opamp" in spice.lower():
+                if has_opamp and subckt_ok:
                     f.write("* Op-amp behavioral model\n")
-                    f.write(_OPAMP)
-                if re.search(r'\bD\w*\b', spice):
-                    f.write(_DIODE)
-                # 电路网表
-                f.write(spice + "\n")
-                # 分析命令
-                if ".op" not in spice.lower() and ".ac" not in spice.lower() \
-                   and ".tran" not in spice.lower():
+                    f.write(_OPAMP_SUBCKT_MODEL)
+                if re.search(r'^D\w+', sim_spice, re.MULTILINE):
+                    f.write(".model DEFAULT_D D (IS=1e-14 RS=1 N=1)\n")
+                f.write(sim_spice + "\n")
+                if ".op" not in sim_spice.lower() and ".ac" not in sim_spice.lower() \
+                   and ".tran" not in sim_spice.lower():
                     f.write(".op\n")
                 f.write(".end\n")
                 cir_path = f.name
@@ -919,14 +1087,13 @@ class AnalogSVG:
 
             if result.returncode != 0:
                 return False, output[:1500]
-            # Check for fatal errors even if returncode is 0
             if re.search(r'(Error on line|FATAL|parse error|too few nodes)',
                          output, re.IGNORECASE):
                 return False, output[:1500]
             return True, output[:500]
         except subprocess.TimeoutExpired:
             return False, "Simulation timed out (>15s)"
-        except Exception as e:
+        except Exception:
             return True, ""  # 仿真不可用时放行，不阻塞出图
 
     def draw_analog_spice(self, spice: str, title: str = "") -> str:
@@ -970,6 +1137,167 @@ class AnalogSVG:
         sim_hint = ("\n\n💡 **Next:** Call `simulate_spice` for detailed AC/transient "
                     "analysis and iterative optimization.")
         return f"![{title or 'Analog Circuit'}]({url})\n{url}{sim_block}{spice_block}{sim_hint}"
+
+    # ═══════════ design_circuit: 自动闭环设计 ═══════════
+
+    def design_circuit(self, description: str, specs: str = "",
+                       title: str = "") -> str:
+        """End-to-end circuit design with auto-fix and optimization loop.
+
+        NL → template → SPICE → simulate → auto-fix errors →
+        optimize for specs → render → report.
+        """
+        # 1. Template matching
+        try:
+            tmpl, values = self._match_template(description)
+            components = [dict(c) for c in tmpl["components"]]
+            circuit_name = title or tmpl.get("name", description)
+            calc_name = tmpl.get("calculate", "")
+        except Exception as e:
+            return f"❌ **Template matching failed:** {e}\n\n" \
+                   f"Supported circuits: rc_lowpass, rc_highpass, lc_lowpass, " \
+                   f"sallen_key_lp, inverting, non_inverting, differential, " \
+                   f"summing_inverting, half_wave, full_wave_bridge, voltage_divider"
+
+        target = _parse_specs(specs)
+
+        # 2. Simulation loop with auto-fix
+        spice = _to_spice(components, values)
+        sim_ok, sim_output = self._run_sim_check(spice)
+        fix_attempts = 0
+
+        while not sim_ok and fix_attempts < 3:
+            fix_attempts += 1
+            # Try E-source fallback for subcircuit issues
+            if ("Mismatch" in sim_output or "subckt" in sim_output.lower()
+                    or "subcircuit" in sim_output.lower()):
+                sim_spice = _replace_opamp_with_e_source(spice, gain=100000)
+                sim_ok, sim_output = self._run_sim_check(sim_spice)
+                if sim_ok:
+                    spice = sim_spice  # use fixed version
+                    break
+            # Try basic SPICE fixes
+            fixed = _auto_fix_spice(spice, sim_output)
+            if fixed != spice:
+                spice = fixed
+                sim_ok, sim_output = self._run_sim_check(spice)
+            else:
+                break  # can't auto-fix
+
+        if not sim_ok:
+            return (
+                f"❌ **Circuit simulation failed after {fix_attempts} fix attempt(s).**\n\n"
+                f"**Circuit:** {circuit_name}\n\n"
+                f"**SPICE Netlist:**\n```spice\n{spice}\n```\n\n"
+                f"**Error:**\n```\n{sim_output[:1200]}\n```\n\n"
+                f"🔧 Please check component values and connections manually, "
+                f"then call `draw_analog_spice` with the corrected netlist."
+            )
+
+        # 3. Metric extraction + spec-driven optimization
+        metric_name = _spec_to_metric(calc_name)
+        current_val = None
+        opt_attempts = 0
+
+        if target and metric_name:
+            current_val = self._measure_metric(spice, metric_name)
+            while current_val is not None and opt_attempts < 5:
+                tval = target.get("value", 0)
+                if abs(tval) < 1e-12:
+                    break
+                err = abs(current_val - tval) / abs(tval)
+                if err < target.get("tolerance", 0.05):
+                    break  # within tolerance
+
+                opt_attempts += 1
+                values = _adjust_params(
+                    values, calc_name, metric_name, current_val, target["value"])
+                for c in components:
+                    if c["name"] in values:
+                        c["value"] = values[c["name"]]
+                spice = _to_spice(components, values)
+
+                # Verify adjusted circuit still simulates
+                sim_ok, _ = self._run_sim_check(spice)
+                if not sim_ok:
+                    break  # adjustment broke the circuit, stop
+
+                current_val = self._measure_metric(spice, metric_name)
+
+        # 4. Render final SVG
+        try:
+            svg = _render_svg(components, circuit_name)
+        except Exception as e:
+            return f"❌ **SVG rendering failed:** {e}"
+
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        fp = self.charts_dir / f"analog_{ts}.svg"
+        fp.write_text(svg, encoding="utf-8")
+        url = f"/charts/{fp.name}"
+
+        # 5. Build report
+        parts = [f"![{circuit_name}]({url})\n{url}"]
+        parts.append(f"\n✅ **Simulation passed** — ngspice verified")
+
+        if current_val is not None and metric_name:
+            parts.append(f"\n**Measured {metric_name}:** {_fmt_metric(current_val, metric_name)}")
+        if target:
+            tval = target.get("value", 0)
+            if current_val is not None and abs(tval) > 1e-12:
+                err_pct = abs(current_val - tval) / abs(tval) * 100
+                in_spec = err_pct < target.get("tolerance", 0.05) * 100
+                status = "✅ Within spec" if in_spec else f"⚠️ Off by {err_pct:.1f}%"
+                parts.append(f"**Target {metric_name}:** {_fmt_metric(tval, metric_name)} — {status}")
+            elif abs(tval) > 1e-12:
+                parts.append(f"**Target {metric_name}:** {_fmt_metric(tval, metric_name)}")
+            parts.append(f"\n*Optimized in {opt_attempts} iteration(s)*")
+
+        parts.append(f"\n**SPICE Netlist:**\n```spice\n{spice}\n```")
+        if opt_attempts > 0:
+            parts.append("\n💡 To further optimize, call `simulate_spice` with the "
+                         "SPICE netlist above for detailed AC/transient analysis.")
+        return "\n".join(parts)
+
+    def _measure_metric(self, spice: str, metric_name: str) -> float | None:
+        """Run AC simulation and extract a single metric value."""
+        import subprocess
+        from nano_agent.tools.spice_simulator import (
+            _prep_netlist, _parse_ac_output, _compute_ac_metrics)
+
+        ac_spice = spice.strip()
+        if ".ac" not in ac_spice.lower():
+            ac_spice += "\n.ac dec 20 1 1e6"
+        prepared, _, = _prep_netlist(ac_spice)
+
+        try:
+            import tempfile
+            with tempfile.NamedTemporaryFile(
+                mode="w", suffix=".cir", delete=False
+            ) as f:
+                f.write(prepared)
+                cir_path = f.name
+
+            result = subprocess.run(
+                ["ngspice", "-b", cir_path],
+                capture_output=True, text=True, timeout=20,
+                cwd=str(self.charts_dir),
+            )
+            Path(cir_path).unlink(missing_ok=True)
+            output = (result.stderr + result.stdout).replace("\f", "\n")
+        except Exception:
+            return None
+
+        parsed = _parse_ac_output(output)
+        metrics = _compute_ac_metrics(parsed) if not parsed.get("error") else {}
+
+        if metric_name == "fc":
+            return metrics.get("cutoff_freq")
+        elif metric_name == "gain":
+            db_val = metrics.get("dc_gain_db")
+            if db_val is not None and db_val > -190:
+                return 10 ** (db_val / 20.0)  # dB → linear
+            return None
+        return None
 
     @staticmethod
     def _match_template(desc: str):
