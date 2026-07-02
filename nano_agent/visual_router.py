@@ -119,17 +119,15 @@ _EXACT_ROUTES: list[tuple[str, str, dict]] = [
     # 逻辑门 SVG (数字电路首选)
     ("半加器|全加器|逻辑电路|logic.*circuit|half.*adder|full.*adder|"
      "真值表|truth.*table|逻辑表达式|boolean.*expr|"
-     "and.*gate|or.*gate|not.*gate|nand.*gate|nor.*gate|xor.*gate|"
-     "选择器|数据选择器|多路选择器|多路复用|mux|demux|"
-     "译码器|decoder|编码器|encoder|alu|算术逻辑|"
-     "触发器|flip.flop|dff|latch|寄存器|"
-     "fifo|异步.*fifo|async.*fifo|gray.*code|格雷码|同步器|synchronizer|"
-     "计数器|counter|移位|shift|锁存器|数字滤波|ram|双口|dpram|三态|tristate",
+     "and.*gate|or.*gate|not.*gate|nand.*gate|nor.*gate|xor.*gate",
      "draw_logic", {}),
     # 数字电路 (fallback)
-    ("数字电路|门电路|digital.*circuit|logic.*gate|"
-     "and gate|nand gate|nor gate|xor gate|半加器|全加器|"
-     "clock.*domain",
+    ("数字电路|逻辑门|门电路|digital.*circuit|logic.*gate|"
+     "and gate|nand gate|nor gate|xor gate|半加器|全加器|触发器|"
+     "flip.flop|dff|latch|寄存器|译码器|多路复用|encoder|decoder|mux|"
+     "fifo|异步.*fifo|async.*fifo|gray.*code|格雷码|同步器|synchronizer|两级同步|"
+     "clock.*domain|counter|ram|双口|dpram|demux|三态|tristate|"
+     "alu|算术逻辑|移位|shift|编码器|锁存器|数字滤波",
      "draw_digital", {}),
     # 模拟电路
     ("模拟电路|analog.*circuit|"
@@ -150,17 +148,17 @@ _EXACT_ROUTES: list[tuple[str, str, dict]] = [
      "bjt|mosfet|jfet|整流|rectifier|稳压|regulator|"
      "LC谐振|并联谐振|串联谐振|偏置|biasing|分压|"
      "共模|CMRR",
-     "draw_analog_svg", {}),
+     "draw_analog", {}),
     # 系统框图 / 信号链 (RF、混合信号等)
     ("系统框图|block.*diagram|信号链|signal.*chain|rf.*chain|"
      "rf.*front|混频器|mixer|低噪放|lna|中频|if.*signal|"
      "fmcw|radar.*if|雷达.*中频|rf.*receiver|发射机|transmitter|"
      "接收机|receiver.*chain",
      "draw_block", {}),
-    # 通用电路 — 不兜底，交给 LLM 选择工具
-    # 如果 Layer 1 没命中模拟/数字/框图的具体关键词，不做自动路由。
-    # LLM 会看到 draw_analog_svg / draw_logic / draw_digital 三个工具，
-    # 根据上下文自行选择最合适的。
+    # 通用电路 (兜底)
+    ("电路|原理图|schematic|circuit|电路图|接线图|电路设计|"
+     "电子电路|pcb|布线",
+     "draw_analog", {}),
     # AI 图片
     ("照片|photo|艺术|art|画一只|画个猫|画只|画张|画一幅|"
      "realistic|digital art|油画|水彩|素描|卡通|anime|插画",
@@ -323,10 +321,6 @@ def _intent_match(task: str, task_lower: str) -> tuple[str, dict] | None:
     return None
 
 
-# ── 预编译：is_visual_request 宽松检查，避免重复遍历 _INTENT_PATTERNS ──
-_LOOSE_VISUAL_KEYWORD = re.compile(r"画|图|plot|chart|graph|draw|visual|可视化|展示")
-
-
 def is_visual_request(task: str) -> bool:
     """快速判断任务是否是画图请求。委托给 route_visual 避免匹配逻辑重复。
 
@@ -334,13 +328,12 @@ def is_visual_request(task: str) -> bool:
     """
     if route_visual(task) is not None:
         return True
+    # 补充：纯意图动词 + 画图暗示词
     task_lower = task.lower()
-    # 没有画图暗示词 → 快速返回，避免遍历 _INTENT_PATTERNS
-    if not _LOOSE_VISUAL_KEYWORD.search(task_lower):
-        return False
     for verb_pat, _, _, _ in _INTENT_PATTERNS:
         if re.search(verb_pat, task_lower):
-            return True
+            if re.search(r"画|图|plot|chart|graph|draw|visual|可视化|展示", task_lower):
+                return True
     return False
 
 
