@@ -193,16 +193,25 @@ class LogicSVG:
                 visiting.add(gi)
                 d = max((get_depth(produced[i]) for i in gates[gi]["inputs"] if i in produced), default=0) + 1
                 visiting.discard(gi); depth[gi] = d; return d
+            MAX_PER_COL = 4  # 每列最多门数，超出则拆分子列
             for i in range(len(gates)): get_depth(i)
             for i, g in enumerate(gates):
                 gate_cols.setdefault(depth[i], []).append(i)
+            # 拆分拥挤列: depth → list of sub-columns
+            gate_subcols: dict[int, list] = {}  # depth → [[gi, ...], [gi, ...]]
+            for d in sorted(gate_cols):
+                items = gate_cols[d]
+                for chunk_start in range(0, len(items), MAX_PER_COL):
+                    chunk = items[chunk_start:chunk_start + MAX_PER_COL]
+                    gate_subcols.setdefault(d, []).append(chunk)
             gate_max_in_col = max(len(v) for v in gate_cols.values()) if gate_cols else 1
-            gate_y_end = 50 + gate_max_in_col * self.ROW_GAP + 20
+            gate_y_end = 50 + min(gate_max_in_col, MAX_PER_COL) * self.ROW_GAP + 20
 
         module_rows = (len(modules) + 2) // 3 if modules else 0
         module_height = module_rows * (self.MOD_H + 60)
 
-        svg_w = max(800, (len(gate_cols) + 1) * self.COL_GAP + 160,
+        total_subcols = sum(len(v) for v in gate_subcols.values()) if gate_subcols else 0
+        svg_w = max(800, (total_subcols + 1) * self.COL_GAP + 160,
                     (((len(modules) + 2) // 3 + 1) * (self.MOD_W + 80) + 160) if modules else 0)
         svg_h = max(400, gate_y_end + module_height + 40)
         svg = ET.Element("svg", {"xmlns":"http://www.w3.org/2000/svg",
@@ -245,25 +254,27 @@ class LogicSVG:
 
             # 第一遍：放置门并收集每个输入→门目标列表
             input_targets = {sig: [] for sig in all_inputs}  # sig → [(dst_x, dst_y)]
-            for d in sorted(gate_cols):
-                gx = 80 + d * self.COL_GAP
-                for ri, gi in enumerate(gate_cols[d]):
-                    gy = y + ri * self.ROW_GAP
-                    placed[gi] = (gx, gy)
-                    nin = len(gates[gi]["inputs"])
-                    for ii, inp in enumerate(gates[gi]["inputs"]):
-                        iy_off = (ii - (nin - 1) / 2) * self.IY
-                        dst_x = gx - self.W // 2 - self.PIN
-                        dst_y = gy + iy_off
-                        src_idx = produced.get(inp)
-                        if src_idx is not None and src_idx in placed:
-                            # 门→门连线（直接画，不重叠）
-                            src = placed[src_idx]
-                            self._draw_wire(svg,
-                                            src[0] + self.W // 2 + self.PIN, src[1],
-                                            dst_x, dst_y)
-                        elif inp in input_pin_pos:
-                            input_targets[inp].append((dst_x, dst_y))
+            col_idx = 0  # 按子列展开后的列索引
+            for d in sorted(gate_subcols):
+                for sub_col in gate_subcols[d]:
+                    gx = 80 + col_idx * self.COL_GAP
+                    for ri, gi in enumerate(sub_col):
+                        gy = y + ri * self.ROW_GAP
+                        placed[gi] = (gx, gy)
+                        nin = len(gates[gi]["inputs"])
+                        for ii, inp in enumerate(gates[gi]["inputs"]):
+                            iy_off = (ii - (nin - 1) / 2) * self.IY
+                            dst_x = gx - self.W // 2 - self.PIN
+                            dst_y = gy + iy_off
+                            src_idx = produced.get(inp)
+                            if src_idx is not None and src_idx in placed:
+                                src = placed[src_idx]
+                                self._draw_wire(svg,
+                                                src[0] + self.W // 2 + self.PIN, src[1],
+                                                dst_x, dst_y)
+                            elif inp in input_pin_pos:
+                                input_targets[inp].append((dst_x, dst_y))
+                    col_idx += 1
 
             # 第二遍：画主输入→门连线（trunk+branch 避免重叠）
             for sig, targets in input_targets.items():
@@ -289,13 +300,16 @@ class LogicSVG:
                             jy = py
                         self._draw_wire(svg, jx, jy, tx, ty)
 
-            # 第三遍：画门体
-            for d in sorted(gate_cols):
-                gx = 80 + d * self.COL_GAP
-                for ri, gi in enumerate(gate_cols[d]):
-                    gy = y + ri * self.ROW_GAP
-                    self._draw_gate(svg, gx, gy, gates[gi]["type"], "")
-                    gate_outputs[gates[gi]["output"]] = (gx + self.W // 2 + self.PIN, gy)
+            # 第三遍：画门体（按子列遍历）
+            col_idx = 0
+            for d in sorted(gate_subcols):
+                for sub_col in gate_subcols[d]:
+                    gx = 80 + col_idx * self.COL_GAP
+                    for ri, gi in enumerate(sub_col):
+                        gy = y + ri * self.ROW_GAP
+                        self._draw_gate(svg, gx, gy, gates[gi]["type"], "")
+                        gate_outputs[gates[gi]["output"]] = (gx + self.W // 2 + self.PIN, gy)
+                    col_idx += 1
 
             # ── 主输入标签和端口点 ──
             for sig, (px, py) in input_pin_pos.items():
