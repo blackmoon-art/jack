@@ -295,7 +295,8 @@ def _to_spice(components: list[dict], values: dict) -> str:
         # Fill value placeholder
         val = c["value"]
         if val == "?":
-            val = values.get(c["name"], "1k")
+            # Try exact name first ("R1"), then type prefix ("R")
+            val = values.get(c["name"], values.get(c["name"].rstrip("0123456789"), "1k"))
         c["filled_value"] = val
         c["filled_model"] = c.get("model", "")
 

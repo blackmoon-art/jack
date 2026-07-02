@@ -21,6 +21,7 @@ O-O-D-A 阶段:
 
 import json
 import logging
+import re as _re_verify
 import threading
 import time as _time
 import uuid
@@ -325,38 +326,38 @@ class Agent:
         if tool_name not in self._CIRCUIT_TOOLS:
             return None
 
-        # 提取 SPICE / DSL 代码
-        import re as _re_verify
-        code = result
-        # 优先提取代码块
-        m = _re_verify.search(
-            r'```(?:spice|netlist)?\s*\n(.*?)\n```', result, re.DOTALL | re.IGNORECASE
-        )
-        if m:
-            code = m.group(1).strip()
-        # 截断过长的代码
-        code = code[:2000]
-
-        if len(code) < 10:
-            return None  # 没有代码可审查
-
-        # 从 messages 中提取用户原始任务
-        task = ""
-        for msg in reversed(messages):
-            if msg.get("role") == "user":
-                content = msg.get("content", "")
-                # 去掉注入的 hint
-                if "[Visual hint:" in content:
-                    content = content.split("[Visual hint:")[0].strip()
-                if content:
-                    task = content[:500]
-                    break
-
-        if not task:
-            return None
-
-        prompt = self._CIRCUIT_VERIFY_PROMPT.format(task=task, code=code)
         try:
+            # 提取 SPICE / DSL 代码
+            code = result
+            # 优先提取代码块
+            m = _re_verify.search(
+                r'```(?:spice|netlist)?\s*\n(.*?)\n```', result,
+                _re_verify.DOTALL | _re_verify.IGNORECASE
+            )
+            if m:
+                code = m.group(1).strip()
+            # 截断过长的代码
+            code = code[:2000]
+
+            if len(code) < 10:
+                return None  # 没有代码可审查
+
+            # 从 messages 中提取用户原始任务
+            task = ""
+            for msg in reversed(messages):
+                if msg.get("role") == "user":
+                    content = msg.get("content", "")
+                    # 去掉注入的 hint
+                    if "[Visual hint:" in content:
+                        content = content.split("[Visual hint:")[0].strip()
+                    if content:
+                        task = content[:500]
+                        break
+
+            if not task:
+                return None
+
+            prompt = self._CIRCUIT_VERIFY_PROMPT.format(task=task, code=code)
             resp = self.llm.chat(
                 messages=[{"role": "user", "content": prompt}],
                 tools=[],
@@ -365,7 +366,7 @@ class Agent:
             )
             verdict = resp.get("text", "").strip().upper()
         except Exception:
-            return None  # LLM 不可用时不拦截
+            return None  # LLM 不可用或解析失败时不拦截
 
         if "FAIL" in verdict:
             logger.warning(f"[Circuit Verify] FAILED for {tool_name}: "
@@ -385,7 +386,6 @@ class Agent:
             return ""
 
         # 从结果中提取图片路径
-        import re as _re_verify
         m = _re_verify.search(r'/charts/[\w.-]+\.(?:png|jpg|jpeg|gif|webp|svg)', result)
         if not m:
             return ""

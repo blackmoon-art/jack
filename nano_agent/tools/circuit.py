@@ -72,6 +72,9 @@ _BLOCK_COMPS = (
     "combiner", "splitter", "rf",
     # 通用
     "block", "port", "terminal",
+    # 数字框图常用
+    "ram", "fifo", "dpram", "mux", "comparator",
+    "counter", "register", "sync", "ctrl", "fsm",
     # 基础元件 (信号链中常用)
     "resistor", "r", "capacitor", "c", "inductor", "l",
     "opamp", "ground", "gnd", "ac", "v", "battery",
