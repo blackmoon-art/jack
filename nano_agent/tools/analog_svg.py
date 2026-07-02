@@ -66,6 +66,7 @@ _CIRCUIT_TEMPLATES = {
     # ── Filters ──
     ("filter", "rc_lowpass"): {
         "name": "RC Low-Pass Filter",
+        "keywords_cn": ["RC低通", "rc低通", "低通滤波器", "低通滤波"],
         "guide": "A simple first-order passive RC low-pass filter.",
         "components": [
             {"type": "V", "name": "Vin", "nodes": ["in", "0"], "value": "AC 1"},
@@ -77,6 +78,7 @@ _CIRCUIT_TEMPLATES = {
     },
     ("filter", "rc_highpass"): {
         "name": "RC High-Pass Filter",
+        "keywords_cn": ["RC高通", "rc高通", "高通滤波器", "高通滤波"],
         "guide": "A simple first-order passive RC high-pass filter.",
         "components": [
             {"type": "V", "name": "Vin", "nodes": ["in", "0"], "value": "AC 1"},
@@ -88,6 +90,7 @@ _CIRCUIT_TEMPLATES = {
     },
     ("filter", "lc_lowpass"): {
         "name": "LC Low-Pass Filter",
+        "keywords_cn": ["LC低通", "lc低通", "LC滤波", "lc滤波"],
         "guide": "A second-order passive LC low-pass filter.",
         "components": [
             {"type": "V", "name": "Vin", "nodes": ["in", "0"], "value": "AC 1"},
@@ -99,6 +102,7 @@ _CIRCUIT_TEMPLATES = {
     },
     ("filter", "sallen_key_lp"): {
         "name": "Sallen-Key Low-Pass Filter",
+        "keywords_cn": ["Sallen-Key", "sallen key", "有源低通", "有源滤波"],
         "guide": "A second-order active low-pass filter using an op-amp.",
         "components": [
             {"type": "V", "name": "Vin", "nodes": ["in", "0"], "value": "AC 1"},
@@ -114,6 +118,7 @@ _CIRCUIT_TEMPLATES = {
     # ── Amplifiers ──
     ("amplifier", "inverting"): {
         "name": "Inverting Amplifier",
+        "keywords_cn": ["反相放大", "反相放大器", "反向放大", "反比例放大", "inverting"],
         "guide": "An inverting op-amp amplifier. Gain = -Rf/R1.",
         "components": [
             {"type": "V", "name": "Vin", "nodes": ["in", "0"], "value": "AC 1"},
@@ -126,6 +131,8 @@ _CIRCUIT_TEMPLATES = {
     },
     ("amplifier", "non_inverting"): {
         "name": "Non-Inverting Amplifier",
+        "keywords_cn": ["同相放大", "同相放大器", "正向放大", "正比例放大", "non.inverting"],
+        "keywords_cn": ["同相放大", "同相放大器", "正向放大", "正比例放大", "non.inverting"],
         "guide": "A non-inverting op-amp amplifier. Gain = 1 + Rf/R1.",
         "components": [
             {"type": "V", "name": "Vin", "nodes": ["in", "0"], "value": "AC 1"},
@@ -138,6 +145,7 @@ _CIRCUIT_TEMPLATES = {
     },
     ("amplifier", "differential"): {
         "name": "Differential Amplifier",
+        "keywords_cn": ["差分放大", "差分放大器", "差动放大", "减法器", "differential"],
         "guide": "A differential op-amp amplifier. Vout = (Rf/R1) * (V2 - V1).",
         "components": [
             {"type": "V", "name": "V1", "nodes": ["in1", "0"], "value": "AC 1"},
@@ -153,6 +161,7 @@ _CIRCUIT_TEMPLATES = {
     },
     ("amplifier", "summing_inverting"): {
         "name": "Inverting Summing Amplifier",
+        "keywords_cn": ["求和放大", "加法器", "加法放大", "summing"],
         "guide": "Sums multiple inputs with inversion. Vout = -Rf*(V1/R1 + V2/R2 + V3/R3).",
         "components": [
             {"type": "V", "name": "V1", "nodes": ["in1", "0"], "value": "AC 1"},
@@ -170,6 +179,7 @@ _CIRCUIT_TEMPLATES = {
     # ── Rectifiers ──
     ("rectifier", "half_wave"): {
         "name": "Half-Wave Rectifier",
+        "keywords_cn": ["半波整流", "半波"],
         "guide": "Converts AC to pulsating DC using a single diode.",
         "components": [
             {"type": "V", "name": "Vin", "nodes": ["in", "0"], "value": "AC 1"},
@@ -181,6 +191,7 @@ _CIRCUIT_TEMPLATES = {
     },
     ("rectifier", "full_wave_bridge"): {
         "name": "Full-Wave Bridge Rectifier",
+        "keywords_cn": ["全波整流", "桥式整流", "整流桥", "全桥"],
         "guide": "Converts AC to DC using a 4-diode bridge.",
         "components": [
             {"type": "V", "name": "Vin", "nodes": ["ac1", "0"], "value": "AC 1"},
@@ -197,6 +208,7 @@ _CIRCUIT_TEMPLATES = {
     # ── Voltage Divider ──
     ("divider", "voltage_divider"): {
         "name": "Voltage Divider",
+        "keywords_cn": ["分压", "分压器", "分压电路", "电压分压"],
         "guide": "Divides input voltage: Vout = Vin * R2/(R1+R2).",
         "components": [
             {"type": "V", "name": "Vin", "nodes": ["in", "0"], "value": "AC 1"},
@@ -861,6 +873,7 @@ class AnalogSVG:
         for (cat, sub), tmpl in _CIRCUIT_TEMPLATES.items():
             score = 0
             name_lower = tmpl["name"].lower()
+            # English keywords: sub name and category
             if sub.replace("_", " ") in desc_lower or sub in desc_lower:
                 score += 3
             for word in name_lower.split():
@@ -868,6 +881,10 @@ class AnalogSVG:
                     score += 1
             if cat in desc_lower:
                 score += 1
+            # Chinese keywords: high-weight match
+            for kw in tmpl.get("keywords_cn", []):
+                if kw in desc_lower:
+                    score += 5
             if score > 0:
                 matches.append((score, cat, sub))
 
