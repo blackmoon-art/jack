@@ -527,7 +527,8 @@ class SpiceRenderer:
         """Generate schemdraw Drawing and render to SVG string."""
         from schemdraw import Drawing
 
-        d = Drawing()
+        # Native SVG backend — avoids matplotlib, cleaner SVG output
+        d = Drawing(canvas='svg', unit=3)
         comps = graph["components"]
         main_chain = layout["main_chain"]
         branches = layout["branches"]

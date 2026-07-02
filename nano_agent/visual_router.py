@@ -129,7 +129,7 @@ _EXACT_ROUTES: list[tuple[str, str, dict]] = [
      "clock.*domain|counter|ram|双口|dpram|demux|三态|tristate|"
      "alu|算术逻辑|移位|shift|编码器|锁存器|数字滤波",
      "draw_logic", {}),
-    # 模拟电路
+    # 模拟电路 → SPICE + schemdraw SVG
     ("模拟电路|analog.*circuit|"
      "滤波器|filter.*circuit|运放|运放电路|放大电路|有源滤波|无源滤波|"
      "sallen.key|multiple.feedback|状态变量|biquad|"
@@ -148,17 +148,17 @@ _EXACT_ROUTES: list[tuple[str, str, dict]] = [
      "bjt|mosfet|jfet|整流|rectifier|稳压|regulator|"
      "LC谐振|并联谐振|串联谐振|偏置|biasing|分压|"
      "共模|CMRR",
-     "draw_analog", {}),
-    # 系统框图 / 信号链 (RF、混合信号等)
+     "draw_analog_spice", {}),
+    # 系统框图 / 信号链 → SPICE + schemdraw SVG
     ("系统框图|block.*diagram|信号链|signal.*chain|rf.*chain|"
      "rf.*front|混频器|mixer|低噪放|lna|中频|if.*signal|"
      "fmcw|radar.*if|雷达.*中频|rf.*receiver|发射机|transmitter|"
      "接收机|receiver.*chain",
-     "draw_block", {}),
-    # 通用电路 (兜底)
+     "draw_analog_spice", {}),
+    # 通用电路 (兜底) → SPICE + schemdraw SVG
     ("电路|原理图|schematic|circuit|电路图|接线图|电路设计|"
      "电子电路|pcb|布线",
-     "draw_analog", {}),
+     "draw_analog_spice", {}),
     # AI 图片
     ("照片|photo|艺术|art|画一只|画个猫|画只|画张|画一幅|"
      "realistic|digital art|油画|水彩|素描|卡通|anime|插画",
