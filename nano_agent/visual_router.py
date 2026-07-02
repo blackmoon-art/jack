@@ -327,6 +327,27 @@ _SW_SEQ_KW = re.compile(
 )
 _REGEX_META = frozenset('\\*+?[](){}|^$.|')
 
+# 电路工具集合 — 这些工具只在用户有"绘制意图"时才触发
+_CIRCUIT_TOOLS = frozenset({
+    "draw_analog_svg", "draw_analog_spice", "draw_logic",
+    "draw_digital", "draw_block", "__classify_circuit__",
+})
+
+# 绘制意图词：只有包含这些词，电路工具才会被触发
+_DRAW_INTENT_RE = re.compile(
+    r"画|绘制|画个|画张|画幅|画一下|diagram|schematic|"
+    r"电路图|原理图|框图|接线图|电路设计|layout|plot|"
+    r"\bdraw\b|\brender\b|\bgenerate\b|\bvisualize\b|"
+    r"设计.*电路|仿真.*电路|模拟.*电路|做个.*电路|"
+    r"生成.*电路|画出|帮我画",
+    re.IGNORECASE,
+)
+
+
+def _has_draw_intent(task: str) -> bool:
+    """检查任务是否有绘制/可视化意图。"""
+    return bool(_DRAW_INTENT_RE.search(task))
+
 
 def _exact_match(task_lower: str) -> tuple[str, dict] | None:
     """Layer 1: 精确关键词匹配。英文词加单词边界防子串误匹配。
@@ -334,8 +355,12 @@ def _exact_match(task_lower: str) -> tuple[str, dict] | None:
     关键词分两类：
     - 纯文本（含中文）：子串匹配
     - 正则模式（含 \\, *, +, [, ( 等元字符）：re.search 匹配
+
+    电路工具（draw_analog_spice 等）额外要求绘制意图，
+    避免 "介绍下滤波器" 之类的纯知识问答触发画图。
     """
     for keywords, tool_name, params in _EXACT_ROUTES:
+        is_circuit = tool_name in _CIRCUIT_TOOLS
         for kw in keywords.split("|"):
             kw = kw.strip()
             if not kw:
@@ -343,10 +368,14 @@ def _exact_match(task_lower: str) -> tuple[str, dict] | None:
             # 含正则元字符的规则 → 用 re.search
             if any(c in _REGEX_META for c in kw):
                 if re.search(kw, task_lower):
+                    if is_circuit and not _has_draw_intent(task_lower):
+                        continue  # 纯知识问答，跳过电路工具
                     return tool_name, dict(params)
             # 纯 ASCII 关键词：前后不能紧邻 ASCII 字母
             elif kw.isascii():
                 if _ascii_word_match(kw, task_lower):
+                    if is_circuit and not _has_draw_intent(task_lower):
+                        continue
                     return tool_name, dict(params)
             else:
                 # 中文关键词：子串匹配
@@ -354,9 +383,9 @@ def _exact_match(task_lower: str) -> tuple[str, dict] | None:
                     # "时序图"歧义消解：硬件信号 vs 软件交互
                     if kw in ("时序图", "时序", "timing diagram", "timing"):
                         if _HW_TIMING_KW.search(task_lower):
-                            # 硬件时序 → 波形图
                             return "generate_chart", {"chart_type": "waveform"}
-                        # 无硬件上下文 → 默认 mermaid sequenceDiagram
+                    if is_circuit and not _has_draw_intent(task_lower):
+                        continue  # 纯知识问答，跳过电路工具
                     return tool_name, dict(params)
     return None
 

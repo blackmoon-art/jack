@@ -657,6 +657,12 @@ def _format_result(analysis: str, success: bool, error_msg: str,
         parts.append("")
         parts.append("### ngspice Output")
         parts.append(f"```\n{output_preview[:1500]}\n```")
+        parts.append("")
+        parts.append("---")
+        parts.append("🔧 **Recovery:** Fix the SPICE errors above, then call "
+                     "`simulate_spice` again with the corrected netlist. "
+                     "After the simulation passes, use `draw_analog_spice` "
+                     "to re-render the updated circuit diagram.")
         return "\n".join(parts)
 
     # DC Operating Point results
@@ -800,10 +806,11 @@ def _format_result(analysis: str, success: bool, error_msg: str,
 
     # LLM optimization hint
     parts.append("---")
-    parts.append("💡 **Optimization loop ready:** Review the metrics above. "
-                 "If performance doesn't meet specs, modify the SPICE netlist and "
-                 "call `simulate_spice` again to verify improvements. "
-                 "Use `draw_analog_spice` to visualize the circuit.")
+    parts.append("🔄 **Iterative optimization:** If the metrics don't meet your specs:\n"
+                 "1. Modify the SPICE netlist (adjust component values)\n"
+                 "2. Call `draw_analog_spice` to re-render the circuit\n"
+                 "3. Call `simulate_spice` again to verify\n"
+                 "4. Repeat until performance targets are met")
 
     return "\n".join(parts)
 

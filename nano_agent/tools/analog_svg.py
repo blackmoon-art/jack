@@ -249,14 +249,16 @@ def _calc_differential_amp(tmpl: dict, params: dict) -> dict:
     gain = _parse_value(str(params.get("gain", "10")))
     r1 = _parse_value(str(params.get("R1", "1k")))
     rf = gain * r1
-    return {"R1": _format_value(r1), "Rf": _format_value(rf)}
+    return {"R1": _format_value(r1), "R2": _format_value(r1),
+            "Rf": _format_value(rf), "Rg": _format_value(rf)}
 
 
 def _calc_summing_amp(tmpl: dict, params: dict) -> dict:
     gain = abs(_parse_value(str(params.get("gain", "1"))))
     r1 = _parse_value(str(params.get("R1", "1k")))
     rf = gain * r1
-    return {"R1": _format_value(r1), "Rf": _format_value(rf)}
+    return {"R1": _format_value(r1), "R2": _format_value(r1),
+            "R3": _format_value(r1), "Rf": _format_value(rf)}
 
 
 def _calc_voltage_divider(tmpl: dict, params: dict) -> dict:
