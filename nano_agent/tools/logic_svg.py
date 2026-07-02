@@ -104,8 +104,8 @@ class LogicSVG:
     # SVG constants
     W, H = 80, 50
     PIN = 10
-    IY = 10
-    COL_GAP, ROW_GAP = 120, 80
+    IY = 12
+    COL_GAP, ROW_GAP = 140, 100
     MOD_W, MOD_H = 120, 80
     COLORS = {"bg": "#1a1a2e", "fg": "#e0e0e0", "grid": "#333",
               "gate_fill": "#2a2a4e", "gate_stroke": "#7c3aed",
@@ -230,39 +230,71 @@ class LogicSVG:
             for si, sig in enumerate(all_inputs):
                 input_pin_pos[sig] = (input_x, 50 + si * input_spacing)
 
-            # 记录主输出（不被任何门用作输入的输出信号）
+            # 统计每个主输入的扇出数（用于 trunk+branch 布线）
+            input_fanout = {sig: 0 for sig in all_inputs}
+            for g in gates:
+                for inp in g["inputs"]:
+                    if inp in input_fanout:
+                        input_fanout[inp] += 1
+
+            # 记录主输出
             all_outputs = sorted(set(
                 g["output"] for g in gates
                 if not any(g["output"] in g2["inputs"] for g2 in gates)
             ))
 
+            # 第一遍：放置门并收集每个输入→门目标列表
+            input_targets = {sig: [] for sig in all_inputs}  # sig → [(dst_x, dst_y)]
             for d in sorted(gate_cols):
                 gx = 80 + d * self.COL_GAP
                 for ri, gi in enumerate(gate_cols[d]):
                     gy = y + ri * self.ROW_GAP
                     placed[gi] = (gx, gy)
-
                     nin = len(gates[gi]["inputs"])
                     for ii, inp in enumerate(gates[gi]["inputs"]):
-                        src_idx = produced.get(inp)
                         iy_off = (ii - (nin - 1) / 2) * self.IY
                         dst_x = gx - self.W // 2 - self.PIN
                         dst_y = gy + iy_off
+                        src_idx = produced.get(inp)
                         if src_idx is not None and src_idx in placed:
-                            # 门→门连线
+                            # 门→门连线（直接画，不重叠）
                             src = placed[src_idx]
                             self._draw_wire(svg,
                                             src[0] + self.W // 2 + self.PIN, src[1],
                                             dst_x, dst_y)
                         elif inp in input_pin_pos:
-                            # 主输入端口→门输入连线
-                            px, py = input_pin_pos[inp]
-                            self._draw_wire(svg, px, py, dst_x, dst_y)
+                            input_targets[inp].append((dst_x, dst_y))
 
-                    # 画门体
+            # 第二遍：画主输入→门连线（trunk+branch 避免重叠）
+            for sig, targets in input_targets.items():
+                if not targets:
+                    continue
+                px, py = input_pin_pos[sig]
+                if len(targets) == 1:
+                    # 单扇出：直接连线
+                    self._draw_wire(svg, px, py, targets[0][0], targets[0][1])
+                else:
+                    # 多扇出：trunk → junction → branches（错开避免重叠）
+                    jx = px + 40  # junction x: port 右侧 40px
+                    # trunk: port → junction
+                    self._line(svg, px, py, jx, py)
+                    # branches: junction → each gate input, stagger Y at junction
+                    t_min_y = min(t[1] for t in targets)
+                    t_max_y = max(t[1] for t in targets)
+                    for ti, (tx, ty) in enumerate(targets):
+                        # stagger junction y to avoid overlap
+                        if len(targets) > 1:
+                            jy = py + (ti - (len(targets) - 1) / 2) * 8
+                        else:
+                            jy = py
+                        self._draw_wire(svg, jx, jy, tx, ty)
+
+            # 第三遍：画门体
+            for d in sorted(gate_cols):
+                gx = 80 + d * self.COL_GAP
+                for ri, gi in enumerate(gate_cols[d]):
+                    gy = y + ri * self.ROW_GAP
                     self._draw_gate(svg, gx, gy, gates[gi]["type"], "")
-
-                    # 记录输出位置
                     gate_outputs[gates[gi]["output"]] = (gx + self.W // 2 + self.PIN, gy)
 
             # ── 主输入标签和端口点 ──
