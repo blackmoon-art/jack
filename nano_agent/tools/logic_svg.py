@@ -41,6 +41,17 @@ _MODULE_DEFS = {
     "BUS":       {"shape": "rect", "ports": ["M", "S0", "S1", "S2", "S3"], "label": "BUS"},
     "ARBITER":   {"shape": "rect", "ports": ["REQ", "GNT", "CLK"], "label": "ARB"},
     "PIPELINE":  {"shape": "rect", "ports": ["DIN", "DOUT", "CLK", "STALL"], "label": "PIPE"},
+    # ── 新增: 算术/比较/特殊模块 ──
+    "ADDER":      {"shape": "rect", "ports": ["A", "B", "CIN", "SUM", "COUT"], "label": "ADD"},
+    "MULTIPLIER": {"shape": "rect", "ports": ["A", "B", "Y"], "label": "MUL"},
+    "COMPARATOR": {"shape": "rect", "ports": ["A", "B", "EQ", "LT", "GT"], "label": "CMP"},
+    "SHIFTER":    {"shape": "rect", "ports": ["D", "AMT", "Y", "DIR"], "label": "SHF"},
+    "PRIORITY_ENC": {"shape": "rect", "ports": ["D", "Y", "VALID"], "label": "PENC"},
+    "PARITY":     {"shape": "rect", "ports": ["D", "ODD", "EVEN"], "label": "PAR"},
+    "TRISTATE":   {"shape": "rect", "ports": ["D", "EN", "Y"], "label": "TBUF"},
+    "CLOCK_GATE": {"shape": "rect", "ports": ["CLK_IN", "EN", "CLK_OUT"], "label": "CG"},
+    "EDGE_DETECT":{"shape": "rect", "ports": ["D", "CLK", "RISE", "FALL"], "label": "EDGE"},
+    "PULSE_GEN":  {"shape": "rect", "ports": ["TRIG", "Q", "WIDTH"], "label": "PULSE"},
 }
 
 # 端口方向: I=input, O=output, B=bidir
@@ -52,6 +63,14 @@ _PORT_DIRS = {
     "Q": "O", "DOUT": "O", "Y": "O", "Y0": "O", "Y1": "O", "Y2": "O", "Y3": "O",
     "FLAGS": "O", "FULL": "O", "EMPTY": "O", "GNT": "O", "STATE": "O",
     "M": "B", "S0": "B", "S1": "B", "S2": "B", "S3": "B",
+    # ── 新增端口方向 ──
+    "CIN": "I", "COUT": "O", "SUM": "O",
+    "EQ": "O", "LT": "O", "GT": "O",
+    "AMT": "I", "DIR": "I",
+    "VALID": "O", "ODD": "O", "EVEN": "O",
+    "CLK_IN": "I", "CLK_OUT": "O",
+    "RISE": "O", "FALL": "O",
+    "TRIG": "I", "WIDTH": "I",
 }
 
 
@@ -182,9 +201,10 @@ class LogicSVG:
 
         module_rows = (len(modules) + 2) // 3 if modules else 0
         module_height = module_rows * (self.MOD_H + 60)
-        svg_h = max(400, gate_y_end + module_height + 40)
 
-        svg_w = 800
+        svg_w = max(800, (len(gate_cols) + 1) * self.COL_GAP + 160,
+                    (((len(modules) + 2) // 3 + 1) * (self.MOD_W + 80) + 160) if modules else 0)
+        svg_h = max(400, gate_y_end + module_height + 40)
         svg = ET.Element("svg", {"xmlns":"http://www.w3.org/2000/svg",
                                  "viewBox":f"0 0 {svg_w} {svg_h}",
                                  "width":str(svg_w),"height":str(svg_h)})
@@ -222,6 +242,39 @@ class LogicSVG:
 
                     # 记录输出位置（用于门→模块连线）
                     gate_outputs[gates[gi]["output"]] = (gx + self.W // 2 + self.PIN, gy)
+
+            # ── 主 I/O 标签 ──
+            if gates:
+                all_inputs = set()
+                produced = {g["output"] for g in gates}
+                for g in gates:
+                    for inp in g["inputs"]:
+                        if inp not in produced:
+                            all_inputs.add(inp)
+                io_y = 50
+                for inp_sig in sorted(all_inputs):
+                    ET.SubElement(svg, "text", {
+                        "x": "16", "y": str(io_y), "text-anchor": "start",
+                        "fill": "#3b82f6", "font-family": "monospace", "font-size": "9",
+                    }).text = inp_sig
+                    io_y += 18
+                # 主输出信号
+                all_outputs = set()
+                for g in gates:
+                    used_as_input = any(g["output"] in g2["inputs"] for g2 in gates if g2 != g)
+                    if not used_as_input:
+                        all_outputs.add(g["output"])
+                if all_outputs:
+                    out_x = max(v[0] for v in gate_outputs.values()) + 50 if gate_outputs else svg_w - 60
+                    io_y = 50
+                    for out_sig in sorted(all_outputs):
+                        if out_sig in gate_outputs:
+                            ox, oy = gate_outputs[out_sig]
+                            ET.SubElement(svg, "text", {
+                                "x": str(ox + self.W//2 + self.PIN + 8), "y": str(oy + 4),
+                                "text-anchor": "start",
+                                "fill": "#10b981", "font-family": "monospace", "font-size": "9",
+                            }).text = out_sig
 
             y = gate_y_end
 
@@ -270,6 +323,41 @@ class LogicSVG:
                             "d": d, "fill": "none", "stroke": self.COLORS["wire"],
                             "stroke-width": "1.5", "stroke-linejoin": "round",
                         })
+
+        # ── 模块→模块连线 ──
+        if len(modules) >= 2:
+            for mi, mod_src in enumerate(modules):
+                mtype_src = mod_src.get("type", "").upper()
+                for port_src in _MODULE_DEFS.get(mtype_src, {}).get("ports", []):
+                    pdir_src = _PORT_DIRS.get(port_src, "I")
+                    if pdir_src != "O":
+                        continue
+                    signal = (mod_src.get(port_src.lower()) or
+                              mod_src.get(port_src))
+                    if not signal:
+                        continue
+                    for mj, mod_dst in enumerate(modules):
+                        if mi == mj:
+                            continue
+                        for port_dst in _MODULE_DEFS.get(
+                                mod_dst.get("type", "").upper(), {}
+                            ).get("ports", []):
+                            if _PORT_DIRS.get(port_dst, "I") != "I":
+                                continue
+                            if (mod_dst.get(port_dst.lower()) or
+                                mod_dst.get(port_dst)) == signal:
+                                if ((mi, port_src) in module_pin_positions and
+                                    (mj, port_dst) in module_pin_positions):
+                                    sx, sy, _ = module_pin_positions[(mi, port_src)]
+                                    dx, dy, _ = module_pin_positions[(mj, port_dst)]
+                                    mid = (sx + dx) / 2
+                                    d = f"M{sx},{sy} L{mid},{sy} L{mid},{dy} L{dx},{dy}"
+                                    ET.SubElement(svg, "path", {
+                                        "d": d, "fill": "none",
+                                        "stroke": self.COLORS["wire"],
+                                        "stroke-width": "1.5",
+                                        "stroke-linejoin": "round",
+                                    })
 
         # ── 模块级 ──
         for mi, mod in enumerate(modules):

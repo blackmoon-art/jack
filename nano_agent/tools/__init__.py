@@ -30,6 +30,8 @@ from .logic_svg import LogicSVG
 from .analog_svg import AnalogSVG
 from .image_analyze import ImageAnalyzer
 from .document_parse import DocumentParser
+from .analog_pipeline import AnalogPipeline
+from .logic_pipeline import LogicPipeline
 
 logger = logging.getLogger("nano_agent.tools")
 
@@ -55,6 +57,8 @@ class ToolRegistry:
         "_circuit": Circuit,
         "_logic_svg": LogicSVG,
         "_analog_svg": AnalogSVG,
+        "_analog_pipeline": AnalogPipeline,
+        "_logic_pipeline": LogicPipeline,
         "_ppt": PPT,
         "_image_analyze": ImageAnalyzer,
         "_document_parse": DocumentParser,
@@ -88,6 +92,8 @@ class ToolRegistry:
         self._circuit = Circuit(work_dir, charts_dir=charts_dir)
         self._logic_svg = LogicSVG(work_dir, charts_dir=charts_dir)
         self._analog_svg = AnalogSVG(work_dir, charts_dir=charts_dir)
+        self._analog_pipeline = AnalogPipeline(work_dir, charts_dir=charts_dir)
+        self._logic_pipeline = LogicPipeline(work_dir, charts_dir=charts_dir)
         self._enable_analog = enable_analog_circuit
         self._enable_digital = enable_digital_circuit
         self._image_analyze = ImageAnalyzer(work_dir)
@@ -118,9 +124,6 @@ class ToolRegistry:
                 # 电路工具按类型过滤
                 if attr_name == "_circuit":
                     if name == "draw_digital" and not self._enable_digital:
-                        continue
-                    # draw_analog / draw_block 已被 analog_svg (SPICE) 替代
-                    if name in ("draw_analog", "draw_block"):
                         continue
                 func = getattr(instance, method_name)
                 self._register(name, desc, func, properties, required=required)
