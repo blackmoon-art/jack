@@ -32,6 +32,7 @@ from .analog import SpiceRenderer
 from .image_analyze import ImageAnalyzer
 from .document_parse import DocumentParser
 from .analog import SpiceSimulator
+from .digital import DigitalCircuit
 
 logger = logging.getLogger("nano_agent.tools")
 
@@ -62,6 +63,7 @@ class ToolRegistry:
         "_image_analyze": ImageAnalyzer,
         "_document_parse": DocumentParser,
         "_spice_simulator": SpiceSimulator,
+        "_digital_circuit": DigitalCircuit,
     }
 
     def __init__(self, work_dir: str, bash_timeout: int = 120,
@@ -98,6 +100,7 @@ class ToolRegistry:
         self._image_analyze = ImageAnalyzer(work_dir)
         self._document_parse = DocumentParser(work_dir)
         self._spice_simulator = SpiceSimulator(work_dir, charts_dir=charts_dir)
+        self._digital_circuit = DigitalCircuit(work_dir, charts_dir=charts_dir)
 
         # 自动注册工具
         self._tools: dict[str, dict[str, Any]] = {}

@@ -106,12 +106,21 @@ class MetaStrategy(BaseStrategy):
             "amplifier", "opamp", "oscillator", "simulation", "gain",
             "cutoff", "rectifier", "Electrical Validation", "Measured fc",
             "Measured gain", "Target fc", "Target gain",
+            # Digital circuit keywords
+            "design_digital", "simulate_verilog", "synthesize_gates",
+            "iverilog", "vvp", "yosys", "Verilog", "gate count",
+            "Synthesis", "Compilation", "assertions",
         )
         circuit_patterns = (
             r"Simulation\s*(Complete|verified|passed|Failed)",
             r"Electrical\s*(Validation|Issues)",
             r"SPICE\s*Netlist",
             r"ngspice",
+            # Digital patterns
+            r"Compilation\s*(passed|Failed|failed)",
+            r"Synthesis\s*(complete|Complete|Failed|failed)",
+            r"Gate\s*Count",
+            r"Assertions?\s*(passed|failed|ok)",
         )
         is_circuit = any(kw.lower() in result.lower() for kw in circuit_keywords)
         if not is_circuit:
@@ -230,6 +239,62 @@ class MetaStrategy(BaseStrategy):
                 val *= 1e-3  # convert to V/µs
             verdict["slew_rate"] = val  # stored as V/µs
 
+        # ── Digital circuit metrics ──
+        # Compilation (match both table format and free text)
+        compile_ok = (
+            re.search(r"Compilation\s*\|\s*✅?\s*(Passed|passed)", result) or
+            re.search(r"✅\s*Compilation\s*(passed|Passed)", result) or
+            re.search(r"Compilation\s*passed", result, re.IGNORECASE)
+        )
+        compile_fail = (
+            re.search(r"Compilation\s*Failed|❌.*Compilation", result) or
+            re.search(r"❌.*Compilation", result)
+        )
+        if compile_ok:
+            verdict["compile_passed"] = True
+        elif compile_fail:
+            verdict["compile_passed"] = False
+
+        # Gate count (match table format + free text)
+        gate_match = (
+            re.search(r"Gate\s*Count\s*\|\s*\*?\*?(\d+)\*?\*?", result) or
+            re.search(r"\*{0,2}(\d+)\s*gates?\*{0,2}", result)
+        )
+        if gate_match:
+            verdict["gate_count"] = int(gate_match.group(1))
+
+        # Synthesis
+        synth_ok = (
+            re.search(r"Synthesis\s*(complete|Complete)", result) or
+            re.search(r"✅\s*Synthesis", result)
+        )
+        synth_fail = (
+            re.search(r"Synthesis\s*[Ff]ailed", result) or
+            re.search(r"❌.*Synthesis", result)
+        )
+        if synth_ok:
+            verdict["synth_passed"] = True
+        elif synth_fail:
+            verdict["synth_passed"] = False
+
+        # Assertions from vvp simulation
+        ap_match = re.search(r"Assertions?\s*Passed\s*\|\s*(\d+)", result)
+        af_match = re.search(r"Assertions?\s*Failed\s*\|\s*(\d+)", result)
+        if ap_match:
+            verdict["assertions_passed"] = int(ap_match.group(1))
+        if af_match:
+            verdict["assertions_failed"] = int(af_match.group(1))
+        # Also check PASS/FAIL count from simulation output
+        pass_count = len(re.findall(r"\bPASS\b", result))
+        fail_count = len(re.findall(r"\bFAIL\b", result))
+        if pass_count > 0 or fail_count > 0:
+            verdict.setdefault("assertions_passed", 0)
+            verdict.setdefault("assertions_failed", 0)
+            if pass_count > verdict["assertions_passed"]:
+                verdict["assertions_passed"] = pass_count
+            if fail_count > verdict["assertions_failed"]:
+                verdict["assertions_failed"] = fail_count
+
         # ── Auto-fix / optimization count ──
         opt_match = re.search(r"Optimized in (\d+) iteration", result)
         if opt_match:
@@ -299,10 +364,40 @@ class MetaStrategy(BaseStrategy):
             if sr >= 0.1:  # at least 0.1 V/µs
                 score += 1.0
 
+        # ── Digital circuit metrics ──
+        compile_ok = verdict.get("compile_passed")
+        if compile_ok is True:
+            score += 2.0  # compilation is foundational
+        elif compile_ok is False:
+            score -= 2.0  # compilation failure is critical
+
+        synth_ok = verdict.get("synth_passed")
+        if synth_ok is True:
+            score += 1.0  # synthesis success is good
+
+        gate_count = verdict.get("gate_count")
+        if gate_count is not None and gate_count > 0:
+            score += 1.0  # has a real gate netlist
+            if gate_count > 1000:
+                verdict.setdefault("warnings", []).append(
+                    f"Large gate count ({gate_count}) — consider optimization")
+
+        ap = verdict.get("assertions_passed", 0)
+        af = verdict.get("assertions_failed", 0)
+        if ap > 0 or af > 0:
+            if af == 0 and ap > 0:
+                score += 2.0  # all assertions passed
+            elif af > 0:
+                score -= 1.0  # some assertions failed
+
         if not verdict["errors"] and not verdict["warnings"]:
             score += 1.0
 
-        return min(10.0, score)
+        # Floor: digital compile failure is critical
+        if compile_ok is False:
+            score = min(score, 2.0)
+
+        return min(10.0, max(0.0, score))
 
     def evaluate_result(self, task: str, result: str, analysis: dict,
                         circuit_verdict: dict = None) -> dict:
