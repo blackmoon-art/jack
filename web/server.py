@@ -554,7 +554,7 @@ def cleanup_old_charts():
     """启动时 + 运行时定期清理旧图表，保留最新的 N 个。"""
     global _last_chart_cleanup
     try:
-        patterns = ("*.png", "*.pptx", "*.jpg", "*.jpeg")
+        patterns = ("*.png", "*.pptx", "*.jpg", "*.jpeg", "*.svg")
         all_files = []
         for pat in patterns:
             all_files.extend(CHARTS_DIR.glob(pat))

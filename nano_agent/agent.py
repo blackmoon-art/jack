@@ -70,7 +70,7 @@ class Agent:
         self._local = threading.local()  # 每 request 独立的运行时状态
         self._local.on_event = None
         self._local.model_override = None
-        self._local.strategy_instance = None
+        self._local.strategy_instance = None  # per-thread via threading.local(), no race
         self._local.visual_routed = False
         self._local.prompt_cache = None  # system prompt 缓存 (per-request)
         self._local.prompt_cache_key = ()

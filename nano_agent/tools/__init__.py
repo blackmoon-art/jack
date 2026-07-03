@@ -27,11 +27,11 @@ from .diagram import Diagram
 from .ai_image import AIImage
 from .circuit import Circuit
 from .logic_svg import LogicSVG
-from .analog_svg import AnalogSVG
-from .spice_renderer import SpiceRenderer
+from .analog import AnalogSVG
+from .analog import SpiceRenderer
 from .image_analyze import ImageAnalyzer
 from .document_parse import DocumentParser
-from .spice_simulator import SpiceSimulator
+from .analog import SpiceSimulator
 
 logger = logging.getLogger("nano_agent.tools")
 

@@ -25,6 +25,37 @@ Rop2 out 0 75
 
 DIODE_MODEL = ".model DEFAULT_D D (IS=1e-14 RS=1 N=1)\n"
 
+# Real opamp models (simplified single-pole, realistic GBW/slew)
+LM741_MODEL = """\
+.subckt lm741 in_p in_n out vcc vss
+* LM741-like: GBW≈1MHz, slew≈0.5V/µs, Aol≈200k
+G1 0 n1 in_p in_n 1m
+R1 n1 0 200k
+C1 n1 0 79.6p
+E1 out 0 n1 0 1
+Rout out 0 75
+.ends lm741
+"""
+
+TL081_MODEL = """\
+.subckt tl081 in_p in_n out vcc vss
+* TL081-like: GBW≈3MHz, slew≈13V/µs, JFET input
+G1 0 n1 in_p in_n 10m
+R1 n1 0 100k
+C1 n1 0 53.1p
+E1 out 0 n1 0 1
+Rout out 0 50
+.ends tl081
+"""
+
+# BJT models (NPN/PNP)
+NPN_MODEL = ".model NPN NPN (IS=1e-14 BF=200 BR=5 VAF=100 IKF=0.1 ISE=1e-13 NE=1.5 NF=1 RC=10 RE=1 RB=100 CJE=2p CJC=1p TF=0.3n TR=10n)\n"
+PNP_MODEL = ".model PNP PNP (IS=1e-14 BF=100 BR=3 VAF=50 IKF=0.05 ISE=1e-13 NE=1.5 NF=1 RC=10 RE=1 RB=100 CJE=2p CJC=1p TF=0.5n TR=20n)\n"
+
+# MOSFET models (NMOS/PMOS — Level 1 Shichman-Hodges)
+NMOS_MODEL = ".model NMOS NMOS (LEVEL=1 VTO=1.5 KP=200u LAMBDA=0.01 GAMMA=0.5 PHI=0.7 CGSO=100p CGDO=100p CGBO=200p)\n"
+PMOS_MODEL = ".model PMOS PMOS (LEVEL=1 VTO=-1.5 KP=100u LAMBDA=0.02 GAMMA=0.5 PHI=0.7 CGSO=100p CGDO=100p CGBO=200p)\n"
+
 # Value parsing units (shared with analog_svg templates)
 _UNITS = {"p": 1e-12, "n": 1e-9, "u": 1e-6, "μ": 1e-6,
           "m": 1e-3, "k": 1e3, "K": 1e3, "kHz": 1e3, "MHz": 1e6,

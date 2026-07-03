@@ -141,11 +141,14 @@ _EXACT_ROUTES: list[tuple[str, str, dict]] = [
      "low.pass|high.pass|band.pass|lowpass|highpass|bandpass|"
      "陷波器|notch.*filter|butterworth|chebyshev|bessel|elliptic|"
      "共射|共集|共基|common.*emitter|common.*collector|common.*base|"
+     "共源|common.*source|cs.*amplifier|"
      "推挽|push.*pull|电流镜|current.*mirror|"
+     "三极管放大|bjt.*amp|mos.*amp|nmos|pmos|"
      "功率放大|power.*amp|震荡器|oscillator.*circuit|晶体振荡|"
      "积分电路|微分电路|integrator|differentiator|"
      "比较器|comparator.*circuit|"
      "bjt|mosfet|jfet|整流|rectifier|稳压|regulator|"
+     "跟随器|buffer|发射极跟随|源极跟随|电压跟随|"
      "LC谐振|并联谐振|串联谐振|偏置|biasing|分压|"
      "共模|CMRR",
      "draw_analog_svg", {}),

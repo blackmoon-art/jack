@@ -1,0 +1,8 @@
+{
+  "name": "inverting_amp_pulse",
+  "spice": "V1 1 0 PULSE(0 0.1 0 1u 1u 50u 100u)\nR1 1 n1 1k\nRf n1 out 10k\nEU1 out 0 0 n1 100000",
+  "signal": "v(out)",
+  "points": 16,
+  "min": -0.9999,
+  "max": 0.0
+}

@@ -1,0 +1,287 @@
+# Analog Circuit Templates — 17 circuits
+# Categories: filter, amplifier, bjt, mosfet, rectifier, divider
+# Loaded by analog_svg.py, hot-reloadable via add_custom_template()
+
+templates:
+  # ── Filters ──
+  - id: rc_lowpass
+    category: filter
+    name: RC Low-Pass Filter
+    keywords_cn: [RC低通, rc低通]
+    guide: A simple first-order passive RC low-pass filter.
+    params:
+      fc: [Cutoff frequency (Hz), "1k"]
+      R: [Resistance, "1k"]
+    calculate: rc_lowpass
+    components:
+      - {type: V, name: Vin, nodes: [in, "0"], value: "AC 1"}
+      - {type: R, name: R1, nodes: [in, out], value: "?"}
+      - {type: C, name: C1, nodes: [out, "0"], value: "?"}
+
+  - id: rc_highpass
+    category: filter
+    name: RC High-Pass Filter
+    keywords_cn: [RC高通, rc高通, 高通滤波器, 高通滤波]
+    guide: A simple first-order passive RC high-pass filter.
+    params:
+      fc: [Cutoff frequency (Hz), "1k"]
+      R: [Resistance, "1k"]
+    calculate: rc_lowpass
+    components:
+      - {type: V, name: Vin, nodes: [in, "0"], value: "AC 1"}
+      - {type: C, name: C1, nodes: [in, out], value: "?"}
+      - {type: R, name: R1, nodes: [out, "0"], value: "?"}
+
+  - id: lc_lowpass
+    category: filter
+    name: LC Low-Pass Filter
+    keywords_cn: [LC低通, lc低通, LC滤波, lc滤波]
+    guide: A second-order passive LC low-pass filter.
+    params:
+      fc: [Cutoff frequency (Hz), "1k"]
+      L: [Inductance, "1m"]
+    calculate: lc_lowpass
+    components:
+      - {type: V, name: Vin, nodes: [in, "0"], value: "AC 1"}
+      - {type: L, name: L1, nodes: [in, out], value: "?"}
+      - {type: C, name: C1, nodes: [out, "0"], value: "?"}
+
+  - id: sallen_key_lp
+    category: filter
+    name: Sallen-Key Low-Pass Filter
+    keywords_cn: [Sallen-Key, sallen key, 有源低通, 有源滤波]
+    guide: A second-order active low-pass filter using an op-amp. Butterworth response (Q=0.707).
+    params:
+      fc: [Cutoff frequency (Hz), "1k"]
+      R: [Resistance, "10k"]
+    calculate: sallen_key_lp
+    components:
+      - {type: V, name: Vin, nodes: [in, "0"], value: "AC 1"}
+      - {type: R, name: R1, nodes: [in, n1], value: "?"}
+      - {type: R, name: R2, nodes: [n1, n2], value: "?"}
+      - {type: C, name: C1, nodes: [n1, out], value: "?"}
+      - {type: C, name: C2, nodes: [n2, "0"], value: "?"}
+      - {type: X, name: U1, nodes: [n2, out, out, vcc, "0"], model: opamp}
+
+  # ── Opamp Amplifiers ──
+  - id: inverting
+    category: amplifier
+    name: Inverting Amplifier
+    keywords_cn: [反相放大, 反相放大器, 反向放大, 反比例放大, inverting, 放大器, 放大电路, 运放, 运放电路]
+    guide: An inverting op-amp amplifier. Gain = -Rf/R1.
+    params:
+      gain: [Voltage gain (absolute value), "10"]
+      R1: [Input resistance, "1k"]
+    calculate: inverting_amp
+    components:
+      - {type: V, name: Vin, nodes: [in, "0"], value: "AC 1"}
+      - {type: R, name: R1, nodes: [in, n1], value: "?"}
+      - {type: R, name: Rf, nodes: [n1, out], value: "?"}
+      - {type: X, name: U1, nodes: ["0", n1, out, vcc, "0"], model: opamp}
+
+  - id: non_inverting
+    category: amplifier
+    name: Non-Inverting Amplifier
+    keywords_cn: [同相放大, 同相放大器, 正向放大, 正比例放大, non.inverting, non-inverting, non inverting]
+    guide: A non-inverting op-amp amplifier. Gain = 1 + Rf/R1.
+    params:
+      gain: [Voltage gain, "11"]
+      R1: [R1 resistance, "1k"]
+    calculate: non_inverting_amp
+    components:
+      - {type: V, name: Vin, nodes: [in, "0"], value: "AC 1"}
+      - {type: R, name: R1, nodes: [n1, "0"], value: "?"}
+      - {type: R, name: Rf, nodes: [n1, out], value: "?"}
+      - {type: X, name: U1, nodes: [in, n1, out, vcc, "0"], model: opamp}
+
+  - id: voltage_follower
+    category: amplifier
+    name: Voltage Follower (Buffer)
+    keywords_cn: [电压跟随, 跟随器, 缓冲器, buffer, voltage follower, unity gain, 单位增益]
+    guide: A unity-gain buffer. Vout = Vin. High input impedance, low output impedance.
+    params: {}
+    calculate: fixed
+    components:
+      - {type: V, name: Vin, nodes: [in, "0"], value: "AC 1"}
+      - {type: X, name: U1, nodes: [in, out, out, vcc, "0"], model: opamp}
+
+  - id: differential
+    category: amplifier
+    name: Differential Amplifier
+    keywords_cn: [差分放大, 差分放大器, 差动放大, 减法器, differential]
+    guide: "A differential op-amp amplifier. Vout = (Rf/R1) * (V2 - V1). Simulate with V1=AC 1, V2=DC 0."
+    params:
+      gain: [Differential gain, "10"]
+      R1: [Input resistance, "1k"]
+    calculate: differential_amp
+    components:
+      - {type: V, name: V1, nodes: [in1, "0"], value: "AC 1"}
+      - {type: V, name: V2, nodes: [in2, "0"], value: "DC 0"}
+      - {type: R, name: R1, nodes: [in1, n1], value: "?"}
+      - {type: R, name: R2, nodes: [in2, n2], value: "?"}
+      - {type: R, name: Rf, nodes: [n1, out], value: "?"}
+      - {type: R, name: Rg, nodes: [n2, "0"], value: "?"}
+      - {type: X, name: U1, nodes: [n2, n1, out, vcc, "0"], model: opamp}
+
+  - id: summing_inverting
+    category: amplifier
+    name: Inverting Summing Amplifier
+    keywords_cn: [求和放大, 加法器, 加法放大, summing]
+    guide: Sums multiple inputs with inversion. Vout = -Rf*(V1/R1 + V2/R2 + V3/R3).
+    params:
+      gain: [Gain per channel (absolute), "1"]
+      R1: [Input resistance, "1k"]
+    calculate: summing_amp
+    components:
+      - {type: V, name: V1, nodes: [in1, "0"], value: "AC 1"}
+      - {type: V, name: V2, nodes: [in2, "0"], value: "AC 1"}
+      - {type: V, name: V3, nodes: [in3, "0"], value: "AC 1"}
+      - {type: R, name: R1, nodes: [in1, n1], value: "?"}
+      - {type: R, name: R2, nodes: [in2, n1], value: "?"}
+      - {type: R, name: R3, nodes: [in3, n1], value: "?"}
+      - {type: R, name: Rf, nodes: [n1, out], value: "?"}
+      - {type: X, name: U1, nodes: ["0", n1, out, vcc, "0"], model: opamp}
+
+  # ── BJT Amplifiers ──
+  - id: common_emitter
+    category: bjt
+    name: BJT Common-Emitter Amplifier
+    keywords_cn: [共射放大, 共射, 共射极, common emitter, ce amplifier, bjt放大, npn放大, 三极管放大]
+    guide: "Class-A NPN common-emitter amplifier. Gain ≈ -Rc/Re_ac. Coupling caps block DC."
+    params:
+      gain: [Voltage gain (absolute), "10"]
+      Vcc: [Supply voltage, "12"]
+      Ic: [Collector current (A), "1m"]
+    calculate: common_emitter
+    components:
+      - {type: V, name: Vin, nodes: [in, "0"], value: "AC 1"}
+      - {type: V, name: Vcc, nodes: [vcc, "0"], value: "DC 12"}
+      - {type: R, name: R1, nodes: [vcc, base], value: "?"}
+      - {type: R, name: R2, nodes: [base, "0"], value: "?"}
+      - {type: R, name: Rc, nodes: [vcc, c], value: "?"}
+      - {type: R, name: Re, nodes: [emit, "0"], value: "?"}
+      - {type: C, name: Cin, nodes: [in, base], value: "10u"}
+      - {type: C, name: Cout, nodes: [c, out], value: "10u"}
+      - {type: C, name: Ce, nodes: [emit, "0"], value: "100u"}
+      - {type: Q, name: Q1, nodes: [c, base, emit], model: NPN}
+
+  - id: emitter_follower
+    category: bjt
+    name: BJT Emitter Follower (Common-Collector)
+    keywords_cn: [共集, 共集极, 射极跟随, emitter follower, common collector, cc amplifier, bjt缓冲]
+    guide: Unity-gain buffer. Av ≈ 1. High input impedance, low output impedance.
+    params:
+      Ic: [Collector current (A), "1m"]
+      Vcc: [Supply voltage, "12"]
+    calculate: emitter_follower
+    components:
+      - {type: V, name: Vin, nodes: [in, "0"], value: "AC 1"}
+      - {type: V, name: Vcc, nodes: [vcc, "0"], value: "DC 12"}
+      - {type: R, name: R1, nodes: [vcc, base], value: "?"}
+      - {type: R, name: R2, nodes: [base, "0"], value: "?"}
+      - {type: R, name: Re, nodes: [emit, "0"], value: "?"}
+      - {type: C, name: Cin, nodes: [in, base], value: "10u"}
+      - {type: C, name: Cout, nodes: [emit, out], value: "10u"}
+      - {type: Q, name: Q1, nodes: [c, base, emit], model: NPN}
+      - {type: Wire, name: W_c2vcc, nodes: [c, vcc], value: ""}
+
+  - id: current_mirror
+    category: bjt
+    name: BJT Current Mirror
+    keywords_cn: [电流镜, current mirror, 镜像电流, 电流源]
+    guide: Two matched NPN transistors. Iout ≈ Iref = (Vcc - Vbe)/Rref.
+    params:
+      Iref: [Reference current (A), "1m"]
+      Vcc: [Supply voltage, "10"]
+    calculate: current_mirror
+    components:
+      - {type: V, name: Vcc, nodes: [vcc, "0"], value: "DC 10"}
+      - {type: R, name: Rref, nodes: [vcc, ref], value: "?"}
+      - {type: Q, name: Q1, nodes: [ref, ref, "0"], model: NPN}
+      - {type: Q, name: Q2, nodes: [out, ref, "0"], model: NPN}
+      - {type: R, name: Rload, nodes: [out, "0"], value: "1k"}
+
+  - id: bjt_diff_pair
+    category: bjt
+    name: BJT Differential Pair
+    keywords_cn: [bjt差分, 差分对, diff pair, bjt diff, long tail pair, 差动]
+    guide: Classic BJT differential pair with tail current. Used as input stage in opamps.
+    params:
+      gain: [Differential gain, "20"]
+      Itail: [Tail current (A), "1m"]
+    calculate: bjt_diff_pair
+    components:
+      - {type: V, name: V1, nodes: [in1, "0"], value: "AC 0.5"}
+      - {type: V, name: V2, nodes: [in2, "0"], value: "AC 0.5"}
+      - {type: V, name: Vcc, nodes: [vcc, "0"], value: "DC 12"}
+      - {type: R, name: Rc1, nodes: [vcc, c1], value: "?"}
+      - {type: R, name: Rc2, nodes: [vcc, c2], value: "?"}
+      - {type: R, name: Ree, nodes: [emit, vee], value: "?"}
+      - {type: V, name: Vee, nodes: [vee, "0"], value: "DC -12"}
+      - {type: Q, name: Q1, nodes: [c1, in1, emit], model: NPN}
+      - {type: Q, name: Q2, nodes: [c2, in2, emit], model: NPN}
+
+  # ── MOSFET ──
+  - id: common_source
+    category: mosfet
+    name: MOSFET Common-Source Amplifier
+    keywords_cn: [共源放大, 共源, 共源极, common source, cs amplifier, mos放大, mosfet放大, nmos放大, 场效应管放大]
+    guide: NMOS common-source amplifier. Gain ≈ -gm*Rd. High input impedance.
+    params:
+      gain: [Voltage gain (absolute), "5"]
+      Vdd: [Supply voltage, "12"]
+    calculate: mosfet_cs
+    components:
+      - {type: V, name: Vin, nodes: [in, "0"], value: "AC 0.1"}
+      - {type: V, name: Vdd, nodes: [vdd, "0"], value: "DC 12"}
+      - {type: R, name: Rg1, nodes: [vdd, gate], value: "?"}
+      - {type: R, name: Rg2, nodes: [gate, "0"], value: "?"}
+      - {type: R, name: Rd, nodes: [vdd, out], value: "?"}
+      - {type: R, name: Rs, nodes: [src, "0"], value: "?"}
+      - {type: C, name: Cin, nodes: [in, gate], value: "1u"}
+      - {type: C, name: Cs, nodes: [src, "0"], value: "100u"}
+      - {type: M, name: M1, nodes: [out, gate, src, "0"], model: NMOS}
+
+  # ── Rectifiers ──
+  - id: half_wave
+    category: rectifier
+    name: Half-Wave Rectifier
+    keywords_cn: [半波整流, 半波]
+    guide: Converts AC to pulsating DC using a single diode.
+    params: {}
+    calculate: fixed
+    components:
+      - {type: V, name: Vin, nodes: [in, "0"], value: "AC 1"}
+      - {type: D, name: D1, nodes: [in, out], value: ""}
+      - {type: R, name: Rload, nodes: [out, "0"], value: "1k"}
+
+  - id: full_wave_bridge
+    category: rectifier
+    name: Full-Wave Bridge Rectifier
+    keywords_cn: [全波整流, 桥式整流, 整流桥, 全桥]
+    guide: Converts AC to DC using a 4-diode bridge.
+    params: {}
+    calculate: fixed
+    components:
+      - {type: V, name: Vin, nodes: [ac1, "0"], value: "AC 1"}
+      - {type: D, name: D1, nodes: [ac1, dc+], value: ""}
+      - {type: D, name: D2, nodes: ["0", dc+], value: ""}
+      - {type: D, name: D3, nodes: [ac1, dc-], value: ""}
+      - {type: D, name: D4, nodes: ["0", dc-], value: ""}
+      - {type: C, name: Cf, nodes: [dc+, dc-], value: "100u"}
+      - {type: R, name: Rload, nodes: [dc+, dc-], value: "1k"}
+
+  # ── Voltage Divider ──
+  - id: voltage_divider
+    category: divider
+    name: Voltage Divider
+    keywords_cn: [分压, 分压器, 分压电路, 电压分压]
+    guide: "Divides input voltage: Vout = Vin * R2/(R1+R2)."
+    params:
+      ratio: [Voltage ratio Vout/Vin, "0.5"]
+      R1: [R1 resistance, "1k"]
+    calculate: voltage_divider
+    components:
+      - {type: V, name: Vin, nodes: [in, "0"], value: "AC 1"}
+      - {type: R, name: R1, nodes: [in, out], value: "?"}
+      - {type: R, name: R2, nodes: [out, "0"], value: "?"}

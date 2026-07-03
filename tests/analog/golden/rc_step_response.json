@@ -1,0 +1,8 @@
+{
+  "name": "rc_step_response",
+  "spice": "V1 1 0 PULSE(0 5 0 1u 1u 50u 100u)\nR1 1 2 1k\nC1 2 0 1u",
+  "signal": "v(2)",
+  "points": 16,
+  "min": 0.0,
+  "max": 0.4724
+}

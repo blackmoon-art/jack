@@ -11,10 +11,15 @@ Supports: filters, amplifiers, rectifiers, voltage dividers.
 Auto-calculates component values from user specifications.
 """
 
+import json as _json
 import logging
 import math
 import re
+import shutil
+import subprocess
+import tempfile
 import xml.etree.ElementTree as ET
+from collections import deque as _deque
 from datetime import datetime
 from pathlib import Path
 
@@ -25,6 +30,11 @@ from .spice_common import (
 )
 
 logger = logging.getLogger("nano_agent.tools.analog_svg")
+
+# ── Physical constants ──
+VTH = 0.026     # Thermal voltage at 300K (V)
+VBE_ON = 0.7    # BJT base-emitter turn-on voltage (V)
+DEFAULT_OPAMP_GAIN = 100000  # Fallback opamp open-loop gain
 
 # Backward-compatible aliases for internal use
 _parse_value = parse_value
@@ -39,7 +49,7 @@ _CIRCUIT_TEMPLATES = {
     # ── Filters ──
     ("filter", "rc_lowpass"): {
         "name": "RC Low-Pass Filter",
-        "keywords_cn": ["RC低通", "rc低通", "低通滤波器", "低通滤波", "滤波器", "滤波"],
+        "keywords_cn": ["RC低通", "rc低通"],
         "guide": "A simple first-order passive RC low-pass filter.",
         "components": [
             {"type": "V", "name": "Vin", "nodes": ["in", "0"], "value": "AC 1"},
@@ -305,7 +315,9 @@ def _to_spice(components: list[dict], values: dict) -> str:
         t = c["type"]
         name = c["name"]
         nid_str = " ".join(nids)
-        if t == "R":
+        if t == "Wire":
+            continue  # direct connection, no SPICE element
+        elif t == "R":
             lines.append(f"{name} {nid_str} {val}")
         elif t == "C":
             lines.append(f"{name} {nid_str} {val}")
@@ -315,6 +327,14 @@ def _to_spice(components: list[dict], values: dict) -> str:
             lines.append(f"{name} {nid_str} DEFAULT_D")
         elif t == "V":
             lines.append(f"{name} {nid_str} {val}")
+        elif t == "Q":
+            # BJT: Qname C B E model
+            model = c.get("filled_model", "NPN")
+            lines.append(f"{name} {nid_str} {model}")
+        elif t == "M":
+            # MOSFET: Mname D G S B model
+            model = c.get("filled_model", "NMOS")
+            lines.append(f"{name} {nid_str} {model}")
         elif t == "X":
             model = c.get("filled_model", "opamp")
             # ngspice requires X prefix for subcircuit instances
@@ -616,6 +636,14 @@ def _draw_component(svg, c, x, y):
         _draw_vsource(svg, x, y, v)
     elif t == "X":
         _draw_opamp(svg, x, y, name)
+    elif t == "Q":
+        _draw_bjt(svg, x, y, name)
+    elif t == "M":
+        _draw_mosfet(svg, x, y, name)
+    elif t == "Q":
+        _draw_bjt(svg, x, y, name)
+    elif t == "M":
+        _draw_mosfet(svg, x, y, name)
 
 
 def _draw_resistor(svg, x, y, v):
@@ -710,10 +738,76 @@ def _draw_opamp(svg, x, y, name):
     ET.SubElement(svg, "text", {"x": str(x0 - 12), "y": str(y0 + H * 0.7 + 4),
                                 "text-anchor": "end", "fill": _SVG_COLORS["text"],
                                 "font-family": "monospace", "font-size": "8"}).text = "-"
+
+def _draw_bjt(svg, x, y, name):
+    """Draw NPN BJT symbol: circle with collector(top), base(left), emitter(bottom)."""
+    R = 22
+    ET.SubElement(svg, "circle", {
+        "cx": str(x), "cy": str(y), "r": str(R),
+        "fill": "none", "stroke": _SVG_COLORS["stroke"], "stroke-width": "1.5",
+    })
+    ET.SubElement(svg, "line", {
+        "x1": str(x), "y1": str(y + R), "x2": str(x), "y2": str(y + R + 12),
+        "stroke": _SVG_COLORS["stroke"], "stroke-width": "1.5",
+    })
+    ax, ay = x - 5, y + R + 6
+    ET.SubElement(svg, "polygon", {
+        "points": f"{x},{ay + 4} {ax},{ay - 4} {x + 5},{ay - 4}",
+        "fill": _SVG_COLORS["stroke"], "stroke": "none",
+    })
+    ET.SubElement(svg, "line", {
+        "x1": str(x), "y1": str(y - R - 12), "x2": str(x), "y2": str(y - R),
+        "stroke": _SVG_COLORS["stroke"], "stroke-width": "1.5",
+    })
+    ET.SubElement(svg, "line", {
+        "x1": str(x - R - 12), "y1": str(y), "x2": str(x - R), "y2": str(y),
+        "stroke": _SVG_COLORS["stroke"], "stroke-width": "1.5",
+    })
     if name:
-        ET.SubElement(svg, "text", {"x": str(x), "y": str(y0 + H + 14), "text-anchor": "middle",
-                                    "fill": _SVG_COLORS["text"], "font-family": "monospace",
-                                    "font-size": "9"}).text = name
+        ET.SubElement(svg, "text", {
+            "x": str(x), "y": str(y + R + 24), "text-anchor": "middle",
+            "fill": _SVG_COLORS["text"], "font-family": "monospace", "font-size": "9",
+        }).text = name
+
+
+def _draw_mosfet(svg, x, y, name):
+    """Draw NMOS MOSFET symbol: gate(left), drain(top), source(bottom)."""
+    W, H = 30, 40
+    x0, y0 = x - W // 2, y - H // 2
+    ET.SubElement(svg, "line", {
+        "x1": str(x), "y1": str(y0), "x2": str(x), "y2": str(y0 + H),
+        "stroke": _SVG_COLORS["stroke"], "stroke-width": "1.5",
+    })
+    ET.SubElement(svg, "line", {
+        "x1": str(x0), "y1": str(y - 10), "x2": str(x0 + 8), "y2": str(y - 10),
+        "stroke": _SVG_COLORS["stroke"], "stroke-width": "1.5",
+    })
+    ET.SubElement(svg, "line", {
+        "x1": str(x0 + 8), "y1": str(y0), "x2": str(x0 + 8), "y2": str(y0 + H),
+        "stroke": _SVG_COLORS["stroke"], "stroke-width": "2",
+    })
+    bx, by = x + 8, y + 8
+    ET.SubElement(svg, "line", {
+        "x1": str(bx), "y1": str(by), "x2": str(bx), "y2": str(by + 10),
+        "stroke": _SVG_COLORS["stroke"], "stroke-width": "1.5",
+    })
+    ET.SubElement(svg, "polygon", {
+        "points": f"{bx - 4},{by + 7} {bx + 4},{by + 7} {bx},{by + 2}",
+        "fill": _SVG_COLORS["stroke"], "stroke": "none",
+    })
+    ET.SubElement(svg, "text", {
+        "x": str(x + 4), "y": str(y0 - 2), "text-anchor": "start",
+        "fill": _SVG_COLORS["text"], "font-family": "monospace", "font-size": "7",
+    }).text = "D"
+    ET.SubElement(svg, "text", {
+        "x": str(x + 4), "y": str(y0 + H + 8), "text-anchor": "start",
+        "fill": _SVG_COLORS["text"], "font-family": "monospace", "font-size": "7",
+    }).text = "S"
+    if name:
+        ET.SubElement(svg, "text", {
+            "x": str(x + x0), "y": str(y0 + H + 20), "text-anchor": "middle",
+            "fill": _SVG_COLORS["text"], "font-family": "monospace", "font-size": "9",
+        }).text = name
 
 
 def _draw_ground(svg, x, y):
@@ -919,6 +1013,35 @@ class AnalogSVG:
                      "E.g. 'fc=10kHz' for filter cutoff, 'gain=20' for amplifier gain."},
           "title": {"type": "string", "description": "Optional title"}},
          ["description"]),
+
+        ("compose_circuit",
+         "Combine multiple circuit templates into a multi-stage design.\n"
+         "Auto-handles node namespace, coupling, power merge, DOT cluster layout.\n"
+         "\n**Examples:**\n"
+         '- `stages_json=\'[{"template":"共射放大","specs":"gain=10"},'
+         '{"template":"RC低通","specs":"fc=10kHz"}]\'`',
+         "compose_circuit",
+         {"stages_json": {"type": "string",
+                           "description": "JSON list of [{\"template\": \"...\", \"specs\": \"...\"}]"},
+          "coupling": {"type": "string", "description": "'ac' or 'dc'"},
+          "title": {"type": "string", "description": "Optional title"}},
+         ["stages_json"]),
+
+        ("add_custom_template",
+         "Save a verified circuit as a reusable template.\n"
+         "Args: circuit_id, category, name, keywords_cn, components, params?, calculate?",
+         "add_custom_template",
+         {"circuit_id": {"type": "string", "description": "Unique ID e.g. 'my_bandpass'"},
+          "category": {"type": "string", "description": "filter|amplifier|bjt|mosfet|rectifier|divider"},
+          "name": {"type": "string", "description": "Display name"},
+          "keywords_cn": {"type": "array", "items": {"type": "string"},
+                           "description": "Keywords for NL matching"},
+          "components": {"type": "array", "items": {"type": "object"},
+                          "description": "[{type, name, nodes, value, model?}]"},
+          "params": {"type": "object", "description": "Optional {key: [desc, default]}"},
+          "guide": {"type": "string", "description": "Circuit description"},
+          "calculate": {"type": "string", "description": "Calculator name, default 'fixed'"}},
+         ["circuit_id", "category", "name", "keywords_cn", "components"]),
     ]
 
     def __init__(self, work_dir: str = "", charts_dir: str = ""):
@@ -928,13 +1051,36 @@ class AnalogSVG:
             self.charts_dir = (Path(__file__).parent.parent.parent
                                / "web" / "static" / "charts")
         self.charts_dir.mkdir(parents=True, exist_ok=True)
+        # Templates loaded at module import (see bottom of file)
+
+    @staticmethod
+    def _load_templates() -> None:
+        """Load circuit templates from YAML (primary) or hardcoded fallback."""
+        global _CIRCUIT_TEMPLATES
+        yaml_path = Path(__file__).parent / "templates" / "circuits.yaml"
+        try:
+            import yaml as _yaml
+            _CIRCUIT_TEMPLATES = {}
+            if yaml_path.exists():
+                with open(yaml_path) as f:
+                    data = _yaml.safe_load(f)
+                for t in data.get("templates", []):
+                    _CIRCUIT_TEMPLATES[(t["category"], t["id"])] = {
+                        "name": t["name"],
+                        "keywords_cn": t.get("keywords_cn", []),
+                        "guide": t.get("guide", ""),
+                        "components": t.get("components", []),
+                        "params": t.get("params", {}),
+                        "calculate": t.get("calculate", "fixed"),
+                    }
+            if not _CIRCUIT_TEMPLATES:
+                raise ValueError("No templates loaded")
+            logger.info(f"Loaded {len(_CIRCUIT_TEMPLATES)} circuit templates from YAML")
+        except Exception as e:
+            logger.warning(f"YAML load failed ({e}), templates may be empty")
 
     def draw_analog_svg(self, description: str, title: str = "") -> str:
-        """Parse NL description → template → calculate → SPICE → sim verify → SVG.
-
-        Only returns the circuit diagram if ngspice simulation succeeds.
-        If simulation fails, returns the error so the LLM can fix and retry.
-        """
+        """Pipeline: ① 生成电路拓扑 → ② SPICE Netlist → ③ Ngspice验证 → ④ Self-Refine修正 → ⑤ Schemdraw渲染 → ⑥ 输出"""
         try:
             tmpl, values = self._match_template(description)
             components = [dict(c) for c in tmpl["components"]]
@@ -944,34 +1090,42 @@ class AnalogSVG:
             logger.exception(f"Analog SVG failed: {e}")
             return f"Error drawing analog circuit: {e}"
 
-        # ── Stage 1: SPICE 语法检查 ──
+        # ── Step ③: Ngspice 仿真验证 ──
         sim_ok, sim_output = self._run_sim_check(spice)
+        refine_hint = ""
+
         if not sim_ok:
-            guide = tmpl.get("guide", "")
+            # Self-Refine attempt
+            fix_attempts = 0
+            while not sim_ok and fix_attempts < 6:
+                fix_attempts += 1
+                if "Mismatch" in sim_output or "subckt" in sim_output.lower():
+                    spice = _replace_opamp_with_e_source(spice, gain=100000)
+                else:
+                    fixed = _auto_fix_spice(spice, sim_output)
+                    if fixed != spice:
+                        spice = fixed
+                    else:
+                        break
+                sim_ok, sim_output = self._run_sim_check(spice)
+
+        if not sim_ok:
             return (
-                f"❌ **Circuit simulation failed — diagram blocked.**\n\n"
-                f"**Circuit:** {svg_title}\n{guide}\n\n"
+                f"### ⚠️ Simulation Failed (after {fix_attempts} fix attempts)\n\n"
+                f"**Error:**\n```\n{sim_output[:800]}\n```\n\n"
                 f"**SPICE Netlist:**\n```spice\n{spice}\n```\n\n"
-                f"**Simulation Error:**\n```\n{sim_output[:1500]}\n```\n\n"
-                f"🔧 **Fix the SPICE netlist above** and call `draw_analog_spice` "
-                f"with the corrected netlist to re-render."
+                f"🔧 **Self-Refine:** Fix the SPICE above and call `draw_analog_spice`."
             )
 
-        # ── Stage 2: 电气特性验证 ──
+        # Electrical validation
         char_ok, char_msg = self._validate_characteristics(spice, tmpl, values)
         if not char_ok:
-            guide = tmpl.get("guide", "")
-            return (
-                f"❌ **Electrical validation failed — diagram blocked.**\n\n"
-                f"**Circuit:** {svg_title}\n{guide}\n\n"
-                f"{char_msg}\n\n"
-                f"**SPICE Netlist:**\n```spice\n{spice}\n```\n\n"
-                f"🔧 **Fix the issues above** and try again. "
-                f"Common causes: opamp input polarity swap, wrong resistor values, "
-                f"missing connections."
+            refine_hint = (
+                f"\n\n### ⚠️ Electrical Issues\n{char_msg}\n"
+                f"\n🔧 **Self-Refine:** Adjust component values and re-render."
             )
 
-        # 两阶段都通过 → 渲染 SVG
+        # ── Step ⑤: Schemdraw 渲染 ──
         try:
             svg = self._render_schemdraw_svg(spice, svg_title) or _render_svg(components, svg_title)
         except Exception as e:
@@ -983,13 +1137,12 @@ class AnalogSVG:
         fp.write_text(svg, encoding="utf-8")
         url = f"/charts/{fp.name}"
 
+        # ── Step ⑥: 输出结果 ──
         guide = tmpl.get("guide", "")
         guide_text = f"\n{guide}" if guide else ""
-        sim_block = f"\n\n✅ **Simulation verified** — ngspice ran successfully."
+        sim_block = f"\n\n✅ **Simulation verified**" if sim_ok and not refine_hint else ""
         spice_block = f"\n\n**SPICE Netlist:**\n```spice\n{spice}\n```"
-        sim_hint = ("\n\n💡 **Next:** Call `simulate_spice` with the SPICE netlist above "
-                    "for detailed AC/transient analysis and iterative optimization.")
-        return f"![{svg_title}]({url})\n{url}{guide_text}{sim_block}{spice_block}{sim_hint}"
+        return f"![{svg_title}]({url})\n{url}{guide_text}{sim_block}{spice_block}{refine_hint}"
 
     @staticmethod
     def _run_sim_check(spice: str) -> tuple[bool, str]:
@@ -1006,7 +1159,7 @@ class AnalogSVG:
 
         subckt_ok = _check_ngspice_subckt()
         sim_spice = spice
-        has_opamp = bool(re.search(r'\bX\w+\b', sim_spice))
+        has_opamp = bool(re.search(r'(?:^|\s)X\w+\s', sim_spice, re.MULTILINE))
         if has_opamp and not subckt_ok:
             sim_spice = _replace_opamp_with_e_source(sim_spice, gain=100000)
 
@@ -1019,8 +1172,15 @@ class AnalogSVG:
                 f.write("* Circuit simulation\n")
                 if has_opamp and subckt_ok:
                     f.write(_OPAMP_SUBCKT_MODEL)
-                if re.search(r'^D\w+', sim_spice, re.MULTILINE):
+                if re.search(r'(?:^|\s)D\d\w*\s', sim_spice, re.MULTILINE):
                     f.write(".model DEFAULT_D D (IS=1e-14 RS=1 N=1)\n")
+                # Auto-inject device models
+                from .spice_common import NPN_MODEL, PNP_MODEL, NMOS_MODEL, PMOS_MODEL
+                _MM = {"NPN": NPN_MODEL, "PNP": PNP_MODEL, "NMOS": NMOS_MODEL, "PMOS": PMOS_MODEL}
+                for m in re.finditer(r'(?:^|\s)[QM]\d\w*\s+(?:.*\s)?(\S+)\s*$', sim_spice, re.MULTILINE):
+                    mn = m.group(1).upper()
+                    if mn in _MM:
+                        f.write(_MM[mn])
                 f.write(sim_spice + "\n")
                 if ".op" not in sim_spice.lower() and ".ac" not in sim_spice.lower() \
                    and ".tran" not in sim_spice.lower():
@@ -1043,8 +1203,9 @@ class AnalogSVG:
             return True, output[:500]
         except subprocess.TimeoutExpired:
             return False, "Simulation timed out (>15s)"
-        except Exception:
-            return True, ""  # 仿真不可用时放行，不阻塞出图
+        except Exception as e:
+            logger.warning(f"Sim check failed: {e}")
+            return True, ""
 
     @staticmethod
     def _validate_characteristics(spice: str, tmpl: dict,
@@ -1068,7 +1229,7 @@ class AnalogSVG:
         # Prepare AC analysis SPICE
         subckt_ok = _check_ngspice_subckt()
         sim_spice = spice
-        has_opamp = bool(re.search(r'\bX\w+\b', sim_spice))
+        has_opamp = bool(re.search(r'(?:^|\s)X\w+\s', sim_spice, re.MULTILINE))
         if has_opamp and not subckt_ok:
             sim_spice = _replace_opamp_with_e_source(sim_spice, gain=100000)
 
@@ -1129,13 +1290,14 @@ class AnalogSVG:
 
             if result.returncode != 0:
                 return True, ""  # don't block on AC failure
-        except Exception:
+        except Exception as e:
+            logger.warning(f"AC validation sim failed: {e}")
             return True, ""
 
         # Parse AC output: extract vm(out) values
         issues = []
         try:
-            from nano_agent.tools.spice_simulator import _parse_ac_output
+            from .spice_simulator import _parse_ac_output
             parsed = _parse_ac_output(output)
             if parsed.get("error"):
                 return True, ""
@@ -1207,8 +1369,8 @@ class AnalogSVG:
                     "Output node has no AC signal (< -150 dB). "
                     "Possible open circuit or missing power supply connection.")
 
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"AC output parsing failed: {e}")
 
         if issues:
             detail = "### ⚠️ Electrical Validation Failed\n\n" + \
@@ -1217,26 +1379,21 @@ class AnalogSVG:
         return True, ""
 
     def draw_analog_spice(self, spice: str, title: str = "") -> str:
-        """Parse SPICE netlist → sim verify → render SVG.
-
-        Only returns the circuit diagram if ngspice simulation succeeds.
-        If simulation fails, returns the error so the LLM can fix and retry.
-        """
+        """Pipeline: ① SPICE → ② Ngspice验证 → ③ Self-Refine修正 → ④ Schemdraw渲染 → ⑤ 输出"""
         spice_stripped = spice.strip()
 
-        # ── SPICE 仿真验证 ──
+        # ── Step ②: Ngspice 仿真验证 ──
         sim_ok, sim_output = self._run_sim_check(spice_stripped)
+        refine_hint = ""
         if not sim_ok:
             return (
-                f"❌ **Simulation failed — diagram blocked.**\n\n"
+                f"### ⚠️ Simulation Failed\n\n"
+                f"**Error:**\n```\n{sim_output[:800]}\n```\n\n"
                 f"**SPICE Netlist:**\n```spice\n{spice_stripped}\n```\n\n"
-                f"**Simulation Error:**\n```\n{sim_output[:1500]}\n```\n\n"
-                f"🔧 **Fix the SPICE errors above** and call `draw_analog_spice` "
-                f"again with the corrected netlist. Once simulation passes, "
-                f"the diagram will be shown automatically."
+                f"🔧 **Self-Refine:** Fix the SPICE above and try again."
             )
 
-        # 仿真通过 → 渲染 SVG
+        # ── Step ④: Schemdraw 渲染 ──
         try:
             components = _parse_spice(spice_stripped)
             if not components:
@@ -1252,11 +1409,10 @@ class AnalogSVG:
         fp.write_text(svg, encoding="utf-8")
         url = f"/charts/{fp.name}"
 
+        # ── Step ⑤: 输出结果 ──
+        sim_block = f"\n\n✅ **Simulation verified**" if sim_ok else ""
         spice_block = f"\n\n**SPICE Netlist:**\n```spice\n{spice_stripped}\n```"
-        sim_block = f"\n\n✅ **Simulation verified** — ngspice ran successfully."
-        sim_hint = ("\n\n💡 **Next:** Call `simulate_spice` for detailed AC/transient "
-                    "analysis and iterative optimization.")
-        return f"![{title or 'Analog Circuit'}]({url})\n{url}{sim_block}{spice_block}{sim_hint}"
+        return f"![{title or 'Analog Circuit'}]({url})\n{url}{sim_block}{spice_block}"
 
     # ═══════════ design_circuit: 自动闭环设计 ═══════════
 
@@ -1286,7 +1442,7 @@ class AnalogSVG:
         sim_ok, sim_output = self._run_sim_check(spice)
         fix_attempts = 0
 
-        while not sim_ok and fix_attempts < 3:
+        while not sim_ok and fix_attempts < 6:
             fix_attempts += 1
             # Try E-source fallback for subcircuit issues
             if ("Mismatch" in sim_output or "subckt" in sim_output.lower()
@@ -1381,7 +1537,7 @@ class AnalogSVG:
     def _measure_metric(self, spice: str, metric_name: str) -> float | None:
         """Run AC simulation and extract a single metric value."""
         import subprocess
-        from nano_agent.tools.spice_simulator import (
+        from .spice_simulator import (
             _prep_netlist, _parse_ac_output, _compute_ac_metrics)
 
         ac_spice = spice.strip()
@@ -1404,7 +1560,8 @@ class AnalogSVG:
             )
             Path(cir_path).unlink(missing_ok=True)
             output = (result.stderr + result.stdout).replace("\f", "\n")
-        except Exception:
+        except Exception as e:
+            logger.warning(f"Metric measurement sim failed: {e}")
             return None
 
         parsed = _parse_ac_output(output)
@@ -1419,100 +1576,281 @@ class AnalogSVG:
             return None
         return None
 
-    @staticmethod
-    def _render_schemdraw_svg(spice: str, title: str = "") -> str:
-        """Render SPICE netlist to SVG via schemdraw (professional layout)."""
-        try:
-            from nano_agent.tools.spice_renderer import _build_graph, _layout
-            from schemdraw import Drawing
-            import schemdraw.elements as elm
+    # ═══════════ compose_circuit: 多级电路组合 ═══════════
 
+    def compose_circuit(self, stages_json: str, coupling: str = "ac",
+                        title: str = "") -> str:
+        """Compose multiple circuit templates into a multi-stage design.
+
+        Args:
+            stages_json: JSON list of [{"template": "...", "specs": "key=value"}]
+            coupling: "ac" (capacitor, default) or "dc" (direct wire)
+        """
+        # 1. Parse stages
+        stages = _json.loads(stages_json)
+        if not isinstance(stages, list) or len(stages) < 2:
+            return "❌ **Need at least 2 stages.**"
+
+        # 2. Match templates
+        stage_data = []
+        for si, stage in enumerate(stages):
+            desc = stage.get("template", "")
+            specs = stage.get("specs", "")
+            try:
+                tmpl, values = self._match_template(desc)
+            except Exception as e:
+                return f"❌ **Stage {si} template matching failed:** {e}"
+
+            if specs:
+                for part in specs.split():
+                    if "=" in part:
+                        k, v = part.split("=", 1)
+                        k = k.strip().lower()
+                        for pk in tmpl.get("params", {}):
+                            if pk.lower() == k:
+                                values[pk] = v.strip()
+
+            components = [dict(c) for c in tmpl["components"]]
+            stage_data.append({
+                "tmpl": tmpl, "values": values, "components": components,
+                "name": tmpl.get("name", f"Stage{si}"),
+            })
+
+        # 3. Node namespace + coupling
+        all_components = []
+        stage_names = []
+        prev_out_net = None
+
+        for si, sd in enumerate(stage_data):
+            suffix = f"_s{si}"
+            stage_names.append(sd["name"])
+            renamed = []
+            for c in sd["components"]:
+                nc = dict(c)
+                nc["nodes"] = [str(n) + suffix if str(n) != "0" else "0" for n in c.get("nodes", [])]
+                nc["name"] = c["name"] + suffix
+                renamed.append(nc)
+            all_components.extend(renamed)
+
+            # Find in/out nets
+            in_net = None
+            out_net = None
+            for c in renamed:
+                if c["type"] == "V" and "AC" in str(c.get("value", "")).upper():
+                    for n in c["nodes"]:
+                        if str(n) != "0":
+                            in_net = str(n)
+                            break
+            for c in renamed:
+                for n in c["nodes"]:
+                    if "out" in str(n):
+                        out_net = str(n)
+                        break
+            if not out_net:
+                out_net = "out" + suffix
+
+            # Remove AC sources from non-first stages
+            if si > 0:
+                all_components = [c for c in all_components
+                                  if not (c["type"] == "V" and "AC" in str(c.get("value", ""))
+                                          and c["name"].endswith(suffix))]
+
+            # Insert coupling
+            if si > 0 and prev_out_net:
+                cpl_net = f"cpl_s{si}"
+                if coupling == "ac":
+                    all_components.append({
+                        "type": "C", "name": f"C_couple_s{si}",
+                        "nodes": [prev_out_net, cpl_net], "value": "10u",
+                    })
+                else:
+                    all_components.append({
+                        "type": "Wire", "name": f"W_couple_s{si}",
+                        "nodes": [prev_out_net, cpl_net], "value": "",
+                    })
+                for c in all_components:
+                    if c["name"].endswith(suffix):
+                        c["nodes"] = [cpl_net if (str(n) == in_net and str(n) != "0") else str(n)
+                                      for n in c["nodes"]]
+            prev_out_net = out_net
+
+        # 4. Merge power supplies
+        power_nets = {}
+        merged = []
+        for c in all_components:
+            if c["type"] == "V" and "DC" in str(c.get("value", "")).upper():
+                pkey = c["value"]
+                if pkey in power_nets:
+                    old_pos = c["nodes"][0] if c["nodes"] else ""
+                    new_pos = power_nets[pkey]
+                    for oc in all_components + merged:
+                        oc["nodes"] = [new_pos if str(n) == old_pos else str(n) for n in oc.get("nodes", [])]
+                    continue
+                else:
+                    power_nets[pkey] = c["nodes"][0] if c["nodes"] else ""
+            merged.append(c)
+        all_components = merged
+
+        # 5. Handle Wire connections
+        wire_merges = {}
+        for c in all_components:
+            if c["type"] == "Wire":
+                a, b = str(c["nodes"][0]), str(c["nodes"][1])
+                if a != b and a != "0" and b != "0":
+                    wire_merges[b] = a
+        all_components = [c for c in all_components if c["type"] != "Wire"]
+        if wire_merges:
+            for c in all_components:
+                c["nodes"] = [wire_merges.get(str(n), str(n)) for n in c["nodes"]]
+
+        # 6. Generate SPICE
+        all_values = {}
+        for si, sd in enumerate(stage_data):
+            suffix = f"_s{si}"
+            for k, v in sd["values"].items():
+                all_values[k + suffix] = v
+
+        spice = _to_spice(all_components, all_values)
+        circuit_name = title or (" → ".join(stage_names))
+
+        # 7. Sim check
+        sim_ok, sim_output = self._run_sim_check(spice)
+        if not sim_ok:
+            return (
+                f"❌ **Multi-stage simulation failed.**\n\n"
+                f"**Circuit:** {circuit_name}\n\n"
+                f"**SPICE Netlist:**\n```spice\n{spice}\n```\n\n"
+                f"**Error:**\n```\n{sim_output[:1200]}\n```"
+            )
+
+        # 8. Render
+        try:
+            svg = self._render_schemdraw_svg(
+                spice, circuit_name,
+                stages=stage_names,
+                stage_components=all_components,
+            ) or _render_svg(all_components, circuit_name)
+        except Exception as e:
+            return f"❌ **SVG rendering failed:** {e}"
+
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        fp = self.charts_dir / f"analog_{ts}.svg"
+        fp.write_text(svg, encoding="utf-8")
+        url = f"/charts/{fp.name}"
+
+        parts = [f"![{circuit_name}]({url})\n{url}"]
+        parts.append(f"\n✅ **{len(stage_data)}-stage circuit — simulation passed**")
+        parts.append(f"\n**Stages:** {' → '.join(stage_names)}")
+        parts.append(f"\n**Coupling:** {'AC' if coupling == 'ac' else 'DC'}")
+        parts.append(f"\n**SPICE Netlist:**\n```spice\n{spice}\n```")
+        return "\n".join(parts)
+
+    # ═══════════ DOT Layout + SVG Render ═══════════
+
+    @staticmethod
+    def _render_schemdraw_svg(spice: str, title: str = "",
+                               stages: list[str] = None,
+                               stage_components: list[dict] = None) -> str:
+        """Render circuit with schemdraw (professional IEEE layout)."""
+        try:
+            from .spice_renderer import SpiceRenderer
+            sr = SpiceRenderer.__new__(SpiceRenderer)
+            from .spice_renderer import _build_graph, _layout
             graph = _build_graph(spice)
             if not graph["components"]:
                 return None
-
             layout = _layout(graph)
-            d = Drawing(canvas='svg', unit=3)
-            comps = graph["components"]
-            main_chain = layout["main_chain"]
-            branches = layout["branches"]
-            ground_nets = graph["ground_nets"]
-
-            if not comps:
-                return None
-
-            branch_at_col = {}
-            for parent_col, comp_idx, direction in branches:
-                branch_at_col.setdefault(parent_col, []).append((comp_idx, direction))
-
-            placed = set()
-            _ELEM_MAP = {"R": "Resistor", "C": "Capacitor", "L": "Inductor2",
-                         "D": "Diode"}
-            for col, comp_idx in enumerate(main_chain):
-                comp = comps[comp_idx]
-                ctype = comp["type"]
-                value = comp.get("value", "")
-
-                if ctype == "V":
-                    vu = value.upper()
-                    if "SIN" in vu or "AC" in vu:
-                        el = elm.SourceSin()
-                    elif "DC" in vu:
-                        el = elm.SourceV()
-                    elif "PULSE" in vu:
-                        el = elm.SourcePulse()
-                    else:
-                        el = elm.SourceV()
-                elif ctype == "X":
-                    el = elm.Opamp()
-                elif ctype == "D":
-                    el = elm.Diode()
-                else:
-                    cls_name = _ELEM_MAP.get(ctype, "Resistor")
-                    el_cls = getattr(elm, cls_name)
-                    el = el_cls()
-                    if value and ctype != "V":
-                        el.label(value)
-
-                if col == 0:
-                    d.add(el)
-                else:
-                    d.add(el.right())
-                placed.add(comp_idx)
-
-                if col in branch_at_col:
-                    for bci, bdir in branch_at_col[col]:
-                        if bci in placed:
-                            continue
-                        bcomp = comps[bci]
-                        bctype = bcomp["type"]
-                        bvalue = bcomp.get("value", "")
-                        if bctype == "V":
-                            bel = elm.SourceV()
-                        elif bctype == "X":
-                            bel = elm.Opamp()
-                        else:
-                            bcls_name = _ELEM_MAP.get(bctype, "Resistor")
-                            bel_cls = getattr(elm, bcls_name)
-                            bel = bel_cls()
-                            if bvalue:
-                                bel.label(bvalue)
-                        d.push()
-                        d.add(bel.down())
-                        for pn, _ in bcomp["pins"]:
-                            if pn in ground_nets:
-                                d.add(elm.Ground())
-                                break
-                        d.pop()
-                        placed.add(bci)
-
-            svg_bytes = d.get_imagedata('svg')
-            return svg_bytes.decode('utf-8') if isinstance(svg_bytes, bytes) else str(svg_bytes)
+            return sr._render_schemdraw(graph, layout, title)
         except ImportError:
             return None
         except Exception as e:
             logger.warning(f"schemdraw render failed: {e}")
             return None
+    @staticmethod
+    def _draw_svg_from_positions(components: list[dict],
+                                  comp_pos_svg: dict[int, tuple[float, float]],
+                                  node_pos: dict[str, tuple[float, float]],
+                                  node_to_comps: dict[str, list[int]],
+                                  svg_w: int, svg_h: int, title: str = "") -> str:
+        """Draw SVG circuit diagram from pre-computed component/node positions."""
+        svg = ET.Element("svg", {
+            "xmlns": "http://www.w3.org/2000/svg",
+            "viewBox": f"0 0 {svg_w} {svg_h}",
+            "width": str(svg_w), "height": str(svg_h),
+        })
+        ET.SubElement(svg, "rect", {
+            "width": str(svg_w), "height": str(svg_h), "fill": _SVG_COLORS["bg"],
+        })
+        if title:
+            t = ET.SubElement(svg, "text", {
+                "x": str(svg_w // 2), "y": "24", "text-anchor": "middle",
+                "fill": _SVG_COLORS["text"], "font-family": "monospace",
+                "font-size": "13", "font-weight": "bold",
+            })
+            t.text = title
+
+        for nid, cis in node_to_comps.items():
+            if nid == "0" or len(cis) <= 1 or nid not in node_pos:
+                continue
+            nx, ny = node_pos[nid]
+            ET.SubElement(svg, "circle", {
+                "cx": str(int(nx)), "cy": str(int(ny)),
+                "r": "3", "fill": _SVG_COLORS["node_dot"],
+            })
+
+        for i, c in enumerate(components):
+            if i not in comp_pos_svg:
+                continue
+            cx, cy = comp_pos_svg[i]
+            for j, nid in enumerate(c["filled_nodes"]):
+                if nid not in node_pos:
+                    continue
+                nx, ny = node_pos[nid]
+                px, py = _pin_pos(cx, cy, j, len(c["filled_nodes"]), c["type"])
+                _draw_ortho_wire(svg, px, py, nx, ny)
+
+        for i, c in enumerate(components):
+            if i in comp_pos_svg:
+                _draw_component(svg, c, comp_pos_svg[i][0], comp_pos_svg[i][1])
+
+        if "0" in node_pos:
+            gx, gy = node_pos["0"]
+            _draw_ground(svg, gx, gy)
+
+        return ET.tostring(svg, encoding="unicode")
+
+    # ═══════════ add_custom_template ═══════════
+
+    @staticmethod
+    def add_custom_template(circuit_id: str, category: str, name: str,
+                            keywords_cn: list[str], components: list[dict],
+                            params: dict = None, guide: str = "",
+                            calculate: str = "fixed") -> str:
+        """Save a custom circuit template for future reuse."""
+        import yaml as _yaml
+        custom_path = Path(__file__).parent / "templates" / "custom_circuits.yaml"
+        existing = {"templates": []}
+        if custom_path.exists():
+            with open(custom_path) as f:
+                existing = _yaml.safe_load(f) or {"templates": []}
+
+        for t in existing["templates"]:
+            if t["id"] == circuit_id:
+                return f"⚠️ Template '{circuit_id}' already exists."
+
+        new_tpl = {
+            "id": circuit_id, "category": category, "name": name,
+            "keywords_cn": keywords_cn, "guide": guide,
+            "params": params or {}, "calculate": calculate,
+            "components": components,
+        }
+        existing["templates"].append(new_tpl)
+        custom_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(custom_path, "w") as f:
+            _yaml.dump(existing, f, allow_unicode=True, default_flow_style=False, sort_keys=False)
+
+        AnalogSVG._load_templates()
+        return f"✅ Custom template '{circuit_id}' saved ({len(keywords_cn)} keywords)."
 
     @staticmethod
     def _match_template(desc: str):
@@ -1583,3 +1921,7 @@ class AnalogSVG:
         values = calc_fn(tmpl, params)
 
         return tmpl, values
+
+
+# ── Module init: load templates from YAML at import time ──
+AnalogSVG._load_templates()

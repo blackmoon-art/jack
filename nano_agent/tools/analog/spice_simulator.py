@@ -21,7 +21,8 @@ from pathlib import Path
 
 from .spice_common import (
     GROUND_NAMES, OPAMP_SUBCKT, DIODE_MODEL,
-    check_subckt_support, replace_opamp_with_e_source,
+    check_ngspice, check_subckt_support,
+    replace_opamp_with_e_source,
     has_opamp, has_diode, extract_nodes,
 )
 
@@ -31,111 +32,12 @@ logger = logging.getLogger("nano_agent.tools.spice_simulator")
 _GROUND_NAMES = GROUND_NAMES
 _OPAMP_SUBCKT = OPAMP_SUBCKT
 _DIODE_MODEL = DIODE_MODEL
+_check_ngspice = check_ngspice
 _check_subckt_support = check_subckt_support
 _replace_opamp_with_e_source = replace_opamp_with_e_source
 _extract_nodes = extract_nodes
 
 # ═══════════════════════════════════════════════════════════════
-# 共享模型定义
-# ═══════════════════════════════════════════════════════════════
-
-_OPAMP_SUBCKT = """
-.subckt opamp in_p in_n out vcc vss
-* Simple behavioral opamp: gain=100k, single-pole at 10Hz
-G1 0 n1 in_p in_n 1
-Rop1 n1 0 100k
-Cop1 n1 0 1.59e-4
-Eop1 out 0 n1 0 1
-Rop2 out 0 75
-.ends opamp
-"""
-
-_DIODE_MODEL = """
-.model DEFAULT_D D (IS=1e-14 RS=1 N=1)
-"""
-
-_GROUND_NAMES = {"0", "gnd", "GND"}
-
-# ngspice-46 Homebrew (Apple Silicon) has a broken .subckt parser.
-# Detect once and use inline E-source replacement if subcircuits are broken.
-_subckt_ok: bool | None = None
-
-
-def _check_subckt_support() -> bool:
-    """One-time check: does ngspice on this platform support .subckt?"""
-    global _subckt_ok
-    if _subckt_ok is not None:
-        return _subckt_ok
-    import subprocess as _sp
-    import tempfile as _tf
-    test_spice = ".subckt test 1 2\nR1 1 2 1k\n.ends\nX1 3 4 test\n.op\n.end\n"
-    with _tf.NamedTemporaryFile(mode="w", suffix=".cir", delete=False) as _f:
-        _f.write(test_spice)
-        _f.flush()
-        try:
-            _r = _sp.run(["ngspice", "-b", _f.name],
-                         capture_output=True, text=True, timeout=5)
-            _subckt_ok = "Mismatch" not in _r.stderr and "Mismatch" not in _r.stdout
-        except Exception:
-            _subckt_ok = False
-        Path(_f.name).unlink(missing_ok=True)
-    return _subckt_ok
-
-
-def _replace_opamp_with_e_source(spice_text: str) -> str:
-    """Replace X... opamp with inline behavioral E-source (gain=100k).
-
-    Opamp pin order: in_p in_n out vcc vss
-    We model it as: E<name> out 0 in_p in_n 100k
-    (ignoring vcc/vss for small-signal AC analysis).
-    """
-    result = []
-    for line in spice_text.split("\n"):
-        stripped = line.strip()
-        tokens = stripped.split()
-        if tokens and tokens[0].upper().startswith("X") and len(tokens) >= 6:
-            # X<name> in_p in_n out vcc vss model
-            xname = tokens[0][1:]  # strip leading X
-            in_p, in_n, out = tokens[1], tokens[2], tokens[3]
-            # E source: E<name> N+ N- NC+ NC- gain
-            # VCVS: V(N+,N-) = gain * (V(NC+) - V(NC-))
-            # Opamp: Vout = gain * (V(in+) - V(in-))
-            result.append(f"E{xname} {out} 0 {in_p} {in_n} 100k")
-        else:
-            result.append(line)
-    return "\n".join(result)
-
-
-def _check_ngspice() -> bool:
-    """Check if ngspice is available on PATH."""
-    return shutil.which("ngspice") is not None
-
-
-# ═══════════════════════════════════════════════════════════════
-# Netlist 准备
-# ═══════════════════════════════════════════════════════════════
-
-def _extract_nodes(spice_text: str) -> list[str]:
-    """Extract unique non-ground node names from SPICE netlist."""
-    nodes = set()
-    for line in spice_text.strip().split("\n"):
-        line = line.strip()
-        if not line or line.startswith(("*", "#", ".")):
-            continue
-        tokens = line.split()
-        if len(tokens) < 3:
-            continue
-        ctype = tokens[0][0].upper()
-        if ctype == "R":
-            nodes.update(tokens[1:3])
-        elif ctype in ("C", "L", "D"):
-            nodes.update(tokens[1:3])
-        elif ctype == "V":
-            nodes.update(tokens[1:3])
-        elif ctype == "X":
-            nodes.update(tokens[1:-1])
-    return sorted(n for n in nodes if n not in _GROUND_NAMES)
-
 
 def _prep_netlist(spice_text: str, analysis: str = "") -> tuple[str, str]:
     """Prepare SPICE netlist for ngspice batch mode.
@@ -169,8 +71,8 @@ def _prep_netlist(spice_text: str, analysis: str = "") -> tuple[str, str]:
 
     # Inject opamp/diode models if needed
     # Match component lines specifically (X/D at line start, not in values like "DC 0")
-    has_opamp = bool(re.search(r'^X\w+', text, re.MULTILINE))
-    has_diode = bool(re.search(r'^D\w+', text, re.MULTILINE))
+    has_opamp = bool(re.search(r'(?:^|\s)X\w+\s', text, re.MULTILINE))
+    has_diode = bool(re.search(r'(?:^|\s)D\d\w*\s', text, re.MULTILINE))
 
     if has_opamp:
         if _check_subckt_support():
@@ -183,6 +85,17 @@ def _prep_netlist(spice_text: str, analysis: str = "") -> tuple[str, str]:
 
     if has_diode and ".model" not in text.lower():
         text = _DIODE_MODEL.strip() + "\n" + text
+
+    # Auto-inject BJT/MOSFET models — detect which models are actually used
+    models_needed = set()
+    for m in re.finditer(r'(?:^|\s)[QM]\d\w*\s+(?:.*\s)?(\S+)\s*$', text, re.MULTILINE):
+        models_needed.add(m.group(1).upper())
+    from .spice_common import NPN_MODEL, PNP_MODEL, NMOS_MODEL, PMOS_MODEL
+    _MODEL_MAP = {"NPN": NPN_MODEL, "PNP": PNP_MODEL,
+                  "NMOS": NMOS_MODEL, "PMOS": PMOS_MODEL}
+    for mn in sorted(models_needed):
+        if mn in _MODEL_MAP and mn.lower() not in text.lower():
+            text = _MODEL_MAP[mn].strip() + "\n" + text
 
     # Get non-ground nodes for .print
     nodes = _extract_nodes(text)
@@ -282,150 +195,35 @@ def _parse_op_output(output: str) -> dict:
     return result
 
 
-def _parse_ac_output(output: str) -> dict:
-    """Parse ngspice AC analysis output.
+def _parse_ngspice_table(output: str, x_col: str, col_filter) -> dict:
+    """Common ngspice table parser — handles form-feed pagination and page merging.
 
-    Handles form-feed-paginated output where wide tables are split across
-    multiple pages. Strips \\f, skips repeated header/index lines, and
-    collects all data rows.
+    Args:
+        output: raw ngspice stdout+stderr
+        x_col: independent variable column name ('frequency' or 'time')
+        col_filter: predicate(h) → bool for data column headers
 
-    Returns {"frequencies": [...], "data": {col_name: [...]},
-             "num_points": N, "freq_range": (min, max)}
+    Returns: {x_values: {row_idx: x_val}, col_data: {col_name: {row_idx: val}},
+              num_rows: N, error: str|None}
     """
-    result = {"frequencies": [], "data": {}, "num_points": 0, "freq_range": (0, 0)}
-
-    # Strip form feeds and normalize whitespace
     cleaned = output.replace("\f", "\n")
-
-    lines = cleaned.split("\n")
-    headers = []
-    data_cols_seen = {}  # col_name → list of (row_idx, value) for multi-page merge
-    freq_values = {}     # row_idx → frequency
-    current_cols = []    # columns in current page group
-    in_table = False
-    max_row_idx = -1
-
-    for line in lines:
-        stripped = line.strip()
-
-        # Detect table header: "Index   frequency   vdb(N)   vp(N) ..."
-        if "Index" in stripped and "frequency" in stripped.lower():
-            in_table = True
-            parts = stripped.split()
-            current_cols = []
-            for j in range(1, len(parts)):
-                h = parts[j]
-                if h == "frequency":
-                    continue  # skip independent variable column
-                if h.startswith("vm(") or h.startswith("vdb(") or h.startswith("vp("):
-                    current_cols.append(h)
-            continue
-
-        # Skip separator lines
-        if stripped.startswith("---"):
-            continue
-
-        # Empty line after data rows → end of current page's table
-        if not stripped:
-            if in_table:
-                in_table = False
-            continue
-
-        # Parse data row while in table
-        if in_table:
-            parts = stripped.split()
-            if len(parts) < 2:
-                continue
-            try:
-                row = [float(p) for p in parts]
-                if len(row) < 2:
-                    continue
-            except ValueError:
-                continue
-
-            row_idx = int(row[0])
-            freq = row[1]
-            max_row_idx = max(max_row_idx, row_idx)
-            freq_values[row_idx] = freq
-
-            # Parse data columns: start at position 2
-            for ci in range(2, len(row)):
-                col_name = current_cols[ci - 2] if ci - 2 < len(current_cols) else f"col_{ci}"
-                if col_name == "frequency":
-                    continue
-                if col_name not in data_cols_seen:
-                    data_cols_seen[col_name] = {}
-                data_cols_seen[col_name][row_idx] = row[ci]
-
-    if max_row_idx < 0:
-        result["error"] = "No AC data rows found"
-        return result
-
-    num_rows = max_row_idx + 1
-    result["num_points"] = num_rows
-
-    # Build ordered frequency list
-    result["frequencies"] = [freq_values.get(i, 0.0) for i in range(num_rows)]
-    if result["frequencies"]:
-        result["freq_range"] = (result["frequencies"][0], result["frequencies"][-1])
-
-    # Build ordered data columns, converting vm() to dB
-    for col_name, idx_vals in data_cols_seen.items():
-        vals = [idx_vals.get(i, 0.0) for i in range(num_rows)]
-        if col_name.startswith("vm("):
-            # Convert linear magnitude to dB: 20*log10(|v|)
-            # Rename column to vdb() for downstream consistency
-            db_name = col_name.replace("vm(", "vdb(", 1)
-            db_vals = []
-            for v in vals:
-                if abs(v) > 1e-15:
-                    db_vals.append(20.0 * math.log10(abs(v)))
-                else:
-                    db_vals.append(-200.0)  # effectively -inf
-            result["data"][db_name] = db_vals
-        else:
-            result["data"][col_name] = vals
-
-    return result
-
-
-def _parse_tran_output(output: str) -> dict:
-    """Parse ngspice transient analysis output.
-
-    Handles form-feed-paginated output same as _parse_ac_output.
-
-    Returns {"time": [...], "signals": {name: [...]}, "num_points": N}
-    """
-    result = {"time": [], "signals": {}, "num_points": 0}
-
-    cleaned = output.replace("\f", "\n")
-    lines = cleaned.split("\n")
-    signal_data = {}     # sig_name → {row_idx: value}
-    time_values = {}     # row_idx → time
+    x_values = {}
+    col_data = {}
     current_cols = []
     in_table = False
     max_row_idx = -1
 
-    for line in lines:
+    for line in cleaned.split("\n"):
         stripped = line.strip()
 
-        if "Index" in stripped and "time" in stripped.lower():
+        if "Index" in stripped and x_col in stripped.lower():
             in_table = True
             parts = stripped.split()
-            current_cols = []
-            for j in range(1, len(parts)):
-                h = parts[j]
-                if h == "time":
-                    continue  # skip independent variable column
-                if h.startswith("v("):
-                    current_cols.append(h)
+            current_cols = [h for h in parts[1:] if col_filter(h)]
             continue
 
-        if stripped.startswith("---"):
-            continue
-
-        if not stripped:
-            if in_table:
+        if stripped.startswith("---") or not stripped:
+            if not stripped and in_table:
                 in_table = False
             continue
 
@@ -435,35 +233,63 @@ def _parse_tran_output(output: str) -> dict:
                 continue
             try:
                 row = [float(p) for p in parts]
-                if len(row) < 2:
-                    continue
             except ValueError:
+                continue
+            if len(row) < 2:
                 continue
 
             row_idx = int(row[0])
-            time_val = row[1]
+            x_values[row_idx] = row[1]
             max_row_idx = max(max_row_idx, row_idx)
-            time_values[row_idx] = time_val
 
             for ci in range(2, len(row)):
-                name = current_cols[ci - 2] if ci - 2 < len(current_cols) else f"sig_{ci}"
-                if name == "time":
+                col_name = current_cols[ci - 2] if ci - 2 < len(current_cols) else f"col_{ci}"
+                if col_name == x_col:
                     continue
-                if name not in signal_data:
-                    signal_data[name] = {}
-                signal_data[name][row_idx] = row[ci]
+                col_data.setdefault(col_name, {})[row_idx] = row[ci]
 
-    if max_row_idx < 0:
-        result["error"] = "No transient data rows found"
-        return result
+    return {"x_values": x_values, "col_data": col_data,
+            "num_rows": max_row_idx + 1 if max_row_idx >= 0 else 0,
+            "error": None if max_row_idx >= 0 else f"No {x_col} data rows found"}
 
-    num_rows = max_row_idx + 1
-    result["num_points"] = num_rows
-    result["time"] = [time_values.get(i, 0.0) for i in range(num_rows)]
 
-    for name, idx_vals in signal_data.items():
-        result["signals"][name] = [idx_vals.get(i, 0.0) for i in range(num_rows)]
+def _parse_ac_output(output: str) -> dict:
+    """Parse ngspice AC analysis output via shared table parser."""
+    r = _parse_ngspice_table(output, "frequency",
+                             lambda h: h.startswith(("vm(", "vdb(", "vp(")))
+    if r["error"]:
+        return {"frequencies": [], "data": {}, "num_points": 0,
+                "freq_range": (0, 0), "error": r["error"]}
 
+    n = r["num_rows"]
+    result = {"num_points": n, "frequencies": [r["x_values"].get(i, 0.0) for i in range(n)],
+              "data": {}, "freq_range": (0, 0)}
+    if result["frequencies"]:
+        result["freq_range"] = (result["frequencies"][0], result["frequencies"][-1])
+
+    for col_name, idx_vals in r["col_data"].items():
+        vals = [idx_vals.get(i, 0.0) for i in range(n)]
+        if col_name.startswith("vm("):
+            db_name = col_name.replace("vm(", "vdb(", 1)
+            result["data"][db_name] = [
+                20.0 * math.log10(abs(v)) if abs(v) > 1e-15 else -200.0 for v in vals
+            ]
+        else:
+            result["data"][col_name] = vals
+    return result
+
+
+def _parse_tran_output(output: str) -> dict:
+    """Parse ngspice transient analysis output via shared table parser."""
+    r = _parse_ngspice_table(output, "time", lambda h: h.startswith("v("))
+    if r["error"]:
+        return {"time": [], "signals": {}, "num_points": 0, "error": r["error"]}
+
+    n = r["num_rows"]
+    result = {"num_points": n, "time": [r["x_values"].get(i, 0.0) for i in range(n)],
+              "signals": {}}
+    for name, idx_vals in r["col_data"].items():
+        result["signals"][name] = [idx_vals.get(i, 0.0) for i in range(n)]
     return result
 
 

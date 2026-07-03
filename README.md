@@ -429,12 +429,148 @@ Generate 3 approaches → Score: A(9) B(7) C(3)
 | `mermaid_chart` | 生成 Mermaid 图表 (流程图/时序图/类图等) | 输出 SVG，不执行 JS |
 | `generate_chart` | 生成数学/数据图表 (折线/柱状/散点/等高线/波形等) | 无外部依赖 |
 | `draw_shape` | 几何形状/简笔画 (cat/waveform/geometry) | 无外部依赖 |
-| `circuit_diagram` | 电路原理图 (CircuitMacros 渲染) | 沙箱执行 |
+| `circuit_diagram` | 电路原理图 (模拟/数字/框图) | SPICE 仿真门控验证 |
+| `draw_analog_svg` | NL → 模拟电路图 (模板→SPICE→仿真→SVG) | ngspice 语法+电气双门控 |
+| `draw_analog_spice` | 原始 SPICE 网表 → SVG | ngspice 验证 |
+| `design_circuit` | 闭环电路设计 (自动优化到目标指标) | 迭代调整 ≤5 轮 |
+| `simulate_spice` | ngspice 仿真 + 结果解析 (AC/Tran/DC) | 15s 超时 |
 | `diagram_fetch` | 抓取在线图解 (PlantUML/WebSequenceDiagrams) | URL 白名单 |
 | `ai_image` | AI 图像生成 (本地/远程模型) | 模型路径沙箱 |
 | `ppt_create` | 生成 PPT 演示文稿 (python-pptx) | 文件沙箱 |
 
 工具返回 `Observation` 结构化对象（`tool_name`, `success`, `result`, `args`, `metadata`），Agent 可判断工具执行是否成功。同时兼容字符串操作（`__str__`/`__contains__`/`startswith` 委托到 `result`）。
+
+## 模拟电路闭环设计
+
+端到端模拟电路设计系统：自然语言 → 模板匹配 → 参数计算 → SPICE 网表 → 仿真验证 → DOT 布局渲染 → SVG。
+
+### 架构
+
+```
+用户: "放大器 gain=20"
+        │
+        ▼
+┌─────────────────────────────────────────────────┐
+│  visual_router.py  →  draw_analog_svg           │
+│  三层路由: 关键词(65%) → 意图(20%) → LLM(15%)    │
+└─────────────────────────────────────────────────┘
+        │
+        ▼
+┌─────────────────────────────────────────────────┐
+│  ① _match_template("放大器 gain=20")             │
+│     中英文关键词匹配 → Inverting Amplifier        │
+│     参数提取: gain=20 → params["gain"]="20"      │
+│  ② _calc_inverting_amp()                        │
+│     Rf = gain * R1 = 20k                        │
+│  ③ _to_spice()                                  │
+│     Vin 1 0 AC 1                                │
+│     R1 1 2 1k      Rf 2 3 20k                  │
+│     XU1 0 2 3 4 0 opamp                        │
+└─────────────────────────────────────────────────┘
+        │
+        ▼
+┌─────────────────────────────────────────────────┐
+│  两阶段仿真门控                                   │
+│  ┌───────────────────────────────────────────┐  │
+│  │ Stage 1: 语法门控 (_run_sim_check)         │  │
+│  │  • ngspice -b 批量模式，15s 超时           │  │
+│  │  • Apple Silicon subcircuit bug 自动检测   │  │
+│  │  • E-source fallback (gain=100k)          │  │
+│  │  ❌ 失败 → 返回错误，LLM 修正后重试         │  │
+│  ├───────────────────────────────────────────┤  │
+│  │ Stage 2: 电气门控 (_validate_characteristics)│  │
+│  │  • .ac dec 20 1 1e6 → AC 扫描              │  │
+│  │  • 放大器: 实测增益 vs 预期增益              │  │
+│  │    - < 0.1% → "输出死区"                    │  │
+│  │    - > 100x → "反馈开路"                    │  │
+│  │  • 滤波器: -3dB cutoff 频率校验 (±10x 容差)  │  │
+│  │  • DC 死区检测 (< -150 dB)                  │  │
+│  │  ❌ 失败 → 返回错误，LLM 修正后重试         │  │
+│  └───────────────────────────────────────────┘  │
+└─────────────────────────────────────────────────┘
+        │ ✅ 通过
+        ▼
+┌─────────────────────────────────────────────────┐
+│  ④ _render_schemdraw_svg(spice, title)          │
+│     Graphviz DOT (Sugiyama 分层图) 布局          │
+│     + 纯 SVG 元件符号 (暗色主题)                 │
+│     + 正交走线 + 节点/接地绘制                   │
+│     fallback: 纯 BFS 层级布局 (无需 graphviz)    │
+└─────────────────────────────────────────────────┘
+```
+
+### 三条入口
+
+| 入口 | 触发 | 流程 |
+|------|------|------|
+| `draw_analog_svg` | NL → 自动模板 | 匹配→计算→SPICE→**双门控验证**→渲染 |
+| `design_circuit` | NL + specs (`fc=5kHz`) | 上述全流程 + **自动优化循环** (阻尼比例调整, ≤5轮) |
+| `draw_analog_spice` | 原始 SPICE 网表 | 仿真验证→渲染 (LLM 自由拓扑) |
+
+### 模板体系 (17 种)
+
+| 类别 | 模板 | 计算指标 | 中英文关键词 |
+|------|------|:---:|------|
+| 滤波器 | RC 低通、RC 高通、LC 低通 | fc | 低通/高通/滤波/lpf/hpf |
+| | **Sallen-Key 有源低通** | fc (Butterworth Q=0.707) | Sallen-Key/有源低通 |
+| 运放放大器 | 反相、同相、差分、求和反相 | gain | 反相/同相/差分/放大器/运放 |
+| | **电压跟随器 (Buffer)** | 固定 | 跟随器/buffer/unity gain |
+| **BJT** | **共射放大**、**射极跟随** | gain/Ic | 共射/共集/common emitter/三极管 |
+| | **电流镜**、**差分对** | Iref/gain | 电流镜/diff pair/current mirror |
+| **MOSFET** | **共源放大** | gain | 共源/common source/mos放大 |
+| 整流 | 半波、全桥 | 固定 | 半波/全波/整流桥 |
+| 分压 | 分压器 | ratio | 分压/分压器 |
+
+### 器件模型
+
+| 模型 | 类型 | 说明 |
+|------|------|------|
+| `opamp` | 行为级 | 单极点, Aol=100k, GBW≈0.01Hz (基础验证) |
+| `lm741` | 真实运放 | GBW≈1MHz, slew≈0.5V/µs, Aol≈200k |
+| `tl081` | 真实运放 | JFET输入, GBW≈3MHz, slew≈13V/µs |
+| `NPN` / `PNP` | BJT | IS=1e-14, BF=200/100, VAF=100/50 |
+| `NMOS` / `PMOS` | MOSFET | Level 1, VTO=±1.5V, KP=200u/100u |
+| `DEFAULT_D` | 二极管 | IS=1e-14, RS=1 |
+
+### 可扩展性
+
+模板存储在 `templates/circuits.yaml`（17 个内置）+ `templates/custom_circuits.yaml`（用户自定义）。
+
+- **YAML 热加载**: 启动时自动加载，失败 fallback 到硬编码
+- **LLM 保存模板**: `add_custom_template` 工具 — 设计验证通过的电路可保存为模板，下次关键词匹配即可复用
+- **零代码扩展**: 编辑 YAML 或调 `add_custom_template` 即可加新电路，无需改 Python
+
+### 渲染演进
+
+| 版本 | 布局算法 | 反馈电路 | 输出 |
+|------|---------|:---:|:---:|
+| v1 (旧) | schemdraw BFS 线性链 | ❌ Rf 串在运放前面 | PNG |
+| v2 (当前) | **Graphviz DOT** Sugiyama 分层图 | ✅ Rf 和运放并排同列 | **SVG** |
+
+DOT 的 Sugiyama 算法是 EDA 工具的标准分层图布局算法。同一深度的元件放在同一列，反馈边不影响层级，正确处理运放反馈拓扑。
+
+### 评分
+
+| 维度 | 分 | 说明 |
+|------|:--:|------|
+| 正确性 | 8 | 模板计算正确、DOT 布局正确、BJT/MOSFET 模型完善。扣分：运放模型仍为行为级 |
+| 鲁棒性 | 8 | 优雅降级、Apple Silicon bug 检测、优化阻尼限步、YAML fallback 硬编码 |
+| 覆盖面 | 7 | 17 种模板：运放+BJT+MOSFET+滤波器+整流。扣分：缺多级电路、缺仪表放大器 |
+| 架构 | 8 | YAML 模板分离、spice_common 模型共享、add_custom_template 热扩展 |
+| 体验 | 7 | 中英文关键词、闭环设计、双门控、LLM 可保存模板 |
+| 创新 | 8 | LLM + SPICE 闭环、仿真门控、DOT 处理反馈 |
+| **综合** | **7.7** | 从 prototype 向工程化迈进了一大步 |
+
+### 已知 Gap & Roadmap
+
+| Gap | 说明 | 工作量 | 状态 |
+|-----|------|:---:|:---:|
+| ~~仿真深度~~ | ~~.tran/.noise/.temp + 真实运放模型~~ | ~~3 天~~ | ✅ 已完成 (2026-07-03) |
+| ~~分立器件~~ | ~~BJT/MOSFET 模板 + 计算器 + 符号~~ | ~~2 天~~ | ✅ 已完成 (2026-07-03) |
+| ~~可扩展性~~ | ~~YAML 模板 + LLM 保存 + 热加载~~ | ~~3-5 天~~ | ✅ 已完成 (2026-07-03) |
+| 多级电路 | 级联滤波+放大、级间耦合、偏置解耦 | ~1-2 周 | 🟢 低 |
+| 瞬态仿真门控 | .tran 分析集成到 draw_analog_svg 验证 | ~2 天 | 🟡 中 |
+| 噪声分析 | .noise 仿真 + 输入参考噪声解析 | ~1 天 | 🟡 中 |
 
 ## 记忆系统
 

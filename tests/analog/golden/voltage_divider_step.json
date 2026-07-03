@@ -1,0 +1,8 @@
+{
+  "name": "voltage_divider_step",
+  "spice": "V1 1 0 PULSE(0 5 0 1u 1u 50u 100u)\nR1 1 2 1k\nR2 2 0 1k",
+  "signal": "v(2)",
+  "points": 16,
+  "min": 0.0,
+  "max": 2.5
+}

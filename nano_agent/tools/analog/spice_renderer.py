@@ -52,6 +52,8 @@ def _build_graph(spice_text: str) -> dict:
         "D": ["L", "R"],
         "V": ["L", "R"],      # V+: left, V-: right
         "X": ["L", "L", "R", "T", "B"],  # in-, in+, out, vcc, vss
+        "Q": ["T", "L", "B"],  # C, B, E (collector top, base left, emitter bottom)
+        "M": ["T", "L", "B", "R"],  # D, G, S, B (drain top, gate left, source bottom, bulk right)
     }
 
     components = []
@@ -74,7 +76,7 @@ def _build_graph(spice_text: str) -> dict:
         ctype = first[0].upper()
         cname = first
 
-        if ctype not in ("R", "C", "L", "D", "V", "X"):
+        if ctype not in ("R", "C", "L", "D", "V", "X", "Q", "M"):
             continue
 
         # Parse by component type
@@ -99,6 +101,13 @@ def _build_graph(spice_text: str) -> dict:
                 continue
             raw_nodes = tokens[1:-1]
             model = tokens[-1]
+            value = ""
+        elif ctype in ("Q", "M"):
+            # Qname C B E model  /  Mname D G S B model
+            if len(tokens) < 4:
+                continue
+            raw_nodes = tokens[1:-1]
+            model = tokens[-1] if len(tokens) > len(raw_nodes) + 1 else ""
             value = ""
 
         # Assign pin sides
@@ -327,6 +336,10 @@ def _make_element(comp: dict):
             el = elm.SourceV()
     elif ctype == "X":
         el = elm.Opamp()
+    elif ctype == "Q":
+        el = elm.BjtNpn()
+    elif ctype == "M":
+        el = elm.NMos()
     elif ctype == "D":
         el = elm.Diode()
     else:
@@ -495,30 +508,9 @@ def _validate_with_ngspice(spice_text: str, work_dir: Path) -> tuple[bool, str]:
 # ═══════════════════════════════════════════════════════════════
 
 class SpiceRenderer:
-    TOOLS = [
-        ("draw_analog_spice",
-         "Draw analog circuits from a SPICE netlist. "
-         "Renders professional IEEE-standard circuit diagrams using schemdraw.\n"
-         "\n"
-         "**Supported components:** R, C, L, D, V (AC/DC), X (op-amp)\n"
-         "**Format:** Standard SPICE netlist, one component per line.\n"
-         "Node '0', 'gnd', or 'GND' = ground.\n"
-         "\n"
-         "**Examples:**\n"
-         "- RC low-pass: `Vin in 0 AC 1\\nR1 in out 1k\\nC1 out 0 10n`\n"
-         "- Sallen-Key: `Vin in 0 AC 1\\nR1 in n1 10k\\nR2 n1 n2 10k\\n"
-         "C1 n1 out 1n\\nC2 n2 0 1n\\nXU1 n2 out out vcc 0 opamp`\n"
-         "- Inverting amp: `Vin in 0 AC 1\\nR1 in n1 1k\\nRf n1 out 10k\\n"
-         "XU1 n1 0 out vcc 0 opamp`",
-         "draw_analog_spice",
-         {"spice": {"type": "string",
-                    "description":
-                    "SPICE netlist. R/C/L: name n1 n2 value. "
-                    "V: name n+ n- value (AC or DC). X: name nodes... model. "
-                    "Example: 'Vin in 0 AC 1\\nR1 in out 1k\\nC1 out 0 10n'"},
-          "title": {"type": "string", "description": "Optional diagram title"}},
-         ["spice"]),
-    ]
+    # draw_analog_spice is registered by AnalogSVG (with sim-gate safety check).
+    # SpiceRenderer provides the layout engine and schemdraw rendering internally.
+    TOOLS = []
 
     def __init__(self, work_dir: str = "", charts_dir: str = ""):
         if charts_dir:
@@ -652,7 +644,7 @@ class SpiceRenderer:
 
     def _fallback_render(self, spice: str, title: str = "") -> str:
         """Fallback: use analog_svg's pure-Python renderer."""
-        from nano_agent.tools.analog_svg import _parse_spice, _render_svg
+        from .analog_svg import _parse_spice, _render_svg
 
         components = _parse_spice(spice)
         if not components:
