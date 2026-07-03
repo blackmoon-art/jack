@@ -704,10 +704,14 @@ async def download_file(filename: str, session_id: str = ""):
     if filepath is None:
         return JSONResponse({"error": "File not found"}, status_code=404)
 
+    from urllib.parse import quote
+    encoded_filename = quote(filename, safe="")
     return FileResponse(
         filepath,
         filename=filename,
-        headers={"Content-Disposition": f"attachment; filename=\"{filename}\""},
+        headers={"Content-Disposition":
+                 f"attachment; filename=\"{encoded_filename}\"; "
+                 f"filename*=UTF-8''{encoded_filename}"},
     )
 
 
