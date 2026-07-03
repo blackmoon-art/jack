@@ -24,7 +24,7 @@ class MetaStrategy(BaseStrategy):
     """统一推理流水线策略 — 分析→选择→执行→反馈→调整。"""
 
     uses_orient = True
-    default_params = {"max_retries": 3, "auto_upgrade": True}
+    default_params = {"max_retries": 6, "auto_upgrade": True}
     auto_keywords = ()  # 不参与关键词匹配，由 LLM 分类显式选择
     auto_priority = 0
 
@@ -69,7 +69,7 @@ class MetaStrategy(BaseStrategy):
         steps = analysis.get("estimated_steps", 1)
 
         if quality or score >= 7:
-            return "reflexion", {"max_retries": min(self.max_retries, 3)}
+            return "reflexion", {"max_retries": min(self.max_retries, 6)}
         elif steps >= 3 or score >= 5:
             return "plan-execute", {}
         elif analysis.get("domain") in ("creative",):
@@ -132,11 +132,13 @@ class MetaStrategy(BaseStrategy):
 
         # ── Simulation status ──
         sim_ok_patterns = (
-            r"✅\s*Simulation\s*(Complete|verified|passed)",
+            r"✅\s*Simulation\s*(Complete|verified|passed|Passed)",
+            r"Simulation\s*\|\s*✅\s*(Passed|passed)",
             r"Simulation\s*verified",
         )
         sim_fail_patterns = (
             r"❌\s*Simulation\s*Failed",
+            r"Simulation\s*\|\s*❌\s*(Failed|failed)",
             r"❌\s*\*?\*?Circuit\s*simulation\s*failed",
             r"⚠️\s*Simulation\s*Failed",
             r"⚠️\s*Ngspice\s*validation\s*failed",
@@ -247,8 +249,9 @@ class MetaStrategy(BaseStrategy):
             re.search(r"Compilation\s*passed", result, re.IGNORECASE)
         )
         compile_fail = (
-            re.search(r"Compilation\s*Failed|❌.*Compilation", result) or
-            re.search(r"❌.*Compilation", result)
+            re.search(r"Compilation\s*\|\s*❌.*(Failed|failed)", result) or
+            re.search(r"❌.*Compilation.*[Ff]ailed", result) or
+            re.search(r"Compilation\s*Failed", result)
         )
         if compile_ok:
             verdict["compile_passed"] = True
@@ -265,12 +268,14 @@ class MetaStrategy(BaseStrategy):
 
         # Synthesis
         synth_ok = (
-            re.search(r"Synthesis\s*(complete|Complete)", result) or
-            re.search(r"✅\s*Synthesis", result)
+            re.search(r"Synthesis\s*\|\s*✅?\s*(Complete|complete)", result) or
+            re.search(r"✅\s*Synthesis\s*(complete|Complete)", result) or
+            re.search(r"Synthesis\s*(complete|Complete)", result)
         )
         synth_fail = (
-            re.search(r"Synthesis\s*[Ff]ailed", result) or
-            re.search(r"❌.*Synthesis", result)
+            re.search(r"Synthesis\s*\|\s*❌.*(Failed|failed)", result) or
+            re.search(r"❌.*Synthesis.*[Ff]ailed", result) or
+            re.search(r"Synthesis\s*[Ff]ailed", result)
         )
         if synth_ok:
             verdict["synth_passed"] = True
@@ -300,6 +305,31 @@ class MetaStrategy(BaseStrategy):
         if opt_match:
             verdict["opt_iterations"] = int(opt_match.group(1))
 
+        # ── Layout quality ──
+        lq_match = re.search(
+            r"Layout\s*Quality\s*\|\s*.*?\((\d+)/10\)", result)
+        if lq_match:
+            verdict["layout_score"] = int(lq_match.group(1))
+        x_match = re.search(r"Wire\s*Crossings\s*\|\s*(\d+)", result)
+        if x_match:
+            xc = int(x_match.group(1))
+            verdict["wire_crossings"] = xc
+            if xc > 0:
+                verdict.setdefault("warnings", []).append(
+                    f"{xc} wire crossing(s) in schematic")
+        o_match = re.search(r"Wire/Gate\s*Overlaps\s*\|\s*(\d+)", result)
+        if o_match:
+            wo = int(o_match.group(1))
+            verdict["wire_overlaps"] = wo
+            if wo > 0:
+                verdict.setdefault("warnings", []).append(
+                    f"{wo} wire/gate overlap(s) in schematic")
+        # Rich layout summary (for LLM reasoning)
+        lsm = re.search(
+            r"Layout:\s*(.+?)(?=\n|$)", result)
+        if lsm:
+            verdict["layout_summary"] = lsm.group(1).strip()
+
         # ── Compute technical_score from objective data ──
         verdict["technical_score"] = MetaStrategy._compute_technical_score(verdict)
 
@@ -323,46 +353,53 @@ class MetaStrategy(BaseStrategy):
         score = 0.0
 
         if verdict["sim_passed"] is True:
-            score += 4.0
+            score += 3.0  # simulation passing is the foundation
         elif verdict["sim_passed"] is False:
             return max(0.0, score)  # sim failed: cap at current
 
-        if verdict["electrical_ok"] is True:
-            score += 2.0
+        # Analog-specific metrics (skip for pure digital circuits)
+        # Digital circuits have compile/synth/gate metrics; analog has SPICE metrics
+        is_digital = (verdict.get("compile_passed") is not None
+                      or verdict.get("synth_passed") is not None
+                      or verdict.get("gate_count") is not None)
 
-        if verdict["spec_compliant"] is True:
-            score += 2.0
-        elif verdict["spec_compliant"] is None:
-            # No spec given, but sim + electrical both ok
-            if verdict["sim_passed"] and verdict["electrical_ok"]:
-                score += 1.0  # partial credit
+        if not is_digital:
+            if verdict["electrical_ok"] is True:
+                score += 2.0
 
-        # Q factor: reasonable range for most filter/amp designs
-        q_val = verdict.get("q_factor")
-        if q_val is not None and 0.3 <= q_val <= 3.0:
-            score += 1.0
+            if verdict["spec_compliant"] is True:
+                score += 2.0
+            elif verdict["spec_compliant"] is None:
+                # No spec given, but sim + electrical both ok
+                if verdict["sim_passed"] and verdict["electrical_ok"]:
+                    score += 1.0  # partial credit
 
-        # P0: GBW — amplifier must have meaningful gain×bandwidth
-        gbw = verdict.get("gbw")
-        if gbw is not None and gbw >= 1e3:
-            score += 1.0  # good: at least 1kHz GBW
-
-        # P1: Phase margin — stability check
-        pm = verdict.get("phase_margin_deg")
-        if pm is not None and pm >= 45:
-            score += 1.0
-
-        # P2: CMRR — common-mode rejection for diff amps
-        cmrr = verdict.get("cmrr_db")
-        if cmrr is not None:
-            if cmrr >= 40:
+            # Q factor: reasonable range for most filter/amp designs
+            q_val = verdict.get("q_factor")
+            if q_val is not None and 0.3 <= q_val <= 3.0:
                 score += 1.0
 
-        # P3: Slew rate — large-signal speed
-        sr = verdict.get("slew_rate")
-        if sr is not None:
-            if sr >= 0.1:  # at least 0.1 V/µs
+            # P0: GBW — amplifier must have meaningful gain×bandwidth
+            gbw = verdict.get("gbw")
+            if gbw is not None and gbw >= 1e3:
+                score += 1.0  # good: at least 1kHz GBW
+
+            # P1: Phase margin — stability check
+            pm = verdict.get("phase_margin_deg")
+            if pm is not None and pm >= 45:
                 score += 1.0
+
+            # P2: CMRR — common-mode rejection for diff amps
+            cmrr = verdict.get("cmrr_db")
+            if cmrr is not None:
+                if cmrr >= 40:
+                    score += 1.0
+
+            # P3: Slew rate — large-signal speed
+            sr = verdict.get("slew_rate")
+            if sr is not None:
+                if sr >= 0.1:  # at least 0.1 V/µs
+                    score += 1.0
 
         # ── Digital circuit metrics ──
         compile_ok = verdict.get("compile_passed")
@@ -392,6 +429,15 @@ class MetaStrategy(BaseStrategy):
 
         if not verdict["errors"] and not verdict["warnings"]:
             score += 1.0
+
+        # ── Layout quality (digital circuits) ──
+        lq = verdict.get("layout_score")
+        if lq is not None:
+            if lq >= 8:
+                score += 1.0   # clean layout
+            elif lq < 5:
+                score -= 1.0   # messy layout
+            # 5-7: neutral — no bonus, no penalty
 
         # Floor: digital compile failure is critical
         if compile_ok is False:
@@ -452,6 +498,15 @@ class MetaStrategy(BaseStrategy):
                 lines.append(f"\n**Pre-computed technical score (from simulation data): {technical:.0f}/10**")
                 lines.append("Use this as your baseline. You may adjust ±1 based on output quality, "
                              "but do NOT override simulation failures with high scores.")
+
+            # Rich layout metrics for LLM reasoning
+            layout_summary = v.get("layout_summary", "")
+            if layout_summary:
+                lines.append(f"\n**Schematic Layout Analysis:**\n{layout_summary}")
+                lines.append(
+                    "Evaluate layout quality: consider crossings (fewer is better), "
+                    "wire density (lower is better), aspect ratio (balanced is better), "
+                    "fan-out (lower is more readable). Adjust score by ±1 for layout quality.")
 
             verdict_text = "\n".join(lines)
 

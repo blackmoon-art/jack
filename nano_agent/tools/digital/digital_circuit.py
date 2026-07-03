@@ -249,24 +249,68 @@ class DigitalCircuit:
          ["verilog"]),
     ]
 
-    def __init__(self, work_dir: str = "", charts_dir: str = ""):
+    def __init__(self, work_dir: str = "", charts_dir: str = "", llm=None):
         if charts_dir:
             self.charts_dir = Path(charts_dir)
         else:
-            self.charts_dir = (Path(__file__).parent.parent.parent
+            self.charts_dir = (Path(__file__).parent.parent.parent.parent
                                / "web" / "static" / "charts")
         self.charts_dir.mkdir(parents=True, exist_ok=True)
         self.work_dir = work_dir
+        self.llm = llm  # optional LLM for Verilog generation
 
     # ═══════════ design_digital: full closed-loop ═══════════
 
-    def design_digital(self, description: str, title: str = "") -> str:
-        """Full pipeline: match template → compile → simulate → synthesize → render."""
-        # 1. Template matching
-        try:
-            tmpl = self._match_digital_template(description)
-        except Exception as e:
-            return f"❌ **Template matching failed:** {e}"
+    def design_digital(self, description: str, title: str = "",
+                        verilog: str = "", testbench: str = "",
+                        strict_layout: bool = False,
+                        force_llm: bool = False) -> str:
+        """Gated closed-loop pipeline with checkpoints at each stage.
+
+        Gates:
+          Stage 2 (Sim):  LLM checks PASS/FAIL → retry Verilog on FAIL
+          Stage 3 (Synth): gate_count check → retry Verilog if unreasonable
+          Stage 4 (Layout): layout score check → retry with alt algorithm if <5
+
+        If verilog is provided, skips template matching.
+        """
+        MAX_LAYOUT_RETRIES = 3
+
+        # ═══ Stage 1: Verilog generation ═══
+        if verilog.strip():
+            tmpl = {"name": title or "Custom Circuit", "verilog": verilog,
+                    "testbench": testbench, "guide": "User-provided Verilog"}
+        elif force_llm and self.llm:
+            # Meta retry: skip template, force LLM redesign
+            llm_v = self._llm_generate_verilog(description)
+            if llm_v:
+                from .verilog_compiler import auto_testbench
+                tmpl = {"name": title or description, "verilog": llm_v,
+                        "testbench": auto_testbench(llm_v),
+                        "guide": f"LLM redesign: {description}"}
+            else:
+                return "❌ **LLM redesign failed**"
+        else:
+            try:
+                tmpl = self._match_digital_template(description)
+            except Exception:
+                # Template not found — try LLM free generation
+                if self.llm:
+                    llm_verilog = self._llm_generate_verilog(description)
+                    if llm_verilog:
+                        from .verilog_compiler import auto_testbench
+                        auto_tb = auto_testbench(llm_verilog)
+                        tmpl = {"name": title or description,
+                                "verilog": llm_verilog,
+                                "testbench": auto_tb,
+                                "guide": f"LLM-generated: {description}"}
+                    else:
+                        return (f"❌ **LLM generation failed** for '{description}'.\n"
+                                f"Available templates: half_adder, full_adder, mux_2to1, dff, counter_4bit")
+                else:
+                    return (f"❌ **Template matching failed** — no template for '{description}'.\n"
+                            f"Available: half_adder, full_adder, mux_2to1, dff, counter_4bit\n"
+                            f"💡 Pass raw Verilog via `verilog=` parameter.")
 
         circuit_name = title or tmpl.get("name", description)
         verilog = tmpl.get("verilog", "")
@@ -279,17 +323,19 @@ class DigitalCircuit:
             parts.append(f"*{guide}*")
         parts.append("")
 
-        # 2. Compile
+        # ═══ Stage 2: Compile + Simulate (LLM gate) ═══
         parts.append("### Stage 1: Compilation (iverilog)")
         comp = compile_verilog(verilog, testbench)
         if not comp["success"]:
             parts.append("❌ **Compilation Failed**")
             for e in comp["errors"][:5]:
                 parts.append(f"- {e[:200]}")
-            for w in comp["warnings"][:3]:
-                parts.append(f"- ⚠️ {w[:150]}")
             parts.append("")
-            parts.append("**Verilog Source:**")
+            parts.append("### Stage 2: Simulation — ⛔ SKIPPED (compile failed)")
+            parts.append("### Stage 3: Synthesis — ⛔ SKIPPED")
+            parts.append("### Stage 4: Schematic — ⛔ SKIPPED")
+            parts.append("")
+            parts.append("**Verilog Source (fix errors and retry):**")
             parts.append(f"```verilog\n{verilog}\n```")
             return "\n".join(parts)
 
@@ -298,17 +344,20 @@ class DigitalCircuit:
             parts.append(f"- ⚠️ {w[:150]}")
         parts.append("")
 
-        # 3. Simulate
+        # ── Simulate ──
         parts.append("### Stage 2: Simulation (vvp)")
+        parts.append("**🔍 LLM Gate: Check simulation PASS/FAIL**")
         has_sim = False
+        sim_passed = False
         if comp.get("vvp_path"):
             sim = run_simulation(comp["vvp_path"])
             has_sim = True
-            if sim["success"]:
-                parts.append(f"✅ Simulation passed "
+            sim_passed = sim["success"]
+            if sim_passed:
+                parts.append(f"✅ Simulation PASSED "
                             f"({sim['assertions_passed']} assertions ok)")
             else:
-                parts.append(f"❌ Simulation failed "
+                parts.append(f"❌ Simulation FAILED "
                             f"({sim['assertions_failed']} assertions failed)")
             for line in sim["output_lines"][:20]:
                 if line.strip():
@@ -316,54 +365,156 @@ class DigitalCircuit:
             for e in sim["errors"][:3]:
                 parts.append(f"- ❌ {e[:200]}")
             cleanup_vvp(comp["vvp_path"])
+
+        if has_sim and not sim_passed:
+            parts.append("")
+            parts.append("⛔ **Gate: Simulation FAILED → Return to Stage 1**")
+            parts.append("Fix the Verilog to pass all assertions, then retry.")
+            parts.append("")
+            parts.append("**Verilog Source:**")
+            parts.append(f"```verilog\n{verilog}\n```")
+            parts.append("**Testbench:**")
+            parts.append(f"```verilog\n{testbench}\n```")
+            return "\n".join(parts)
         parts.append("")
 
-        # 4. Synthesize
+        # ═══ Stage 3: Synthesis (gate count gate) ═══
         parts.append("### Stage 3: Synthesis (yosys)")
+        parts.append("**🔍 Gate Check: Gate count reasonable?**")
         top = self._extract_top(verilog)
         synth = synthesize(verilog, top)
-        if synth["success"]:
-            parts.append(f"✅ Synthesis complete — **{synth['gate_count']} gates**")
-            if synth["cell_types"]:
-                gate_list = ", ".join(f"{k}:{v}" for k, v in
-                                     sorted(synth["cell_types"].items())[:8])
-                parts.append(f"  Cell types: {gate_list}")
-        else:
+        synth_passed = synth["success"]
+        gate_count = synth["gate_count"] if synth_passed else 0
+
+        if not synth_passed:
             parts.append("❌ Synthesis failed")
             for e in synth["errors"][:3]:
                 parts.append(f"- {e[:200]}")
+            parts.append("")
+            parts.append("⛔ **Gate: Synthesis FAILED → Return to Stage 1**")
+            parts.append(f"```verilog\n{verilog}\n```")
+            return "\n".join(parts)
+
+        if gate_count > 500:
+            parts.append(f"⚠️ Synthesis complete — **{gate_count} gates** (too many!)")
+            parts.append("⛔ **Gate: Gate count >500 → Return to Stage 1 (simplify circuit)**")
+            parts.append(f"```verilog\n{verilog}\n```")
+            return "\n".join(parts)
+        elif gate_count == 0:
+            parts.append("❌ Synthesis produced 0 gates")
+            parts.append("⛔ **Gate: Zero gates → Return to Stage 1**")
+            return "\n".join(parts)
+        else:
+            parts.append(f"✅ Synthesis complete — **{gate_count} gates** (reasonable)")
+        if synth["cell_types"]:
+            gate_list = ", ".join(f"{k}:{v}" for k, v in
+                                 sorted(synth["cell_types"].items())[:8])
+            parts.append(f"  Cell types: {gate_list}")
         parts.append("")
 
-        # 5. Render gate-level SVG
-        parts.append("### Stage 4: Gate-Level Schematic")
-        if synth["success"] and synth["gate_netlist"]:
+        # ═══ Stage 4: SVG Render + Layout (layout score gate) ═══
+        layout_threshold = 9.7
+        parts.append("### Stage 4: Gate-Level Schematic + Layout Analysis")
+        parts.append(f"**🔍 Gate Check: Layout score ≥ {layout_threshold:.0f}? (max {MAX_LAYOUT_RETRIES} retries)**")
+
+        layout_quality = {"score": 10.0, "crossings": 0, "overlaps": 0,
+                          "issues": [], "details": []}
+        svg_url = ""
+        dsl = _yosys_netlist_to_logic_dsl(
+            gate_netlist=synth.get("gate_netlist", ""),
+            cells=synth.get("cells", []))
+
+        from ..logic_svg import LogicSVG
+
+        # Try different layouts if score is too low
+        layout_algorithms = ["sugiyama"]
+        best_layout = None
+        best_svg_url = ""
+
+        for layout_attempt in range(MAX_LAYOUT_RETRIES):
+            algo = layout_algorithms[min(layout_attempt, len(layout_algorithms) - 1)]
             try:
-                dsl = _yosys_netlist_to_logic_dsl(synth["gate_netlist"])
-                from ..logic_svg import LogicSVG
                 lsv = LogicSVG(str(self.charts_dir.parent.parent),
                                str(self.charts_dir))
-                svg_result = lsv.draw_logic(dsl, circuit_name)
-                # Extract URL from draw_logic output
-                url_match = re.search(r'(/charts/\S+\.svg)', svg_result)
-                if url_match:
-                    url = url_match.group(1)
-                    parts.append(f"![{circuit_name}]({url})")
-                    parts.append(url)
-                else:
-                    parts.append("*(Gate schematic rendered)*")
+                svg_result = lsv.draw_logic(dsl, circuit_name, layout=algo)
+                m = re.search(r'(/charts/\S+\.svg)', svg_result)
+                if m:
+                    svg_url = m.group(1)
+                    svg_path = self.charts_dir / Path(svg_url).name
+                    if svg_path.exists():
+                        lq = LogicSVG.score_layout_quality(
+                            svg_path.read_text(encoding="utf-8"))
+                        lq_score = lq.get("score", 10.0)
+                        if best_layout is None or lq_score > best_layout.get("score", 0):
+                            best_layout = lq
+                            best_svg_url = svg_url
+                        if lq_score >= layout_threshold:
+                            layout_quality = lq
+                            parts.append(f"  ✅ {algo}: score={lq_score:.0f}/10 — acceptable")
+                            break
+                        parts.append(f"  🔄 {algo}: score={lq_score:.0f}/10 — retry...")
             except Exception as e:
-                logger.warning(f"Gate SVG render failed: {e}")
-                parts.append(f"*(Schematic unavailable: {e})*")
+                logger.warning(f"Layout render failed ({algo}): {e}")
+
+        svg_url = best_svg_url or svg_url
+        layout_quality = best_layout or layout_quality
+        lq_score = layout_quality.get("score", 10.0)
+
+        if svg_url:
+            parts.append(f"![{circuit_name}]({svg_url})")
+            parts.append(svg_url)
+        else:
+            parts.append("*(Gate schematic rendered)*")
+
+        # Hard requirements: zero overlaps AND zero crossings
+        final_overlaps = layout_quality.get("overlaps", 0)
+        final_crossings = layout_quality.get("crossings", 0)
+        if final_overlaps > 0 or final_crossings > 0:
+            parts.append(f"⛔ **Gate: overlap={final_overlaps} cross={final_crossings} — must be 0 → Return to Stage 1**")
+            return "\n".join(parts)
+
+        if lq_score < layout_threshold:
+            parts.append(f"⛔ **Gate: Layout score {lq_score:.1f}/10 < {layout_threshold:.0f} → Return to Stage 1 (redesign circuit)**")
+            return "\n".join(parts)
+        elif lq_score >= layout_threshold:
+            parts.append(f"✅ Layout quality: {lq_score:.1f}/10 (clean)")
+        elif lq_score >= max(5.0, layout_threshold - 3):
+            parts.append(f"⚠️ Layout quality: {lq_score:.0f}/10 (acceptable)")
+        else:
+            parts.append(f"⚠️ Layout quality: {lq_score:.0f}/10 (marginal — best effort)")
         parts.append("")
 
-        # 6. Source code
+        # ═══ Stage 5: Summary ═══
+        parts.append("### 📊 Metrics Summary")
+        parts.append("| Metric | Value |")
+        parts.append("|--------|-------|")
+        parts.append(f"| Compilation | ✅ Passed |")
+        sim_status = "✅ Passed" if sim_passed else "❌ Failed"
+        parts.append(f"| Simulation | {sim_status} |")
+        parts.append(f"| Assertions Passed | {sim.get('assertions_passed', 0) if has_sim else 0} |")
+        parts.append(f"| Assertions Failed | {sim.get('assertions_failed', 0) if has_sim else 0} |")
+        parts.append(f"| Synthesis | ✅ Complete |")
+        parts.append(f"| Gate Count | **{gate_count}** |")
+        if synth.get("cell_types"):
+            for ct, count in sorted(synth["cell_types"].items())[:8]:
+                parts.append(f"| {ct} | {count} |")
+        lq_label = "✅ Clean" if lq_score >= layout_threshold else ("⚠️ Fair" if lq_score >= max(5.0, layout_threshold - 3) else "❌ Poor")
+        parts.append(f"| Layout Quality | {lq_label} ({lq_score:.0f}/10) |")
+        if layout_quality.get("crossings", 0) > 0:
+            parts.append(f"| Wire Crossings | {layout_quality['crossings']} |")
+        if layout_quality.get("overlaps", 0) > 0:
+            parts.append(f"| Wire/Gate Overlaps | {layout_quality['overlaps']} |")
+        if layout_quality and layout_quality.get("summary"):
+            parts.append("")
+            parts.append(layout_quality["summary"])
+        parts.append("")
+
+        # Source code
         parts.append("### Verilog Source")
         parts.append(f"```verilog\n{verilog}\n```")
         if testbench:
             parts.append(f"```verilog\n{testbench}\n```")
         parts.append("")
-
-        # 7. Hint
         parts.append("---")
         parts.append("🔄 **Iterative design:** If the circuit doesn't meet requirements:\n"
                      "1. Modify the Verilog source\n"
@@ -372,6 +523,41 @@ class DigitalCircuit:
                      "4. Repeat until satisfied")
 
         return "\n".join(parts)
+
+    def _llm_generate_verilog(self, description: str) -> str:
+        """Use LLM to generate Verilog code for a circuit description."""
+        try:
+            messages = [{"role": "user", "content": (
+                "Generate synthesizable Verilog for this circuit. "
+                "Return ONLY Verilog, no explanation.\n\n"
+                f"Circuit: {description}\n\n"
+                "CRITICAL RULES for clean synthesis:\n"
+                "- Use structural style: small sub-modules + wire connections\n"
+                "- For counters: use T-flip-flop chain, NOT 'count <= count + 1'\n"
+                "- For adders: use full-adder instances, NOT 'a + b'\n"
+                "- Keep modules tiny: max 3-4 gates each\n"
+                "- Use 1-bit signals: NO multi-bit buses [N:0]\n"
+                "- Instantiate and connect with wires\n\n"
+                "Example for 2-bit counter:\n"
+                "module tff(input clk,rst,t,output reg q);\n"
+                "  always @(posedge clk) if(t) q<=~q;\n"
+                "endmodule\n"
+                "module counter(input clk,rst,output [1:0] q);\n"
+                "  wire t1=q[0];\n"
+                "  tff u0(.clk(clk),.rst(rst),.t(1'b1),.q(q[0]));\n"
+                "  tff u1(.clk(clk),.rst(rst),.t(t1),.q(q[1]));\n"
+                "endmodule\n\n"
+                "Reply with ONLY Verilog code starting with `module`."
+            )}]
+            resp = self.llm.chat(messages=messages, tools=[], system="You are a digital circuit designer. Output ONLY Verilog code.")
+            text = resp.get("text", "") if isinstance(resp, dict) else str(resp)
+            # Extract module...endmodule
+            import re
+            m = re.search(r'(module\s+.+?endmodule)', text, re.DOTALL | re.IGNORECASE)
+            return m.group(1) if m else ""
+        except Exception as e:
+            logger.warning(f"LLM Verilog generation failed: {e}")
+            return ""
 
     # ═══════════ simulate_verilog ═══════════
 

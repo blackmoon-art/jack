@@ -521,6 +521,73 @@ async def health():
     }
 
 
+# ── Digital Circuit API ─────────────────────────────
+
+@app.post("/api/digital-circuit")
+async def digital_circuit(request: Request):
+    """Run the full digital circuit pipeline: NL→Verilog→Sim→Synth→SVG."""
+    body = await request.json()
+    description = body.get("description", "").strip()
+    if not description:
+        return {"error": "description is required"}
+
+    from nano_agent.tools.digital import DigitalCircuit
+    from nano_agent.strategies.meta import MetaStrategy
+    from pathlib import Path
+
+    charts_dir = str(STATIC_DIR / "charts")
+    dc = DigitalCircuit(charts_dir=charts_dir)
+
+    try:
+        result = dc.design_digital(description)
+    except ValueError as e:
+        return {"error": str(e), "available": "half_adder, full_adder, mux_2to1, dff, counter_4bit"}
+    except Exception as e:
+        return {"error": str(e)}
+
+    # Extract SVG URL
+    import re
+    svg_match = re.search(r'/charts/(logic_\S+\.svg)', result)
+    svg_url = svg_match.group(0) if svg_match else ""
+
+    # Run Meta evaluation
+    try:
+        verdict = MetaStrategy._extract_circuit_verdict(result)
+        tech_score = verdict.get("technical_score", 0)
+        layout_score = verdict.get("layout_score", 10)
+        layout_summary = verdict.get("layout_summary", "")
+        assertions_passed = verdict.get("assertions_passed", 0)
+        assertions_failed = verdict.get("assertions_failed", 0)
+        gate_count = verdict.get("gate_count", 0)
+        wire_crossings = verdict.get("wire_crossings", 0)
+        wire_overlaps = verdict.get("wire_overlaps", 0)
+    except Exception:
+        tech_score = 0
+        layout_score = 10
+        layout_summary = ""
+        assertions_passed = assertions_failed = gate_count = 0
+        wire_crossings = wire_overlaps = 0
+
+    return {
+        "result": result,
+        "svg_url": svg_url,
+        "technical_score": tech_score,
+        "layout_score": layout_score,
+        "layout_summary": layout_summary,
+        "gate_count": gate_count,
+        "assertions_passed": assertions_passed,
+        "assertions_failed": assertions_failed,
+        "wire_crossings": wire_crossings,
+        "wire_overlaps": wire_overlaps,
+    }
+
+
+@app.get("/digital")
+async def digital_page():
+    """Digital circuit playground page."""
+    return FileResponse(str(STATIC_DIR / "digital.html"))
+
+
 # ── 静态文件 ──────────────────────────────────────────
 
 @app.get("/")

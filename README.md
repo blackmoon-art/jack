@@ -604,6 +604,129 @@ LLM 看到反馈后的行动逻辑：
 | 噪声分析 | .noise 仿真 + 输入参考噪声解析 | ~1 天 | 🟡 中 |
 | 耦合电感/变压器 | SPICE K 语句支持，反激/LLC 拓扑 | ~1 周 | 🟢 低 |
 
+## 数字电路闭环设计
+
+端到端数字电路设计系统：自然语言 → Verilog → iverilog 编译 → vvp 仿真 → yosys 综合 → 门级 SVG 原理图 → Meta 策略评估。
+
+### 逻辑链 (门控闭环)
+
+```
+用户输入 "4-bit counter"
+        │
+  ① Verilog 生成
+  模板匹配 或 LLM 自由生成 或 verilog= 参数
+        │
+  ② 编译 (iverilog)
+  compile_verilog() → iverilog -o sim.vvp
+        │
+  ③ 仿真 (vvp)  ←── LLM 判断 PASS/FAIL ──┐
+  run_simulation() → vvp sim.vvp           │
+  解析 PASS/FAIL 断言                      │
+        │                                  │
+        ├─ ✅ PASS → 继续                   │
+        └─ ❌ FAIL → 返回 ① 重新生成 Verilog ─┘
+        │
+  ④ 综合 (yosys) ←── 指标打分 ──┐
+  synthesize() → gate_count      │
+  打分: gate_count 是否合理       │
+  · 0 gates → 综合失败           │
+  · >500 gates → 门太多, 简化    │
+  · 1-500 → 合理, 继续           │
+        │                        │
+        ├─ ✅ 通过 → 继续          │
+        └─ ❌ 不通过 → 返回 ①      │
+        │
+  ⑤ DSL 转换
+  _yosys_netlist_to_logic_dsl()
+  bit_id → wire_name (a[7], count[0])
+        │
+  ⑥ SVG 渲染 ←── 布局打分 ──┐
+  Sugiyama 布局               │
+  score_layout_quality()      │
+  打分: crossings/overlaps    │
+  · score ≥ 8 → 优秀, 继续    │
+  · score 5-7 → 可接受, 继续  │
+  · score < 5 → 换布局算法    │
+    (bit-slice / force)       │
+  · 重试 3 次仍 < 5 → 继续    │
+        │                     │
+        ├─ ✅ 通过 → 继续       │
+        └─ ❌ 不通过 → 换算法 ─┘
+        │
+  ⑦ Meta 评估 (最终打分)
+  技术分 + LLM 软打分
+  max_retries=6, 不达标升级策略
+        │
+  ⑧ 输出
+  报告 + SVG + Metrics + LLM 评分
+```
+
+### 工具矩阵
+
+| 工具 | 输入 | 流程 | 验证 |
+|------|------|------|------|
+| `design_digital` | NL 描述 或 原始 Verilog | 模板→编译→仿真→综合→渲染 | iverilog + vvp + yosys 三门控 |
+| `simulate_verilog` | Verilog + testbench | 编译→仿真 | PASS/FAIL 断言统计 |
+| `synthesize_gates` | Verilog 源码 | 综合→门级网表 | gate_count + cell_types |
+| `draw_logic` | 门级 DSL | DSL→布局→SVG | 正交走线 + 列间隙布线 |
+| `auto_testbench` | Verilog 模块 | → 自动生成 testbench | 随机向量 + PASS 断言 |
+
+### 内置模板 (5 种)
+
+| 类别 | 模板 | 门数 | 特点 |
+|------|------|:---:|------|
+| 组合逻辑 | half_adder | 2 | XOR + AND |
+| 组合逻辑 | full_adder | 7 | 进位链 |
+| 组合逻辑 | mux_2to1 | 1 | 选择器 |
+| 时序逻辑 | dff | 1 | D 触发器 |
+| 时序逻辑 | counter_4bit | 10 | 4-bit 同步计数器 (6 组合 + 4 DFF) |
+
+### 布局算法
+
+| 算法 | 适用 | 说明 |
+|------|------|------|
+| **Sugiyama** (默认) | 全部电路 | 拓扑分层 + barycenter 排序 + 列间隙布线 |
+| Bit-Slice | 加法器/ALU/计数器 | `draw_logic(dsl, layout="bit_slice")` |
+| Force-Directed | 不规则网表 | `draw_logic(dsl, layout="force")` |
+
+### 打分规则
+
+```
+sim_passed=True     → +3   (基础分)
+compile_passed=True → +2   (编译通过)
+synth_passed=True   → +1   (综合成功)
+gate_count > 0      → +1   (有真实门网表)
+assertions 全过     → +2   (功能正确)
+无 errors/warnings  → +1   (质量干净)
+layout ≥ 8/10       → +1   (布线干净)
+layout < 5/10       → -1   (布线混乱)
+─────────────────────────
+满分                 10
+```
+
+### 布局指标 (12 维，供 LLM 评估)
+
+```
+gates, canvas, aspect_ratio, gate_types
+crossings, overlaps
+avg_wire_len, max_wire_len, min_wire_len
+max_fanout, avg_fanout
+gate_density, wire_density
+```
+
+### 测试覆盖
+
+`tests/test_digital_circuit.py` — 28 个测试:
+
+| 类别 | 数量 | 覆盖 |
+|------|:---:|------|
+| 模板匹配 | 6 | 中英文关键词、未知模板异常 |
+| DSL 转换 | 4 | AND/XOR/NOT/DFF 原语、多位端口名 |
+| 门分解 | 6 | NAND/NOR/XOR/XNOR/MUX → AND/OR/NOT |
+| 自动 testbench | 3 | 端口解析、编译+运行验证 |
+| SVG 解析 | 5 | 半加器/全加器/DFF反馈/bracket输出/空DSL |
+| 布局分析 | 4 | 门类型计数、summary、异常SVG容错 |
+
 ## 记忆系统
 
 ```

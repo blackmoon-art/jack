@@ -30,10 +30,13 @@ DSL 格式 (每行一个门):
   MUX(A, B, sel) = Y
 """
 
+import logging
 import re
 import xml.etree.ElementTree as ET
 from datetime import datetime
 from pathlib import Path
+
+logger = logging.getLogger("nano_agent.tools.logic_svg")
 
 
 class LogicSVG:
@@ -98,17 +101,21 @@ class LogicSVG:
             self.charts_dir = web_static / "charts"
         self.charts_dir.mkdir(parents=True, exist_ok=True)
 
-    def draw_logic(self, description: str, title: str = "") -> str:
-        """解析 DSL → 布局 → 渲染 SVG。"""
+    def draw_logic(self, description: str, title: str = "",
+                    layout: str = "sugiyama") -> str:
+        """解析 DSL → 布局 → 渲染 SVG。
+
+        layout param kept for API compatibility.
+        """
         try:
             gates, inputs, outputs = self._parse(description)
             if not gates:
                 return "Error: no valid gates found. Format: GATE(a,b) = out"
-            svg = self._render(gates, inputs, outputs, title)
+            svg = self._render(gates, inputs, outputs, title, layout=layout)
         except Exception as e:
             return f"Error drawing logic: {e}"
 
-        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")  # include microseconds
         filename = f"logic_{ts}.svg"
         filepath = self.charts_dir / filename
         filepath.write_text(svg, encoding="utf-8")
@@ -131,7 +138,7 @@ class LogicSVG:
                 continue
             m = re.match(
                 r'(AND|OR|NOT|NAND|NOR|XOR|XNOR|BUF|DFF|MUX)'
-                r'\(([^)]+)\)\s*=\s*(\w+)', line, re.IGNORECASE)
+                r'\(([^)]+)\)\s*=\s*([\w\[\]]+)', line, re.IGNORECASE)
             if not m:
                 continue
             gtype = m.group(1).upper()
@@ -146,16 +153,23 @@ class LogicSVG:
 
         # 纯输入 = 在 inputs 中但不在 outputs 中
         true_inputs = all_inputs - all_outputs
-        # 纯输出 = 在 outputs 中但不在 inputs 中
+        # 纯输出 = 在 outputs 中但不在 inputs 中 → 外部输出
         true_outputs = all_outputs - all_inputs
-        # 都在 = 内部
+        # 都在 = 内部反馈线 (如 DFF→组合逻辑→DFF)
         internal = all_inputs & all_outputs
+
+        # For sequential circuits: keep DFF outputs as visible output ports
+        # even if they feed back (e.g. count[0] drives both NOT gate and output pin)
+        for g in gates:
+            if g["type"] == "DFF" and g["output"] in internal:
+                true_outputs.add(g["output"])
+                internal.discard(g["output"])
 
         return gates, true_inputs, true_outputs
 
     # ── SVG 渲染 ───────────────────────────────────
 
-    W, H = 80, 50       # 门尺寸
+    W, H = 100, 70      # 门尺寸
     IX, IY = 2, 10      # 输入引脚间距
     PIN = 10            # 引脚突出长度
     PORT_W, PORT_H = 48, 28  # 端口尺寸
@@ -171,24 +185,206 @@ class LogicSVG:
     }
     FONT = "monospace"
 
-    def _render(self, gates, inputs, outputs, title="") -> str:
-        """布局 + 渲染 SVG。"""
-        LogicSVG._wire_seq = 0  # 重置连线序号
+    def _render(self, gates, inputs, outputs, title="", layout="sugiyama") -> str:
+        """Layout + SVG rendering. layout param kept for API compat, always Sugiyama."""
+        return self._render_iterative(gates, inputs, outputs, title)
 
-        # ── 布局：拓扑排序 + 分层 ──
-        # 构建 name → 生成它的 gate index
+    def _render_iterative(self, gates, inputs, outputs, title="",
+                           max_attempts=16, target_score=8.0) -> str:
+        """Metric-driven iterative layout: try different params, score with SVG analyzer, keep best.
+
+        Uses the same score_layout_quality() that the gate check uses,
+        ensuring internal optimization and gate threshold are aligned.
+        """
+        n_gates = len(gates)
+        best_svg = None
+        best_score = -1
+        best_config = ""
+
+        if n_gates <= 10:
+            spacings = [(150, 130), (180, 160)]
+            sortings = ["barycenter", "natural"]
+            channels = [28, 40]
+        elif n_gates <= 30:
+            spacings = [(240, 220), (300, 280), (360, 340)]
+            sortings = ["barycenter", "natural"]
+            channels = [40, 52, 64]
+        else:
+            spacings = [(340, 300), (440, 380), (580, 480)]
+            sortings = ["natural", "barycenter"]
+            channels = [52, 68, 92]
+
+        # Sweep sugiyama params
+        candidates = []
+        for col_gap, row_gap in spacings:
+            for sorting in sortings:
+                for channel_h in channels:
+                    if len(candidates) >= max_attempts:
+                        break
+                    try:
+                        svg_xml = self._render_sugiyama_with_params(
+                            gates, inputs, outputs, title,
+                            col_gap, row_gap, channel_h, sorting)
+                        s = LogicSVG.score_layout_quality(svg_xml).get("score", 0)
+                        candidates.append((s, svg_xml,
+                            f"sugiyama gap={col_gap}/{row_gap} sort={sorting} ch={channel_h}"))
+                    except Exception:
+                        pass
+
+        # Pick best
+        best = max(candidates, key=lambda c: c[0])
+        best_score, best_svg, best_config = best
+
+        if not candidates:
+            best_svg = self._render_sugiyama_with_params(
+                gates, inputs, outputs, title, 120, 80, 12, "barycenter")
+            best_config = "fallback"
+            best_score = 0
+
+        logger.info(f"Layout: best={best_config} score={best_score:.1f}")
+        return best_svg
+
+    @staticmethod
+    def _score_layout_internal(gates, inputs, outputs, col_gap, row_gap,
+                                channel_h) -> float:
+        """Fast internal layout scorer — estimates quality from geometry.
+
+        Without rendering SVG, computes:
+          - gate density (gates per column)
+          - span ratio (width vs height balance)
+          - estimated wire congestion
+
+        Returns 0-10 score.
+        """
+        import math
+        n_gates = len(gates)
+        if n_gates == 0:
+            return 10.0
+
+        # Build depth map (same as Sugiyama)
         produced_by = {}
         for i, g in enumerate(gates):
             produced_by[g["output"]] = i
 
-        # 计算每个 gate 的深度（最长输入路径 + 1），处理环形
+        depth = {}
+        visiting = set()
+
+        def get_depth(gi):
+            if gi in depth:
+                return depth[gi]
+            if gi in visiting:
+                return 1
+            visiting.add(gi)
+            g = gates[gi]
+            max_in = 0
+            for inp in g["inputs"]:
+                if inp in produced_by:
+                    max_in = max(max_in, get_depth(produced_by[inp]))
+            visiting.discard(gi)
+            depth[gi] = max_in + 1
+            return depth[gi]
+
+        for i in range(n_gates):
+            get_depth(i)
+
+        cols = {}
+        for i in range(n_gates):
+            d = depth[i]
+            cols.setdefault(d, []).append(i)
+
+        max_depth = max(cols.keys()) if cols else 0
+        max_col_size = max(len(v) for v in cols.values()) if cols else 1
+
+        # Metrics
+        score = 10.0
+
+        # 1. Gate distribution (balanced columns = better)
+        col_sizes = [len(v) for v in cols.values()]
+        if col_sizes:
+            avg_size = sum(col_sizes) / len(col_sizes)
+            imbalance = max(abs(s - avg_size) for s in col_sizes) / max(avg_size, 1)
+            score -= imbalance * 2.0  # -0 to -2
+
+        # 2. Aspect ratio (prefer wider than tall)
+        total_cols = max_depth + (1 if inputs else 0)
+        total_rows = max_col_size
+        aspect = (total_cols * col_gap) / max(total_rows * (row_gap + channel_h), 1)
+        if aspect < 0.5:
+            score -= 2.0  # too narrow
+        elif aspect > 6.0:
+            score -= 1.0  # too wide
+        else:
+            score += 0.5  # bonus
+
+        # 3. Depth penalty (deep circuits = harder to read)
+        if max_depth > 5:
+            score -= (max_depth - 5) * 0.5
+
+        # 4. Row density (too many gates per column)
+        if max_col_size > 6:
+            score -= (max_col_size - 6) * 0.5
+
+        # 5. Spacing bonus (wider = more readable)
+        if col_gap >= 150:
+            score += 1.0
+
+        # 6. Channel bonus (more routing space)
+        if channel_h >= 20:
+            score += 0.5
+
+        # 7. Small circuit bonus
+        if n_gates <= 5:
+            score += 1.0
+
+        return max(0.0, min(10.0, score))
+
+    def _render_sugiyama_with_params(self, gates, inputs, outputs, title,
+                                      col_gap, row_gap, channel_h,
+                                      sorting="barycenter") -> str:
+        """Render Sugiyama with explicit parameters (no auto-scaling)."""
+        return self._render_sugiyama(gates, inputs, outputs, title,
+                                     _col_gap=col_gap, _row_gap=row_gap,
+                                     _channel_h=channel_h, _sorting=sorting)
+
+    def _render_sugiyama(self, gates, inputs, outputs, title="",
+                          _col_gap=None, _row_gap=None, _channel_h=None,
+                          _sorting=None) -> str:
+        """Classic Sugiyama layered layout (for small circuits ≤10 gates)."""
+        LogicSVG._wire_seq = 0
+        n_gates = len(gates)
+        # Use explicit params if provided, otherwise auto-scale
+        if _col_gap is not None:
+            col_gap, row_gap = _col_gap, _row_gap or _col_gap
+            channel_h = _channel_h or 12
+            sorting = _sorting or "barycenter"
+        elif n_gates <= 10:
+            col_gap, row_gap = 120, 80
+            channel_h = 12
+            sorting = "barycenter"
+        elif n_gates <= 30:
+            col_gap, row_gap = 150, 100
+            channel_h = 16
+            sorting = "natural"
+        else:
+            col_gap, row_gap = 180, 120
+            channel_h = 20
+            sorting = "natural"
+
+        # ── Phase 1: Topological depth assignment ──
+        produced_by = {}
+        consumed_by = {}  # wire_name → [(gate_index, input_index), ...]
+        for i, g in enumerate(gates):
+            produced_by[g["output"]] = i
+            for inp in g["inputs"]:
+                consumed_by.setdefault(inp, []).append(i)
+
         depth = {}
         visiting = set()
         def get_depth(gi):
             if gi in depth:
                 return depth[gi]
             if gi in visiting:
-                return 1  # 环形回路：放在第一层
+                return 1
             visiting.add(gi)
             g = gates[gi]
             max_in = 0
@@ -202,26 +398,165 @@ class LogicSVG:
         for i in range(len(gates)):
             get_depth(i)
 
-        # 按深度分组 → 每列的行号
+        # Group gates by depth
         cols = {}
         for i, g in enumerate(gates):
             d = depth[i]
-            if d not in cols:
-                cols[d] = []
-            cols[d].append(i)
+            cols.setdefault(d, []).append(i)
 
-        # 输入端口在深度 0
         max_depth = max(cols.keys()) if cols else 0
         total_cols = max_depth + 1
         if inputs:
-            total_cols += 1  # 输入列
+            total_cols += 1
 
-        # 计算 SVG 尺寸
+        # ── Phase 2: Barycenter crossing minimization ──
+        # Assign initial row positions (by gate index within column)
+        row_of = {}  # gate_index → row within its column
+        col_of = {}  # gate_index → column index
+        col_of_input = {}  # input_name → column (0 if inputs exist, else -1)
+
+        if inputs:
+            input_col = 0
+            for ri, name in enumerate(sorted(inputs)):
+                col_of_input[name] = input_col
+        else:
+            input_col = -1
+
+        for d in sorted(cols.keys()):
+            col_idx = d + (1 if inputs else 0)
+            for ri, gi in enumerate(cols[d]):
+                row_of[gi] = ri
+                col_of[gi] = col_idx
+
+        # Helper: get position (col, row) for a wire name
+        def wire_pos(name):
+            if name in col_of_input:
+                # Input port: row from sorted position
+                inames = sorted(inputs)
+                return (col_of_input[name], inames.index(name))
+            if name in produced_by:
+                gi = produced_by[name]
+                return (col_of[gi], row_of[gi])
+            # Output port: will be placed later
+            return None
+
+        # Phase 2: Sorting strategy
+        if sorting == "random":
+            import random as _random
+            for d in sorted(cols.keys()):
+                _random.shuffle(cols[d])
+                for ri, gi in enumerate(cols[d]):
+                    row_of[gi] = ri
+        elif sorting == "natural":
+            # Natural ordering by input signal index
+            def _input_order(gi):
+                g = gates[gi]
+                for inp in g["inputs"]:
+                    m = re.search(r'\[(\d+)\]', inp)
+                    if m:
+                        return int(m.group(1))
+                return 0
+            for d in sorted(cols.keys()):
+                cols[d].sort(key=_input_order)
+                for ri, gi in enumerate(cols[d]):
+                    row_of[gi] = ri
+        elif _sorting is not None or n_gates <= 20:
+            # Full 3-pass barycenter (explicit or default for small circuits)
+            for _pass in range(3):
+                # Left → right: sort by input barycenter
+                for d in sorted(cols.keys()):
+                    if d == 1 and not inputs:
+                        continue
+                    bary = {}
+                    for gi in cols[d]:
+                        g = gates[gi]
+                        input_rows = []
+                        for inp in g["inputs"]:
+                            wpos = wire_pos(inp)
+                            if wpos:
+                                input_rows.append(wpos[1])
+                        bary[gi] = sum(input_rows) / len(input_rows) if input_rows else float("inf")
+                    cols[d].sort(key=lambda gi: (bary[gi], row_of.get(gi, 0)))
+
+                for d in sorted(cols.keys()):
+                    for ri, gi in enumerate(cols[d]):
+                        row_of[gi] = ri
+
+                # Right → left: sort by output barycenter
+                for d in sorted(cols.keys(), reverse=True):
+                    bary = {}
+                    for gi in cols[d]:
+                        out_name = gates[gi]["output"]
+                        consumer_rows = []
+                        for cgi in consumed_by.get(out_name, []):
+                            if cgi in row_of:
+                                consumer_rows.append(row_of[cgi])
+                        bary[gi] = sum(consumer_rows) / len(consumer_rows) if consumer_rows else float("inf")
+                    cols[d].sort(key=lambda gi: (bary[gi], row_of.get(gi, 0)))
+
+                for d in sorted(cols.keys()):
+                    for ri, gi in enumerate(cols[d]):
+                        row_of[gi] = ri
+        else:
+            # Large circuits: natural ordering by input signal index
+            # (preserves bit-slice structure in adders, ALUs, etc.)
+            def _input_order(gi):
+                """Sort key: extract numeric index from input names like a[3]."""
+                g = gates[gi]
+                for inp in g["inputs"]:
+                    # Match bit-indexed names: a[3], b[7], count[2]
+                    m = re.search(r'\[(\d+)\]', inp)
+                    if m:
+                        return int(m.group(1))
+                return 0
+            for d in sorted(cols.keys()):
+                cols[d].sort(key=_input_order)
+                for ri, gi in enumerate(cols[d]):
+                    row_of[gi] = ri
+
+        # Update col_of after sorting
+        for d in sorted(cols.keys()):
+            col_idx = d + (1 if inputs else 0)
+            for gi in cols[d]:
+                col_of[gi] = col_idx
+
+        # ── Phase 3: Y-position assignment with routing channels ──
+        # Add extra spacing between rows for routing tracks
         max_gates_in_col = max(len(v) for v in cols.values()) if cols else 1
-        svg_w = total_cols * self.COL_GAP + 100
-        svg_h = max(max_gates_in_col, len(inputs), len(outputs)) * self.ROW_GAP + 80
+        ROW_SPACING = row_gap + channel_h  # add routing channels
+        svg_h = max(max_gates_in_col, len(inputs), len(outputs)) * ROW_SPACING + 80
+        svg_w = total_cols * col_gap + 100
 
-        # ── 构建 SVG ──
+        # Gate Y positions
+        gate_y = {}  # gate_index → y center
+        for d in sorted(cols.keys()):
+            for ri, gi in enumerate(cols[d]):
+                gate_y[gi] = 50 + ri * ROW_SPACING + ROW_SPACING // 2
+
+        # ── Channel routing: assign each wire a unique track ──
+        # Track index → horizontal position between columns
+        # We assign tracks per column-pair to avoid overlapping wires
+        track_assignments = {}  # (from_name, to_gate_idx) → track_index
+        col_track_counters = {}  # (from_col, to_col) → next_track
+
+        def assign_track(from_name, to_gate_idx):
+            """Assign a unique horizontal routing track for this wire."""
+            from_pos = wire_pos(from_name)
+            if not from_pos or to_gate_idx not in col_of:
+                return 0
+            from_col = from_pos[0]
+            to_col = col_of[to_gate_idx]
+            key = (from_col, to_col)
+            track = col_track_counters.get(key, 0)
+            col_track_counters[key] = track + 1
+            return track
+
+        # Pre-assign tracks for all connections
+        for gi, g in enumerate(gates):
+            for inp in g["inputs"]:
+                assign_track(inp, gi)
+
+        # ── Build SVG ──
         svg = ET.Element("svg", {
             "xmlns": "http://www.w3.org/2000/svg",
             "viewBox": f"0 0 {svg_w} {svg_h}",
@@ -232,7 +567,6 @@ class LogicSVG:
             "fill": self.COLORS["bg"],
         })
 
-        # 标题
         if title:
             ET.SubElement(svg, "text", {
                 "x": str(svg_w // 2), "y": "24",
@@ -241,80 +575,182 @@ class LogicSVG:
                 "font-weight": "bold",
             }).text = title
 
-        # ── 放置 gate 和记录位置 ──
-        gate_positions = {}  # gate_index → (cx, cy)
-        port_positions = {}  # port_name → (x, y, is_input)
-
-        # 输入列 (深度 -1)
+        # ── Draw input ports ──
+        port_positions = {}
         input_col_x = 60
         input_names = sorted(inputs)
         for ri, name in enumerate(input_names):
-            y = 50 + ri * self.ROW_GAP + self.ROW_GAP // 2
+            y = 50 + ri * ROW_SPACING + ROW_SPACING // 2
             port_positions[name] = (input_col_x, y, True)
             self._draw_port(svg, input_col_x, y, name, True)
+        # Update col_of_input with actual y positions
+        for ri, name in enumerate(input_names):
+            col_of_input[name] = (input_col_x if inputs else 0,
+                                  50 + ri * ROW_SPACING + ROW_SPACING // 2)
 
-        # Gate 列
+        # ── Draw gates ──
+        gate_positions = {}
         for d in sorted(cols.keys()):
-            gx = 60 + (d + (1 if inputs else 0)) * self.COL_GAP
+            gx = 60 + (d + (1 if inputs else 0)) * col_gap
             for ri, gi in enumerate(cols[d]):
                 g = gates[gi]
-                gy = 50 + ri * self.ROW_GAP + self.ROW_GAP // 2
+                gy = gate_y[gi]
                 gate_positions[gi] = (gx, gy)
                 self._draw_gate(svg, gx, gy, g["type"], g.get("label", ""))
-                # DFF 时钟三角标记 (clk 始终是 inputs[1])
+
                 if g["type"] == "DFF" and len(g["inputs"]) >= 2:
                     nin = len(g["inputs"])
                     clk_off = (1 - (nin - 1) / 2) * self.IY
                     self._draw_clock_triangle(svg, gx, gy + clk_off)
-                # 输出端口
+
+                # Output port entry (used for wiring)
                 out_name = g["output"]
                 out_x = gx + self.W // 2 + self.PIN
                 out_y = gy
                 port_positions[out_name] = (out_x, out_y, False)
 
-        # 输出列
-        output_col_x = 60 + (max_depth + (1 if inputs else 0)) * self.COL_GAP + 40
-        output_names = sorted(outputs)
-        for ri, name in enumerate(output_names):
-            y = 50 + ri * self.ROW_GAP + self.ROW_GAP // 2
+        # ── Draw output ports ──
+        output_col_x = 60 + (max_depth + (1 if inputs else 0)) * col_gap + 40
+        output_y_map = {}
+        # Place output ports near their source gates
+        out_idx = 0
+        for name in sorted(outputs):
+            if name in produced_by:
+                gi = produced_by[name]
+                y = gate_y.get(gi, 50 + out_idx * ROW_SPACING + ROW_SPACING // 2)
+            else:
+                y = 50 + out_idx * ROW_SPACING + ROW_SPACING // 2
+            output_y_map[name] = y
             port_positions[name] = (output_col_x, y, False)
             self._draw_port(svg, output_col_x, y, name, False)
+            out_idx += 1
 
-        # ── 连线 ──
+        # ── Draw wires with strict column-gap routing ──
+        # Build sorted list of all safe vertical channels (gaps between gate columns)
+        all_gate_x = set()
+        for gx, gy in gate_positions.values():
+            all_gate_x.add(gx)
+        sorted_x = sorted(all_gate_x)
+        # Safe channels: halfway between adjacent gate columns, plus edges
+        safe_channels = []
+        if inputs:
+            safe_channels.append(60)  # input port column
+        for i in range(len(sorted_x) - 1):
+            safe_channels.append((sorted_x[i] + sorted_x[i+1]) / 2)
+        # Output channel
+        safe_channels.append(output_col_x - self.PORT_W // 2)
+
+        safe_channels = sorted(set(safe_channels))
+
+        # Build forbidden x-ranges (gate bodies + margin)
+        forbidden = []
+        for gx, gy in gate_positions.values():
+            forbidden.append((gx - self.W // 2 - 6, gx + self.W // 2 + 6))
+
+        def route_mid(px, gix):
+            """Find a safe vertical channel between px and gix."""
+            lo, hi = min(px, gix), max(px, gix)
+            # Find channels strictly between lo and hi
+            candidates = [ch for ch in safe_channels if lo + 10 < ch < hi - 10]
+            if candidates:
+                # Pick the channel closest to midpoint
+                target = (lo + hi) / 2
+                best = min(candidates, key=lambda ch: abs(ch - target))
+                # Verify it's not inside any gate
+                for fx1, fx2 in forbidden:
+                    if fx1 < best < fx2:
+                        # This channel is inside a gate! Try another
+                        continue
+                return best
+            # Fallback: midpoint, but push outside gate if needed
+            mid = (lo + hi) / 2
+            for fx1, fx2 in forbidden:
+                if fx1 < mid < fx2:
+                    # Push to nearest edge
+                    mid = fx2 + 4 if (mid - fx1) > (fx2 - mid) else fx1 - 4
+            return mid
+
+        gap_tracks = {}
+        feedback_track = 0
+
         for gi, g in enumerate(gates):
             gx, gy = gate_positions[gi]
-            # 输入线
             nin = len(g["inputs"])
+
             for ii, inp_name in enumerate(g["inputs"]):
-                if inp_name in port_positions:
-                    px, py, _ = port_positions[inp_name]
-                    # 门输入引脚位置
-                    iy_off = (ii - (nin - 1) / 2) * self.IY
-                    gix = gx - self.W // 2 - self.PIN
-                    giy = gy + iy_off
-                    self._draw_wire(svg, px, py, gix, giy)
+                if inp_name not in port_positions:
+                    continue
+                px, py, _ = port_positions[inp_name]
+                iy_off = (ii - (nin - 1) / 2) * self.IY
+                gix = gx - self.W // 2 - self.PIN
+                giy = gy + iy_off
 
-            # 输出线 → 连接到使用该输出的门
-            out_name = g["output"]
-            if out_name in port_positions:
-                ox, oy, _ = port_positions[out_name]
-            else:
-                ox, oy = gx + self.W // 2, gy
-            # 检查是否有 gate 用这个输出作为输入
-            for gj, g2 in enumerate(gates):
-                if out_name in g2["inputs"]:
-                    break
+                # Detect feedback: source is to the RIGHT of destination
+                is_feedback = (px > gix + 20)
 
-        # 输出端口连线 (从最后的 gate 输出到输出端口)
+                if is_feedback:
+                    # Same-column or adjacent: route vertically within column
+                    # For far feedback, route through column gaps normally
+                    if abs(px - gix) < col_gap * 1.5:
+                        # Close: route with detour check
+                        mid_x = (px + gix) / 2
+                        self._route_with_detour(svg, gate_positions, px, py, mid_x, gix, giy)
+                    else:
+                        mid_x = route_mid(px, gix)
+                        ch_key = round(mid_x)
+                        track = gap_tracks.get(ch_key, 0)
+                        gap_tracks[ch_key] = track + 1
+                        mid_x += (track - 1) * 4
+                        self._route_with_detour(svg, gate_positions, px, py, mid_x, gix, giy)
+                else:
+                    mid_x = route_mid(px, gix)
+                    ch_key = round(mid_x)
+                    track = gap_tracks.get(ch_key, 0)
+                    gap_tracks[ch_key] = track + 1
+                    mid_x += (track - 1) * 4
+
+                    self._route_with_detour(svg, gate_positions, px, py, mid_x, gix, giy)
+
+        # ── Draw output port connections ──
         for gi, g in enumerate(gates):
             out_name = g["output"]
             if out_name in outputs and out_name in port_positions:
                 gx, gy = gate_positions[gi]
                 ox, oy, _ = port_positions[out_name]
-                self._draw_wire(svg, gx + self.W // 2 + self.PIN, gy,
-                                ox - self.PORT_W // 2, oy)
+                sx = gx + self.W // 2 + self.PIN
+                ex = ox - self.PORT_W // 2
+                mid_x = route_mid(sx, ex)
+                self._route_with_detour(svg, gate_positions, sx, gy, mid_x, ex, oy)
 
         return ET.tostring(svg, encoding="unicode")
+
+    def _route_with_detour(self, svg, gate_positions, px, py, mid_x, gix, giy, channels=None, shared=None):
+        """Orthogonal routing: H→V→H, detour if approach hits a gate."""
+        hx1, hx2 = sorted([mid_x, gix])
+        for (gx, gy) in gate_positions.values():
+            gx1 = gx - self.W//2 - 4
+            gx2 = gx + self.W//2 + 4
+            gy1 = gy - self.H//2 - 4
+            gy2 = gy + self.H//2 + 4
+            if hx1 < gx2 and hx2 > gx1 and gy1 < giy < gy2:
+                detour_y = gy2 + 8 if (giy - gy1) > (gy2 - giy) else gy1 - 8
+                self._draw_wire_seg(svg, px, py, mid_x, py)
+                self._draw_wire_seg(svg, mid_x, py, mid_x, detour_y)
+                self._draw_wire_seg(svg, mid_x, detour_y, gix, detour_y)
+                self._draw_wire_seg(svg, gix, detour_y, gix, giy)
+                return
+        self._draw_wire_seg(svg, px, py, mid_x, py)
+        self._draw_wire_seg(svg, mid_x, py, mid_x, giy)
+        self._draw_wire_seg(svg, mid_x, giy, gix, giy)
+
+    def _draw_wire_seg(self, svg, x1, y1, x2, y2):
+        """Draw a single straight wire segment."""
+        ET.SubElement(svg, "line", {
+            "x1": str(round(x1, 1)), "y1": str(round(y1, 1)),
+            "x2": str(round(x2, 1)), "y2": str(round(y2, 1)),
+            "stroke": self.COLORS["wire"],
+            "stroke-width": "1.5",
+        })
 
     def _draw_clock_triangle(self, svg, cx, cy):
         """在 DFF 左边缘画时钟三角标记（向内指向门体）。"""
@@ -440,7 +876,7 @@ class LogicSVG:
                 "x": str(cx), "y": str(cy + 2), "text-anchor": "middle",
                 "fill": self.COLORS["text"], "font-family": self.FONT,
                 "font-size": "8", "dy": "0.3em",
-            }).text = gtype[:3] if gtype != "BUF" else "BUF"
+            }).text = gtype  # full gate type name (AND, NAND, XOR, XNOR, etc.)
 
     # ── 端口 ────────────────────────────────────────
 
@@ -477,3 +913,391 @@ class LogicSVG:
             "d": d, "fill": "none", "stroke": self.COLORS["wire"],
             "stroke-width": "1.5", "stroke-linejoin": "round",
         })
+
+    # ── 布局质量分析 ────────────────────────────────
+
+    @staticmethod
+    def score_layout_quality(svg_content: str) -> dict:
+        """Analyze rendered SVG for layout/wiring quality issues.
+
+        Checks:
+          - Wire crossings (intersecting orthogonal wire segments)
+          - Wire-to-gate clearance (wires passing through gate bodies)
+          - Gate-gate overlap
+          - Wire density / congestion
+
+        Returns:
+          {"score": 0-10, "crossings": int, "overlaps": int,
+           "issues": [str], "details": [str]}
+        """
+        import re
+        import math
+
+        result = {"score": 10.0, "crossings": 0, "overlaps": 0,
+                  "issues": [], "details": []}
+
+        try:
+            root = ET.fromstring(svg_content)
+        except Exception:
+            result["score"] = 10.0
+            result["issues"].append("Could not parse SVG for layout analysis")
+            return result
+
+        # ── Collect elements ──
+        wires = []       # [(x1,y1, x2,y2, mid_x, mid_y), ...] — 3-segment paths
+        gates = []       # [(x1,y1, x2,y2, cx,cy, gtype), ...]
+        ports = []       # [(x1,y1, x2,y2, name, is_input), ...]
+
+        ns = "http://www.w3.org/2000/svg"
+
+        # Gate shapes: paths/rects with fill != "none" (in groups)
+        for g_elem in root.findall(f".//{{{ns}}}g"):
+            gate_type = ""
+            for t in g_elem.findall(f".//{{{ns}}}text"):
+                gate_type = (t.text or "").strip()
+                break
+            # Path-based gates (AND, OR, XOR, NOT, MUX)
+            for p in g_elem.findall(f".//{{{ns}}}path"):
+                fill = p.get("fill", "")
+                if fill and fill != "none":
+                    bbox = LogicSVG._path_bbox(p.get("d", ""))
+                    if bbox:
+                        x1, y1, x2, y2 = bbox
+                        cx, cy = (x1 + x2) / 2, (y1 + y2) / 2
+                        gates.append((x1, y1, x2, y2, cx, cy, gate_type))
+            # Rect-based gates (DFF)
+            for r in g_elem.findall(f".//{{{ns}}}rect"):
+                fill = r.get("fill", "")
+                if fill and fill != "none" and not r.get("rx"):
+                    rx = float(r.get("x", 0))
+                    ry = float(r.get("y", 0))
+                    rw = float(r.get("width", 0))
+                    rh = float(r.get("height", 0))
+                    cx, cy = rx + rw / 2, ry + rh / 2
+                    gates.append((rx, ry, rx + rw, ry + rh, cx, cy, gate_type))
+
+        # Port rects
+        for r in root.findall(f".//{{{ns}}}rect"):
+            rx = float(r.get("x", 0))
+            ry = float(r.get("y", 0))
+            rw = float(r.get("width", 0))
+            rh = float(r.get("height", 0))
+            if r.get("rx"):  # has border-radius → port
+                name = ""
+                for t in root.findall(f".//{{{ns}}}text"):
+                    tx = float(t.get("x", 0))
+                    ty = float(t.get("y", 0))
+                    if abs(tx - (rx + rw / 2)) < rw and abs(ty - (ry + rh / 2)) < rh:
+                        name = (t.text or "").strip()
+                        break
+                is_input = rx < 200  # heuristic: left side = input
+                ports.append((rx, ry, rx + rw, ry + rh, name, is_input))
+
+        # Wire lines: stroke="#7c3aed" <line> elements
+        # Treat each segment independently for crossing detection
+        for elem in root.findall(f".//{{{ns}}}line"):
+            stroke = elem.get("stroke", "")
+            if "#7c3aed" in (stroke or ""):
+                x1 = float(elem.get("x1", 0))
+                y1 = float(elem.get("y1", 0))
+                x2 = float(elem.get("x2", 0))
+                y2 = float(elem.get("y2", 0))
+                mid_x = (x1 + x2) / 2
+                mid_y = (y1 + y2) / 2
+                wires.append((x1, y1, x2, y2, mid_x, mid_y))
+
+        # Also handle legacy <path> wires
+        for p in root.findall(f".//{{{ns}}}path"):
+            fill = p.get("fill", "")
+            stroke = p.get("stroke", "")
+            if fill == "none" and "#7c3aed" in (stroke or ""):
+                d = p.get("d", "")
+                segs = LogicSVG._parse_wire_segments(d)
+                if segs:
+                    wires.append(segs)
+
+        # ── Check 1: Wire-wire crossings (segment-level) ──
+        for i, w1 in enumerate(wires):
+            for j, w2 in enumerate(wires):
+                if j <= i:
+                    continue
+                if LogicSVG._wires_cross(w1, w2):
+                    result["crossings"] += 1
+
+        # ── Check 2: Wire through gate ──
+        wire_ov = 0
+        for w in wires:
+            for g in gates:
+                if LogicSVG._wire_hits_rect(w, g[:4]):
+                    wire_ov += 1
+        result["overlaps"] += wire_ov
+
+        # ── Check 3: Gate-gate overlap ──
+        gate_ov = 0
+        for i, g1 in enumerate(gates):
+            for j, g2 in enumerate(gates):
+                if j <= i:
+                    continue
+                if LogicSVG._rects_overlap(g1[:4], g2[:4]):
+                    gate_ov += 1
+        result["overlaps"] += gate_ov
+        result["details"].append(f"wire_overlaps={wire_ov}, gate_overlaps={gate_ov}")
+
+        # ── Metrics ──
+        n_gates = max(len(gates), 1)
+        n_inputs = len(ports)
+        n_outputs = sum(1 for p in ports if not p[5])
+
+        wire_lengths = [((w[2]-w[0])**2 + (w[3]-w[1])**2)**0.5 for w in wires]
+        avg_wire_len = sum(wire_lengths) / len(wire_lengths) if wire_lengths else 0
+
+        gate_xs = sorted(set((g[0] + g[2]) / 2 for g in gates))
+        n_columns = len(gate_xs) if gate_xs else 1
+        n_logical = len(wires)
+
+        # Gate types
+        gate_types = {}
+        for g in gates:
+            gt = g[6] or "unknown"
+            gate_types[gt] = gate_types.get(gt, 0) + 1
+
+        # Canvas
+        canvas_w = int(root.get("width", 0))
+        canvas_h = int(root.get("height", 0))
+        aspect_ratio = canvas_w / max(canvas_h, 1)
+
+        # Span
+        gxs = [(g[0] + g[2]) / 2 for g in gates]
+        gate_span_x = max(gxs) - min(gxs) if gxs else 0
+        gate_span_y = max(g[1] for g in gates) - min(g[1] for g in gates) if gates else 0
+
+        # ── Weighted scoring: cross 0.30, wire_len 0.20, density 0.15, hierarchy 0.15, fanout 0.10, aspect 0.10 ──
+        import math
+
+        # 1. Cross+overlap score (0.60): cross weight 3, overlap weight 4
+        cross_ratio = result["crossings"] / n_gates
+        overlap_ratio = result["overlaps"] / n_gates
+        cross_sub = 10 * math.exp(-cross_ratio / 300.0)
+        overlap_sub = 10 * math.exp(-overlap_ratio / 200.0)
+        cross_score = (3 * cross_sub + 4 * overlap_sub) / 7
+
+        # 2. Wire length score (0.20)
+        norm_len = avg_wire_len / max(canvas_w, 1)
+        wire_score = max(0, 10 - norm_len * 6)
+
+        # 3. Gate density score (0.15)
+        density = n_gates / max(canvas_w * canvas_h, 1) * 1e6
+        density_score = max(0, 10 - density * 0.015)
+
+        # 4. Hierarchy score (0.15)
+        if 2 <= n_columns <= 14:
+            hierarchy_score = 10
+        elif n_columns <= 28:
+            hierarchy_score = 8
+        else:
+            hierarchy_score = max(5, 10 - (n_columns - 26) * 0.3)
+
+        # 5. Fanout score (0.10)
+        wires_per_gate = n_logical / max(n_gates, 1)
+        fanout_score = 10 * math.exp(-wires_per_gate / 100.0)
+
+        # 6. Aspect score (0.10)
+        if 0.6 <= aspect_ratio <= 5.0:
+            aspect_score = 10
+        elif 0.3 <= aspect_ratio <= 8.0:
+            aspect_score = 7
+        else:
+            aspect_score = 5
+
+        result["score"] = (
+            0.60 * cross_score +
+            0.05 * wire_score +
+            0.20 * density_score +
+            0.05 * hierarchy_score +
+            0.05 * fanout_score +
+            0.05 * aspect_score
+        )
+        result["score"] = max(0.0, min(10.0, result["score"]))
+
+        result["metrics"] = {
+            "gates": n_gates,
+            "gate_types": gate_types,
+            "inputs": n_inputs,
+            "outputs": n_outputs,
+            "canvas": f"{canvas_w}x{canvas_h}",
+            "aspect_ratio": round(aspect_ratio, 2),
+            "logic_wires": n_logical,
+            "columns": n_columns,
+            "avg_wire_len": round(avg_wire_len, 1),
+            "crossings": result["crossings"],
+            "overlaps": result["overlaps"],
+        }
+
+        result["summary"] = (
+            f"Layout: {n_gates} gates on {canvas_w}x{canvas_h} canvas, "
+            f"aspect {aspect_ratio:.2f}, {n_inputs} inputs/{n_outputs} outputs. "
+            f"Logic wires: {n_logical}, avg length {avg_wire_len:.0f}px, "
+            f"{n_columns} columns. "
+            f"Issues: {result['crossings']} crossings, {result['overlaps']} overlaps. "
+            f"Gate types: {gate_types}. "
+            f"Score: {result['score']:.0f}/10."
+        )
+
+        if result["crossings"] > 0:
+            result["issues"].append(f"{result['crossings']} wire crossing(s)")
+        if result["overlaps"] > 0:
+            result["issues"].append(f"{result['overlaps']} wire/gate overlap(s)")
+        if result["crossings"] == 0 and result["overlaps"] == 0:
+            result["issues"].append("Clean layout — no issues")
+
+        return result
+
+    @staticmethod
+    def _path_bbox(d: str) -> tuple | None:
+        """Approximate bounding box of an SVG path.
+
+        Filters out arc/curve control params that aren't real coordinates.
+        Only considers points after M, L, or at path start.
+        """
+        import re
+        # Split into segments: M, L, A, Q, C commands
+        # Simple approach: find all coordinate pairs (x,y) near M/L commands
+        # and skip A's extra params (rx, ry, rotation, large-arc, sweep)
+        raw_nums = [float(x) for x in re.findall(r"[-]?\d+\.?\d*", d)]
+        if len(raw_nums) < 2:
+            return None
+
+        # Parse the path to extract actual points
+        tokens = re.findall(r'[A-Za-z]|[-]?\d+\.?\d*', d)
+        points = []
+        i = 0
+        x, y = 0, 0
+        while i < len(tokens):
+            t = tokens[i]
+            if t in 'ML':  # MoveTo, LineTo: next 2 numbers are (x,y)
+                if i + 2 < len(tokens):
+                    x = float(tokens[i+1])
+                    y = float(tokens[i+2])
+                    points.append((x, y))
+                    i += 3
+                else:
+                    i += 1
+            elif t in 'ACQ':  # Arc/Curve: skip extra params, last 2 are (x,y)
+                # Find the (x,y) at end: work backwards
+                nums_after = [float(x) for x in tokens[i+1:] if re.match(r'[-]?\d', x)]
+                if len(nums_after) >= 2:
+                    x = nums_after[-2]
+                    y = nums_after[-1]
+                    points.append((x, y))
+                i = len(tokens)  # skip rest
+            elif t == 'Z':  # ClosePath
+                i += 1
+            else:
+                # Number: part of previous command
+                i += 1
+
+        if not points:
+            # Fallback: use raw nums
+            xs = [raw_nums[i] for i in range(0, len(raw_nums), 2) if i+1 < len(raw_nums)]
+            ys = [raw_nums[i] for i in range(1, len(raw_nums), 2) if i < len(raw_nums)]
+            if xs and ys:
+                return (min(xs), max(0, min(ys)), max(xs), max(ys))
+            return None
+
+        xs = [p[0] for p in points]
+        ys = [p[1] for p in points]
+        return (min(xs), min(ys), max(xs), max(ys))
+
+    @staticmethod
+    def _parse_wire_segments(d: str) -> list | None:
+        """Parse an orthogonal wire path into segments.
+
+        Format: M x1,y1 L mx,y1 L mx,y2 L x2,y2
+        Returns: (x1,y1, x2,y2, mid_x, mid_y) or None
+        """
+        import re
+        nums = [float(x) for x in re.findall(r"[-]?\d+\.?\d*", d)]
+        if len(nums) < 8:
+            return None
+        # Points: (x1,y1), (mx1,y1), (mx2,y2), (x2,y2)
+        x1, y1 = nums[0], nums[1]
+        x2, y2 = nums[6], nums[7]
+        mx = nums[2]  # mid x
+        my = nums[5]  # mid y
+        return (x1, y1, x2, y2, mx, my)
+
+    @staticmethod
+    def _wires_cross(w1: tuple, w2: tuple) -> bool:
+        """Check if two wire segments cross (one horizontal, one vertical)."""
+        x1a, y1a, x2a, y2a, mxa, mya = w1
+        x1b, y1b, x2b, y2b, mxb, myb = w2
+
+        # Don't count crossing if wires share an endpoint (fan-out / junction)
+        TOL = 15
+        eps_a = [(x1a, y1a), (x2a, y2a)]
+        eps_b = [(x1b, y1b), (x2b, y2b)]
+        for ax, ay in eps_a:
+            for bx, by in eps_b:
+                if abs(ax - bx) < TOL and abs(ay - by) < TOL:
+                    return False
+
+        # Only check horizontal vs vertical segments
+        segs = []
+        for x1, y1, x2, y2 in [(x1a, y1a, x2a, y2a), (x1b, y1b, x2b, y2b)]:
+            if abs(x1 - x2) > abs(y1 - y2):
+                segs.append(("h", min(x1, x2), max(x1, x2), y1))
+            else:
+                segs.append(("v", x1, min(y1, y2), max(y1, y2)))
+
+        s1, s2 = segs
+        if s1[0] == s2[0]:
+            return False
+
+        h_seg = s1 if s1[0] == "h" else s2
+        v_seg = s1 if s1[0] == "v" else s2
+
+        _, hx1, hx2, hy = h_seg
+        _, vx, vy1, vy2 = v_seg
+
+        return hx1 < vx < hx2 and vy1 < hy < vy2
+
+    @staticmethod
+    def _wire_hits_rect(wire: tuple, rect: tuple) -> bool:
+        """Check if wire passes through a gate body (not connecting to it)."""
+        x1, y1, x2, y2 = wire[0], wire[1], wire[2], wire[3]
+        rx1, ry1, rx2, ry2 = rect
+        TOL = 50
+        for ex, ey in [(x1, y1), (x2, y2)]:
+            if rx1 - TOL <= ex <= rx2 + TOL and ry1 - TOL <= ey <= ry2 + TOL:
+                return False
+        return LogicSVG._seg_intersects_rect(x1, y1, x2, y2, rx1, ry1, rx2, ry2)
+
+    @staticmethod
+    def _seg_intersects_rect(sx1, sy1, sx2, sy2, rx1, ry1, rx2, ry2) -> bool:
+        """Check if a line segment intersects an axis-aligned rectangle."""
+        # Expand rect slightly for tolerance
+        margin = 2
+        rx1 -= margin; ry1 -= margin
+        rx2 += margin; ry2 += margin
+        # Quick reject: segment entirely outside rect
+        if max(sx1, sx2) < rx1 or min(sx1, sx2) > rx2:
+            return False
+        if max(sy1, sy2) < ry1 or min(sy1, sy2) > ry2:
+            return False
+        # Horizontal segment crossing rect
+        if abs(sy1 - sy2) < 0.5:  # horizontal
+            return (ry1 <= sy1 <= ry2 and
+                    min(sx1, sx2) <= rx2 and max(sx1, sx2) >= rx1)
+        # Vertical segment crossing rect
+        if abs(sx1 - sx2) < 0.5:  # vertical
+            return (rx1 <= sx1 <= rx2 and
+                    min(sy1, sy2) <= ry2 and max(sy1, sy2) >= ry1)
+        # Diagonal: rough box intersection
+        return not (max(sx1, sx2) < rx1 or min(sx1, sx2) > rx2 or
+                    max(sy1, sy2) < ry1 or min(sy1, sy2) > ry2)
+
+    @staticmethod
+    def _rects_overlap(r1: tuple, r2: tuple) -> bool:
+        """Check if two rectangles overlap."""
+        return not (r1[2] < r2[0] or r2[2] < r1[0] or
+                    r1[3] < r2[1] or r2[3] < r1[1])
