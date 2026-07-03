@@ -1643,6 +1643,24 @@ class AnalogSVG:
                             f"expected ~{expected_gain:.0f}x. "
                             f"Possible open feedback loop or missing resistor.")
 
+            # ── P2: CMRR for differential amplifiers ──
+            if calc_name in ("differential_amp", "instrumentation_amp", "bjt_diff_pair",
+                             "mosfet_diff_pair"):
+                if expected_gain and dc_gain_lin > 0:
+                    gain_error = abs(dc_gain_lin - expected_gain) / max(expected_gain, 0.01)
+                    if gain_error < 0.01:
+                        cmrr_est = 80  # excellent matching
+                    elif gain_error < 0.03:
+                        cmrr_est = 60  # good
+                    elif gain_error < 0.10:
+                        cmrr_est = 40  # fair
+                    else:
+                        cmrr_est = 20  # poor
+                    if cmrr_est < 40:
+                        issues.append(
+                            f"CMRR: ~{cmrr_est} dB (poor matching) — "
+                            "resistor mismatch degrades common-mode rejection")
+
             # ── Filter checks ──
             if is_filter and db_vals:
                 # Check that there's meaningful attenuation
@@ -1863,6 +1881,8 @@ class AnalogSVG:
             if db_val is not None and db_val > -190:
                 return 10 ** (db_val / 20.0)  # dB → linear
             return None
+        elif metric_name == "Q":
+            return metrics.get("q_factor")
         return None
 
     # ═══════════ compose_circuit: 多级电路组合 ═══════════

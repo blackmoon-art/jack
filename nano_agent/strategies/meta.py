@@ -195,6 +195,41 @@ class MetaStrategy(BaseStrategy):
             if m:
                 verdict["warnings"].append(f"Spec off by {m.group(1)}%")
 
+        # ── Q factor ──
+        q_match = re.search(r"Q\s*Factor\s*\|\s*\*?\*?([\d.]+)\*?\*?", result)
+        if q_match:
+            verdict["q_factor"] = float(q_match.group(1))
+
+        # ── P0: GBW ──
+        gbw_match = re.search(r"GBW.*?\|\s*\*?\*?([\d.]+)\s*(MHz|kHz|Hz)", result)
+        if gbw_match:
+            val = float(gbw_match.group(1))
+            unit = gbw_match.group(2)
+            if unit == "MHz":
+                val *= 1e6
+            elif unit == "kHz":
+                val *= 1e3
+            verdict["gbw"] = val
+
+        # ── P1: Phase margin ──
+        pm_match = re.search(r"Phase\s*Margin\s*\|\s*\*?\*?([\d.]+)°", result)
+        if pm_match:
+            verdict["phase_margin_deg"] = float(pm_match.group(1))
+
+        # ── P2: CMRR ──
+        cmrr_match = re.search(r"CMRR:\s*~?(\d+)\s*dB", result)
+        if cmrr_match:
+            verdict["cmrr_db"] = int(cmrr_match.group(1))
+
+        # ── P3: Slew rate ──
+        sr_match = re.search(r"Slew\s*Rate\s*\|\s*\*?\*?([\d.]+)\s*(V/µs|V/ms)", result)
+        if sr_match:
+            val = float(sr_match.group(1))
+            unit = sr_match.group(2)
+            if unit == "V/ms":
+                val *= 1e-3  # convert to V/µs
+            verdict["slew_rate"] = val  # stored as V/µs
+
         # ── Auto-fix / optimization count ──
         opt_match = re.search(r"Optimized in (\d+) iteration", result)
         if opt_match:
@@ -213,8 +248,9 @@ class MetaStrategy(BaseStrategy):
           - sim_passed=True:       +4  (foundation)
           - sim_passed=False:      +0  (automatic fail)
           - electrical_ok=True:    +2
-          - spec_compliant=True:   +3  (met target)
+          - spec_compliant=True:   +2  (met target fc/gain)
           - spec_compliant=False:  +0
+          - Q in range [0.3,3]:   +1  (reasonable selectivity)
           - no errors/warnings:    +1
           - spec_compliant unset
             but sim+elec ok:       +1  (partial, no spec given)
@@ -224,17 +260,44 @@ class MetaStrategy(BaseStrategy):
         if verdict["sim_passed"] is True:
             score += 4.0
         elif verdict["sim_passed"] is False:
-            return max(0.0, score)  # sim failed: cap at current (0-1 at most)
+            return max(0.0, score)  # sim failed: cap at current
 
         if verdict["electrical_ok"] is True:
             score += 2.0
 
         if verdict["spec_compliant"] is True:
-            score += 3.0
+            score += 2.0
         elif verdict["spec_compliant"] is None:
             # No spec given, but sim + electrical both ok
             if verdict["sim_passed"] and verdict["electrical_ok"]:
                 score += 1.0  # partial credit
+
+        # Q factor: reasonable range for most filter/amp designs
+        q_val = verdict.get("q_factor")
+        if q_val is not None and 0.3 <= q_val <= 3.0:
+            score += 1.0
+
+        # P0: GBW — amplifier must have meaningful gain×bandwidth
+        gbw = verdict.get("gbw")
+        if gbw is not None and gbw >= 1e3:
+            score += 1.0  # good: at least 1kHz GBW
+
+        # P1: Phase margin — stability check
+        pm = verdict.get("phase_margin_deg")
+        if pm is not None and pm >= 45:
+            score += 1.0
+
+        # P2: CMRR — common-mode rejection for diff amps
+        cmrr = verdict.get("cmrr_db")
+        if cmrr is not None:
+            if cmrr >= 40:
+                score += 1.0
+
+        # P3: Slew rate — large-signal speed
+        sr = verdict.get("slew_rate")
+        if sr is not None:
+            if sr >= 0.1:  # at least 0.1 V/µs
+                score += 1.0
 
         if not verdict["errors"] and not verdict["warnings"]:
             score += 1.0

@@ -297,6 +297,58 @@ def _parse_tran_output(output: str) -> dict:
 # 指标计算
 # ═══════════════════════════════════════════════════════════════
 
+def _compute_filter_q(db_data: list[float], freqs: list[float],
+                      ref_gain: float, filter_type: str) -> float | None:
+    """Estimate filter Q factor from AC sweep data.
+
+    Band-pass: Q = f0 / BW_3dB (exact)
+    Low-/high-pass with peaking: Q ≈ 10^(peaking_dB/20) * 0.6 (empirical)
+    No peaking: Q ≈ 0.5 (overdamped, typical of unity-gain Sallen-Key)
+
+    Returns None if insufficient data.
+    """
+    if not db_data or not freqs or len(db_data) < 3:
+        return None
+
+    max_gain = max(db_data)
+    max_idx = db_data.index(max_gain)
+    peaking_db = max_gain - ref_gain
+
+    if filter_type == "band-pass":
+        # Exact: Q = f0 / BW_3dB
+        target = max_gain - 3.0
+        f_low, f_high = None, None
+        # Search left of peak: gain decreases as index decreases
+        for i in range(max_idx - 1, -1, -1):
+            if db_data[i] <= target and db_data[i + 1] >= target:
+                frac = (target - db_data[i + 1]) / (db_data[i] - db_data[i + 1]) if abs(db_data[i] - db_data[i + 1]) > 1e-12 else 0
+                f_low = freqs[i + 1] + frac * (freqs[i] - freqs[i + 1])
+                break
+        # Search right of peak: gain decreases as index increases
+        for i in range(max_idx, len(db_data) - 1):
+            if db_data[i] >= target > db_data[i + 1]:
+                frac = (target - db_data[i]) / (db_data[i + 1] - db_data[i]) if abs(db_data[i + 1] - db_data[i]) > 1e-12 else 0
+                f_high = freqs[i] + frac * (freqs[i + 1] - freqs[i])
+                break
+        if f_low and f_high and f_high > f_low > 0:
+            return round(freqs[max_idx] / (f_high - f_low), 2)
+
+    # Low-pass / high-pass: estimate from peaking
+    if filter_type in ("low-pass", "high-pass"):
+        if peaking_db > 0.5:
+            # Q > 0.707: estimate from peaking height
+            # Standard 2nd-order LP: |H|max = Q / sqrt(1 - 1/(4Q²))
+            # Approximate inverse: Q ≈ 10^(peaking_dB/20) * 0.6
+            q_est = 10 ** (peaking_db / 20.0) * 0.6
+            return round(min(q_est, 15.0), 2)
+        else:
+            # No peaking → Q ≤ 0.707 (Butterworth) or lower (Bessel)
+            # Without further data, report ~0.5 (unity-gain Sallen-Key default)
+            return 0.50
+
+    return None
+
+
 def _compute_ac_metrics(ac_data: dict) -> dict:
     """Compute key metrics from AC analysis data.
 
@@ -422,12 +474,54 @@ def _compute_ac_metrics(ac_data: dict) -> dict:
     else:
         metrics["filter_type"] = "unknown"
 
+    # Q factor (quality factor) for 2nd-order filters
+    q_val = _compute_filter_q(db_data, freqs, ref_gain,
+                               metrics.get("filter_type", "unknown"))
+    if q_val is not None:
+        metrics["q_factor"] = q_val
+
     # Health checks
     if metrics.get("dc_gain_db", -999) < -60:
         metrics["warnings"].append("Very low DC gain — check circuit connections")
 
     if metrics.get("filter_type") == "low-pass" and metrics.get("cutoff_freq", 1e9) > 1e6:
         metrics["warnings"].append("Cutoff frequency very high (>1MHz) — check component values")
+
+    # Q-specific health checks
+    if q_val is not None and q_val > 3.0:
+        metrics["warnings"].append(f"Q factor very high ({q_val:.1f}) — strong peaking, may oscillate")
+    elif q_val is not None and q_val < 0.3:
+        metrics["warnings"].append(f"Q factor very low ({q_val:.2f}) — filter is overdamped, poor selectivity")
+
+    # ── P0: Gain-Bandwidth Product (GBW) for amplifiers ──
+    dc_gain = metrics.get("dc_gain_db", -999)
+    cutoff = metrics.get("cutoff_freq")
+    if dc_gain > -190 and cutoff is not None:
+        dc_gain_lin = 10 ** (dc_gain / 20.0)
+        gbw = dc_gain_lin * cutoff
+        metrics["gbw"] = gbw
+        # Health check: amplifier with very low GBW
+        if metrics.get("filter_type") == "unknown" and gbw < 100:
+            metrics["warnings"].append(f"GBW very low ({gbw:.1f} Hz) — amplifier bandwidth may be insufficient")
+
+    # ── P1: Phase margin estimate ──
+    phase_at_cut = metrics.get("phase_at_cutoff")
+    if phase_at_cut is not None:
+        # For closed-loop AC: phase margin ≈ 180° + phase_at_cutoff
+        # (valid for dominant-pole compensated amps where cutoff ≈ unity-gain)
+        phase_margin = 180.0 + phase_at_cut
+        # Normalize to [0, 180]
+        while phase_margin > 180:
+            phase_margin -= 360
+        while phase_margin < 0:
+            phase_margin += 360
+        metrics["phase_margin_deg"] = round(phase_margin, 1)
+        if phase_margin < 30:
+            metrics["warnings"].append(
+                f"Phase margin only {phase_margin:.0f}° — may ring or oscillate")
+        elif phase_margin < 45:
+            metrics["warnings"].append(
+                f"Phase margin {phase_margin:.0f}° (<45°) — marginal stability")
 
     return metrics
 
@@ -513,6 +607,19 @@ def _compute_tran_metrics(tran_data: dict) -> dict:
             metrics["ripple_rms"] = ripple
             if abs(final_value) > 1e-9 and ripple / abs(final_value) > 0.1:
                 metrics["warnings"].append(f"High ripple ({ripple:.4f}V RMS)")
+
+        # ── P3: Slew rate = max |dV/dt| during rising/falling edge ──
+        if len(values) >= 3 and len(times) >= 3:
+            max_slew = 0.0
+            for i in range(1, len(values)):
+                dt = times[i] - times[i - 1]
+                if dt > 1e-15:
+                    dv_dt = abs(values[i] - values[i - 1]) / dt
+                    if dv_dt > max_slew:
+                        max_slew = dv_dt
+            metrics["slew_rate"] = max_slew
+            if max_slew < 1e-3:
+                metrics["warnings"].append(f"Slew rate very low ({max_slew:.2e} V/s)")
 
         break  # Only analyze first non-constant signal
 
@@ -628,6 +735,19 @@ def _format_result(analysis: str, success: bool, error_msg: str,
             parts.append(f"| Max Gain | {m['max_gain_db']:.4f} dB @ {m['max_gain_freq']:.1f} Hz |")
         if m.get("roll_off_db_per_decade") is not None:
             parts.append(f"| Roll-off | {m['roll_off_db_per_decade']:.1f} dB/decade |")
+        if m.get("q_factor") is not None:
+            parts.append(f"| Q Factor | **{m['q_factor']:.2f}** |")
+        if m.get("gbw") is not None:
+            gbw = m["gbw"]
+            if gbw >= 1e6:
+                parts.append(f"| GBW (Gain×BW) | **{gbw/1e6:.2f} MHz** |")
+            elif gbw >= 1e3:
+                parts.append(f"| GBW (Gain×BW) | **{gbw/1e3:.2f} kHz** |")
+            else:
+                parts.append(f"| GBW (Gain×BW) | **{gbw:.1f} Hz** |")
+        if m.get("phase_margin_deg") is not None:
+            pm = m["phase_margin_deg"]
+            parts.append(f"| Phase Margin | **{pm:.0f}°** |")
         if m.get("filter_type"):
             parts.append(f"| Filter Type | **{m['filter_type']}** |")
         parts.append("")
@@ -684,6 +804,12 @@ def _format_result(analysis: str, success: bool, error_msg: str,
             parts.append(f"| Settling Time (±5%) | {m['settling_time'] * 1e6:.2f} µs |")
         if m.get("ripple_rms") is not None:
             parts.append(f"| Ripple (RMS) | {m['ripple_rms'] * 1000:.3f} mV |")
+        if m.get("slew_rate") is not None:
+            sr = m["slew_rate"]
+            if sr >= 1e6:
+                parts.append(f"| Slew Rate | **{sr/1e6:.1f} V/µs** |")
+            else:
+                parts.append(f"| Slew Rate | **{sr/1e3:.3f} V/ms** |")
         parts.append("")
 
         # Data preview
