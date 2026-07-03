@@ -285,3 +285,281 @@ templates:
       - {type: V, name: Vin, nodes: [in, "0"], value: "AC 1"}
       - {type: R, name: R1, nodes: [in, out], value: "?"}
       - {type: R, name: R2, nodes: [out, "0"], value: "?"}
+
+  # ── Active Filters ──
+  - id: sallen_key_hp
+    category: filter
+    name: Sallen-Key High-Pass Filter
+    keywords_cn: [Sallen-Key高通, sallen key高通, 有源高通, 有源高通滤波, sallen key highpass, active highpass]
+    guide: "A second-order active high-pass filter. R and C swapped vs. low-pass. Butterworth Q=0.707."
+    params:
+      fc: [Cutoff frequency (Hz), "1k"]
+      R: [Resistance, "10k"]
+    calculate: sallen_key_lp
+    components:
+      - {type: V, name: Vin, nodes: [in, "0"], value: "AC 1"}
+      - {type: C, name: C1, nodes: [in, n1], value: "?"}
+      - {type: C, name: C2, nodes: [n1, n2], value: "?"}
+      - {type: R, name: R1, nodes: [n1, out], value: "?"}
+      - {type: R, name: R2, nodes: [n2, "0"], value: "?"}
+      - {type: X, name: U1, nodes: [n2, out, out, vcc, "0"], model: opamp}
+
+  - id: mfb_bandpass
+    category: filter
+    name: Multiple-Feedback Band-Pass Filter
+    keywords_cn: [带通, 带通滤波, bandpass, band-pass, mfb, multiple feedback, 多重反馈]
+    guide: "Narrow-band active band-pass filter with multiple feedback topology. Center frequency f0, Q controlled by R2."
+    params:
+      fc: [Center frequency (Hz), "1k"]
+      Q: [Quality factor, "5"]
+    calculate: mfb_bandpass
+    components:
+      - {type: V, name: Vin, nodes: [in, "0"], value: "AC 1"}
+      - {type: R, name: R1, nodes: [in, n1], value: "?"}
+      - {type: R, name: R2, nodes: [n1, n2], value: "?"}
+      - {type: R, name: R3, nodes: [n1, "0"], value: "?"}
+      - {type: C, name: C1, nodes: [n1, out], value: "?"}
+      - {type: C, name: C2, nodes: [n2, out], value: "?"}
+      - {type: X, name: U1, nodes: ["0", n2, out, vcc, "0"], model: opamp}
+
+  - id: twin_t_notch
+    category: filter
+    name: Twin-T Notch Filter
+    keywords_cn: [陷波, 陷波滤波, notch, twin-t, 双T, 带阻, band-stop, 窄带滤波]
+    guide: "Narrow notch (band-stop) filter using passive twin-T network + opamp buffer. fn = 1/(2*pi*R*C). Use R/2 and 2C for the center branch."
+    params:
+      fc: [Notch frequency (Hz), "100"]
+      R: [Base resistance, "10k"]
+    calculate: twin_t_notch
+    components:
+      - {type: V, name: Vin, nodes: [in, "0"], value: "AC 1"}
+      - {type: R, name: R1, nodes: [in, t1], value: "?"}
+      - {type: R, name: R2, nodes: [t1, t2], value: "?"}
+      - {type: C, name: C3, nodes: [t2, out], value: "?"}
+      - {type: C, name: C1, nodes: [in, out], value: "?"}
+      - {type: C, name: C2, nodes: [out, "0"], value: "?"}
+      - {type: R, name: R3, nodes: [t1, "0"], value: "?"}
+      - {type: X, name: U1, nodes: [out, buf_out, buf_out, vcc, "0"], model: opamp}
+
+  # ── Opamp Application Circuits ──
+  - id: integrator
+    category: amplifier
+    name: Opamp Integrator
+    keywords_cn: [积分器, 积分, integrator, 积分电路, 运放积分]
+    guide: "Inverting integrator. Vout = -(1/(R*C)) * ∫Vin dt. Unity-gain frequency fc = 1/(2*pi*R*C)."
+    params:
+      fc: [Unity-gain frequency (Hz), "159"]
+      R: [Input resistance, "10k"]
+    calculate: integrator
+    components:
+      - {type: V, name: Vin, nodes: [in, "0"], value: "AC 1"}
+      - {type: R, name: Rin, nodes: [in, n1], value: "?"}
+      - {type: C, name: Cf, nodes: [n1, out], value: "?"}
+      - {type: X, name: U1, nodes: ["0", n1, out, vcc, "0"], model: opamp}
+
+  - id: differentiator
+    category: amplifier
+    name: Opamp Differentiator
+    keywords_cn: [微分器, 微分, differentiator, 微分电路, 运放微分]
+    guide: "Inverting differentiator. Vout = -R*C * dVin/dt. Unity-gain frequency fc = 1/(2*pi*R*C)."
+    params:
+      fc: [Unity-gain frequency (Hz), "159"]
+      R: [Feedback resistance, "10k"]
+    calculate: differentiator
+    components:
+      - {type: V, name: Vin, nodes: [in, "0"], value: "AC 1"}
+      - {type: C, name: Cin, nodes: [in, n1], value: "?"}
+      - {type: R, name: Rf, nodes: [n1, out], value: "?"}
+      - {type: X, name: U1, nodes: ["0", n1, out, vcc, "0"], model: opamp}
+
+  - id: instrumentation_amp
+    category: amplifier
+    name: Instrumentation Amplifier (3-Opamp)
+    keywords_cn: [仪表放大, 仪表放大器, 仪放, instrumentation, in-amp, 三运放, 精密放大]
+    guide: "Classic 3-opamp instrumentation amplifier. Gain = 1 + 2*R1/Rg. High CMRR, high input impedance."
+    params:
+      gain: [Voltage gain, "100"]
+      Rg: [Gain-setting resistor, "1k"]
+    calculate: instrumentation_amp
+    components:
+      - {type: V, name: V1, nodes: [in1, "0"], value: "AC 1"}
+      - {type: V, name: V2, nodes: [in2, "0"], value: "DC 0"}
+      - {type: R, name: Rg, nodes: [n1a, n1b], value: "?"}
+      - {type: R, name: R1a, nodes: [n1a, outa], value: "?"}
+      - {type: R, name: R1b, nodes: [n1b, outb], value: "?"}
+      - {type: R, name: R2a, nodes: [outa, n2a], value: "?"}
+      - {type: R, name: R2b, nodes: [outb, n2b], value: "?"}
+      - {type: R, name: R3a, nodes: [n2a, out], value: "?"}
+      - {type: R, name: R3b, nodes: [n2b, "0"], value: "?"}
+      - {type: X, name: U1, nodes: [in1, n1a, outa, vcc, "0"], model: opamp}
+      - {type: X, name: U2, nodes: [in2, n1b, outb, vcc, "0"], model: opamp}
+      - {type: X, name: U3, nodes: [n2b, n2a, out, vcc, "0"], model: opamp}
+
+  - id: schmitt_trigger
+    category: amplifier
+    name: Schmitt Trigger (Hysteresis Comparator)
+    keywords_cn: [施密特, schmitt, 迟滞, 滞回, hysteresis, 比较器带迟滞, 整形]
+    guide: "Inverting Schmitt trigger with hysteresis. Vth+ = Vcc * R2/(R1+R2), Vth- = -Vcc * R2/(R1+R2)."
+    params:
+      ratio: [Hysteresis ratio Vth/Vcc, "0.1"]
+    calculate: schmitt_trigger
+    components:
+      - {type: V, name: Vin, nodes: [in, "0"], value: "AC 1"}
+      - {type: R, name: R1, nodes: [in, n1], value: "?"}
+      - {type: R, name: R2, nodes: [n1, out], value: "?"}
+      - {type: X, name: U1, nodes: ["0", n1, out, vcc, "0"], model: opamp}
+
+  - id: precision_rectifier
+    category: rectifier
+    name: Precision Half-Wave Rectifier
+    keywords_cn: [精密整流, 精密整流器, precision rectifier, 理想整流, 理想二极管]
+    guide: "Active precision half-wave rectifier. Eliminates ~0.7V diode drop. Vout = -Vin for Vin<0, Vout=0 for Vin>0."
+    params: {}
+    calculate: fixed
+    components:
+      - {type: V, name: Vin, nodes: [in, "0"], value: "AC 1"}
+      - {type: R, name: R1, nodes: [in, n1], value: "10k"}
+      - {type: D, name: D1, nodes: [n1, out], value: ""}
+      - {type: D, name: D2, nodes: [out, n1_ret], value: ""}
+      - {type: R, name: Rf, nodes: [n1_ret, n1], value: "10k"}
+      - {type: X, name: U1, nodes: ["0", n1, n1_ret, vcc, "0"], model: opamp}
+
+  - id: comparator
+    category: amplifier
+    name: Open-Loop Comparator
+    keywords_cn: [比较器, comparator, 开环比较, 过零比较, 电压比较]
+    guide: "Opamp used as open-loop comparator. Vout swings to rails based on V(in+) > V(in-). Add hysteresis via schmitt_trigger template."
+    params: {}
+    calculate: fixed
+    components:
+      - {type: V, name: Vin, nodes: [in, "0"], value: "AC 1"}
+      - {type: V, name: Vref, nodes: [ref, "0"], value: "DC 0.5"}
+      - {type: X, name: U1, nodes: [in, ref, out, vcc, "0"], model: opamp}
+
+  # ── MOSFET Circuits ──
+  - id: common_drain
+    category: mosfet
+    name: MOSFET Common-Drain (Source Follower)
+    keywords_cn: [共漏, 共漏极, 源极跟随, 源跟随器, source follower, common drain, cd amplifier, mosfet缓冲]
+    guide: NMOS source follower. Av ≈ 1. High input impedance, low output impedance.
+    params:
+      Vdd: [Supply voltage, "12"]
+    calculate: common_drain
+    components:
+      - {type: V, name: Vin, nodes: [in, "0"], value: "AC 0.5"}
+      - {type: V, name: Vdd, nodes: [vdd, "0"], value: "DC 12"}
+      - {type: R, name: Rg1, nodes: [vdd, gate], value: "?"}
+      - {type: R, name: Rg2, nodes: [gate, "0"], value: "?"}
+      - {type: R, name: Rs, nodes: [out, "0"], value: "?"}
+      - {type: C, name: Cin, nodes: [in, gate], value: "1u"}
+      - {type: C, name: Cout, nodes: [out, out_term], value: "10u"}
+      - {type: R, name: Rload, nodes: [out_term, "0"], value: "10k"}
+      - {type: M, name: M1, nodes: [vdd, gate, out, "0"], model: NMOS}
+
+  - id: mosfet_diff_pair
+    category: mosfet
+    name: MOSFET Differential Pair
+    keywords_cn: [mos差分, mos差分对, mosfet diff pair, nmos diff, 场效应管差分]
+    guide: NMOS differential pair with tail current source. Used as input stage in CMOS opamps.
+    params:
+      gain: [Differential gain, "10"]
+      Itail: [Tail current (A), "1m"]
+    calculate: mosfet_diff_pair
+    components:
+      - {type: V, name: V1, nodes: [in1, "0"], value: "AC 0.5"}
+      - {type: V, name: V2, nodes: [in2, "0"], value: "AC 0.5"}
+      - {type: V, name: Vdd, nodes: [vdd, "0"], value: "DC 12"}
+      - {type: R, name: Rd1, nodes: [vdd, out1], value: "?"}
+      - {type: R, name: Rd2, nodes: [vdd, out2], value: "?"}
+      - {type: R, name: Rss, nodes: [src, "0"], value: "?"}
+      - {type: M, name: M1, nodes: [out1, in1, src, "0"], model: NMOS}
+      - {type: M, name: M2, nodes: [out2, in2, src, "0"], model: NMOS}
+
+  # ── BJT Circuits ──
+  - id: common_base
+    category: bjt
+    name: BJT Common-Base Amplifier
+    keywords_cn: [共基, 共基极, common base, cb amplifier, bjt共基, 基极接地]
+    guide: "Common-base amplifier. Low input impedance, high output impedance. Av = gm*Rc, non-inverting."
+    params:
+      gain: [Voltage gain, "10"]
+      Ic: [Collector current (A), "1m"]
+      Vcc: [Supply voltage, "12"]
+    calculate: common_base
+    components:
+      - {type: V, name: Vin, nodes: [in, "0"], value: "AC 1"}
+      - {type: V, name: Vcc, nodes: [vcc, "0"], value: "DC 12"}
+      - {type: R, name: Rc, nodes: [vcc, out], value: "?"}
+      - {type: R, name: Re, nodes: [emit, "0"], value: "?"}
+      - {type: R, name: R1, nodes: [vcc, base], value: "?"}
+      - {type: R, name: R2, nodes: [base, "0"], value: "?"}
+      - {type: C, name: Cbyp, nodes: [base, "0"], value: "10u"}
+      - {type: C, name: Cin, nodes: [in, emit], value: "10u"}
+      - {type: Q, name: Q1, nodes: [out, base, emit], model: NPN}
+
+  - id: cascode
+    category: bjt
+    name: BJT Cascode Amplifier
+    keywords_cn: [cascode, 共射共基, cascode放大, 串接放大, 共发共基]
+    guide: "Cascode (CE+CB) amplifier. High gain, wide bandwidth, excellent reverse isolation. Q1=CE input, Q2=CB cascode."
+    params:
+      gain: [Voltage gain, "50"]
+      Ic: [Collector current (A), "1m"]
+      Vcc: [Supply voltage, "15"]
+    calculate: cascode
+    components:
+      - {type: V, name: Vin, nodes: [in, "0"], value: "AC 0.1"}
+      - {type: V, name: Vcc, nodes: [vcc, "0"], value: "DC 15"}
+      - {type: R, name: Rc, nodes: [vcc, out], value: "?"}
+      - {type: R, name: Re, nodes: [emit1, "0"], value: "?"}
+      - {type: R, name: R1, nodes: [vcc, base2], value: "?"}
+      - {type: R, name: R2, nodes: [base2, "0"], value: "?"}
+      - {type: C, name: Cin, nodes: [in, base1], value: "10u"}
+      - {type: C, name: Cbyp, nodes: [base2, "0"], value: "10u"}
+      - {type: Q, name: Q1, nodes: [n_cas, base1, emit1], model: NPN}
+      - {type: Q, name: Q2, nodes: [out, base2, n_cas], model: NPN}
+
+  # ── Oscillators ──
+  - id: wien_bridge_osc
+    category: oscillator
+    name: Wien Bridge Oscillator
+    keywords_cn: [Wien桥, wien bridge, 文氏桥, 正弦振荡, 文氏电桥, wien oscillator]
+    guide: "Low-distortion sine-wave oscillator. fosc = 1/(2*pi*R*C). Requires gain ≥ 3 to sustain oscillation. .ic V(out)=0.1 kick-starts oscillation."
+    params:
+      fc: [Oscillation frequency (Hz), "1k"]
+      R: [Timing resistance, "10k"]
+    calculate: wien_bridge_osc
+    components:
+      - {type: V, name: Vcc, nodes: [vcc, "0"], value: "DC 12"}
+      - {type: R, name: R1, nodes: [out, n1], value: "?"}
+      - {type: C, name: C1, nodes: [n1, "0"], value: "?"}
+      - {type: R, name: R2, nodes: [n1, n2], value: "?"}
+      - {type: C, name: C2, nodes: [n2, "0"], value: "?"}
+      - {type: R, name: Rf, nodes: [n2, out], value: "?"}
+      - {type: R, name: Rg, nodes: [n2, "0"], value: "?"}
+      - {type: X, name: U1, nodes: [n2, n1, out, vcc, "0"], model: opamp}
+      - {type: V, name: Vkick, nodes: [kick, "0"], value: "PULSE(0 0.1 100u 1u 1u 1u 1)"}
+      - {type: R, name: Rkick, nodes: [kick, out], value: "1k"}
+
+  - id: rc_phase_shift_osc
+    category: oscillator
+    name: RC Phase-Shift Oscillator
+    keywords_cn: [RC相移, 相移振荡, phase shift, rc oscillator, 移相振荡]
+    guide: "Three-stage RC phase-shift oscillator. fosc = 1/(2*pi*sqrt(6)*R*C). Requires gain ≥ 29. Signal injected via initial condition."
+    params:
+      fc: [Oscillation frequency (Hz), "1k"]
+      R: [Resistance, "10k"]
+    calculate: rc_phase_shift
+    components:
+      - {type: V, name: Vcc, nodes: [vcc, "0"], value: "DC 12"}
+      - {type: R, name: Rf, nodes: [n3, out], value: "?"}
+      - {type: R, name: Rin, nodes: [n3, "0"], value: "1k"}
+      - {type: R, name: R1, nodes: [out, n1], value: "?"}
+      - {type: C, name: C1, nodes: [n1, n2], value: "?"}
+      - {type: R, name: R2, nodes: [n2, n3], value: "?"}
+      - {type: C, name: C2, nodes: [n2, n3A], value: "?"}
+      - {type: R, name: R3, nodes: [n3A, n3], value: "?"}
+      - {type: C, name: C3, nodes: [n3A, "0"], value: "?"}
+      - {type: X, name: U1, nodes: ["0", n3, out, vcc, "0"], model: opamp}
+      - {type: V, name: Vkick, nodes: [kick, "0"], value: "PULSE(0 0.1 50u 1u 1u 1u 1)"}
+      - {type: R, name: Rkick, nodes: [kick, out], value: "1k"}

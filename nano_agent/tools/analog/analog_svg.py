@@ -273,15 +273,295 @@ def _calc_fixed(tmpl: dict, params: dict) -> dict:
     return {}
 
 
+# ═══════════ BJT Calculators ═══════════
+
+def _calc_common_emitter(tmpl: dict, params: dict) -> dict:
+    """BJT common-emitter amplifier bias calculator.
+
+    Design approach:
+      - Vce ≈ Vcc/2 for maximum output swing
+      - Ve = Vcc/10 for stable DC operating point
+      - Voltage divider bias: stiff divider (Idiv ≈ 0.1*Ic)
+      - Ce bypass capacitor → gain ≈ -Rc*Ic/VTH (unilateral at mid-band)
+    """
+    Ic = _parse_value(str(params.get("Ic", "1m")))
+    Vcc = _parse_value(str(params.get("Vcc", "12")))
+    Ve = Vcc * 0.1
+    Re = Ve / Ic
+    Vc = Vcc * 0.6  # Vce ≈ 0.5*Vcc, Ve ≈ 0.1*Vcc → Vc ≈ Vcc - 0.4*Vcc
+    Rc = (Vcc - Vc) / Ic
+    Vb = Ve + VBE_ON
+    Idiv = Ic * 0.1
+    R2 = Vb / Idiv
+    R1 = (Vcc - Vb) / Idiv
+    return {"R1": _format_value(R1), "R2": _format_value(R2),
+            "Rc": _format_value(Rc), "Re": _format_value(Re)}
+
+
+def _calc_emitter_follower(tmpl: dict, params: dict) -> dict:
+    """BJT emitter follower (common-collector) bias calculator.
+
+    Sets Ve = Vcc/2 for maximum symmetrical swing.
+    """
+    Ic = _parse_value(str(params.get("Ic", "1m")))
+    Vcc = _parse_value(str(params.get("Vcc", "12")))
+    Ve = Vcc * 0.5
+    Re = Ve / Ic
+    Vb = Ve + VBE_ON
+    Idiv = Ic * 0.1
+    R2 = Vb / Idiv
+    R1 = (Vcc - Vb) / Idiv
+    return {"R1": _format_value(R1), "R2": _format_value(R2),
+            "Re": _format_value(Re)}
+
+
+def _calc_current_mirror(tmpl: dict, params: dict) -> dict:
+    """BJT current mirror: Rref sets reference current.
+
+    Iref = (Vcc - Vbe) / Rref → Rref = (Vcc - Vbe) / Iref
+    """
+    Iref = _parse_value(str(params.get("Iref", "1m")))
+    Vcc = _parse_value(str(params.get("Vcc", "10")))
+    Rref = (Vcc - VBE_ON) / Iref
+    return {"Rref": _format_value(Rref)}
+
+
+def _calc_bjt_diff_pair(tmpl: dict, params: dict) -> dict:
+    """BJT differential pair calculator.
+
+    Single-ended gain: Av = gm*Rc/2 = (Ic/VTH)*Rc/2 where Ic = Itail/2.
+    So Rc = 2*Av*VTH/Ic = 4*Av*VTH/Itail.
+    Tail resistor: Ree ≈ (|Vee| - VBE)/Itail.
+    """
+    Itail = _parse_value(str(params.get("Itail", "1m")))
+    gain = _parse_value(str(params.get("gain", "20")))
+    Ic = Itail / 2.0
+    Rc = 2.0 * gain * VTH / Ic
+    # Vee is typically 12V from template
+    Vee_mag = 12.0
+    Ree = (Vee_mag - VBE_ON) / Itail
+    return {"Rc1": _format_value(Rc), "Rc2": _format_value(Rc),
+            "Ree": _format_value(Ree)}
+
+
+def _calc_mosfet_cs(tmpl: dict, params: dict) -> dict:
+    """MOSFET common-source amplifier calculator.
+
+    Uses rule-of-thumb values for Level-1 NMOS model.
+    Rd provides gain; Rs provides bias stability.
+    Gate divider (100k/47k) biases gate at ~Vdd*0.32 for turn-on.
+    """
+    gain = abs(_parse_value(str(params.get("gain", "5"))))
+    Vdd = _parse_value(str(params.get("Vdd", "12")))
+    # Rough gain scaling: gm ≈ 1-2mS for typical bias, Rd = gain/gm_typical
+    Rd = gain * 1000
+    Rd = max(500, min(Rd, 100000))
+    # Small source resistor for DC bias stability
+    Rs = (Vdd * 0.1) / 0.001  # ≈1.2k for 12V, 1mA
+    Rs = max(100, min(Rs, 10000))
+    # Gate bias divider
+    Rg1 = 100000
+    Rg2 = 47000
+    return {"Rd": _format_value(Rd), "Rs": _format_value(Rs),
+            "Rg1": _format_value(Rg1), "Rg2": _format_value(Rg2)}
+
+
+# ═══════════ Active Filter Calculators ═══════════
+
+def _calc_mfb_bandpass(tmpl: dict, params: dict) -> dict:
+    """Multiple-feedback band-pass filter calculator.
+
+    f0 = 1/(2*pi*C) * sqrt((R1+R3)/(R1*R2*R3))
+    Choose C by frequency range, then compute R1, R2, R3 from f0 and Q.
+    """
+    f0 = _parse_value(str(params.get("fc", "1k")))
+    Q = _parse_value(str(params.get("Q", "5")))
+    # Choose C based on f0
+    if f0 < 100:
+        C = 100e-9
+    elif f0 < 1000:
+        C = 10e-9
+    elif f0 < 10000:
+        C = 1e-9
+    else:
+        C = 100e-12
+    # MFB design equations (C1 = C2 = C, unity passband gain H=1):
+    H = 1.0
+    R1 = Q / (2 * math.pi * f0 * C * H)
+    R2 = Q / (math.pi * f0 * C)
+    denom = 2 * Q * Q - H
+    if denom <= 0:
+        denom = 1.0
+    R3 = Q / (2 * math.pi * f0 * C * denom)
+    return {"R1": _format_value(R1), "R2": _format_value(R2),
+            "R3": _format_value(R3), "C": _format_value(C)}
+
+
+def _calc_twin_t_notch(tmpl: dict, params: dict) -> dict:
+    """Twin-T notch filter: fn = 1/(2*pi*R*C). R3=R/2, C3=2C."""
+    fn = _parse_value(str(params.get("fc", "100")))
+    R = _parse_value(str(params.get("R", "10k")))
+    C = 1.0 / (2 * math.pi * fn * R)
+    return {"R": _format_value(R), "C": _format_value(C)}
+
+
+# ═══════════ Opamp Application Calculators ═══════════
+
+def _calc_integrator(tmpl: dict, params: dict) -> dict:
+    """Integrator: fc = 1/(2*pi*R*C) → C = 1/(2*pi*fc*R)."""
+    fc = _parse_value(str(params.get("fc", "159")))
+    R = _parse_value(str(params.get("R", "10k")))
+    C = 1.0 / (2 * math.pi * fc * R)
+    return {"Rin": _format_value(R), "Cf": _format_value(C)}
+
+
+def _calc_differentiator(tmpl: dict, params: dict) -> dict:
+    """Differentiator: fc = 1/(2*pi*R*C) → C = 1/(2*pi*fc*R)."""
+    fc = _parse_value(str(params.get("fc", "159")))
+    R = _parse_value(str(params.get("R", "10k")))
+    C = 1.0 / (2 * math.pi * fc * R)
+    return {"Rf": _format_value(R), "Cin": _format_value(C)}
+
+
+def _calc_instrumentation_amp(tmpl: dict, params: dict) -> dict:
+    """3-opamp instrumentation amplifier.
+
+    Gain = 1 + 2*R1/Rg. R1=R2=R3=10k matched. Rg sets gain.
+    """
+    gain = _parse_value(str(params.get("gain", "100")))
+    Rg = _parse_value(str(params.get("Rg", "1k")))
+    R_fixed = 10000  # 10k matched resistors
+    return {"R1a": _format_value(R_fixed), "R1b": _format_value(R_fixed),
+            "R2a": _format_value(R_fixed), "R2b": _format_value(R_fixed),
+            "R3a": _format_value(R_fixed), "R3b": _format_value(R_fixed),
+            "Rg": _format_value(Rg)}
+
+
+def _calc_schmitt_trigger(tmpl: dict, params: dict) -> dict:
+    """Schmitt trigger: hysteresis ratio = R2/(R1+R2)."""
+    ratio = _parse_value(str(params.get("ratio", "0.1")))
+    ratio = max(0.01, min(0.5, ratio))
+    R1 = 10000
+    R2 = R1 * ratio / (1 - ratio)
+    return {"R1": _format_value(R1), "R2": _format_value(R2)}
+
+
+# ═══════════ MOSFET Calculators ═══════════
+
+def _calc_common_drain(tmpl: dict, params: dict) -> dict:
+    """MOSFET source follower. Fixed bias, gain ≈ 1."""
+    Vdd = _parse_value(str(params.get("Vdd", "12")))
+    Rs = Vdd / 0.004  # ~3k for 12V, ~4mA
+    Rg1 = 100000
+    Rg2 = 100000
+    return {"Rs": _format_value(Rs), "Rg1": _format_value(Rg1),
+            "Rg2": _format_value(Rg2)}
+
+
+def _calc_mosfet_diff_pair(tmpl: dict, params: dict) -> dict:
+    """MOSFET differential pair.
+
+    Id = Itail/2, gm ≈ 2*Id/Vov (assume Vov≈1V), Av = gm*Rd.
+    """
+    gain = _parse_value(str(params.get("gain", "10")))
+    Itail = _parse_value(str(params.get("Itail", "1m")))
+    Id_per = Itail / 2.0
+    gm_est = 2.0 * Id_per / 1.0  # Vov ≈ 1V
+    Rd = gain / gm_est
+    Rd = max(500, min(Rd, 50000))
+    Rss = 5.0 / Itail  # ~5V across tail resistor
+    Rss = max(100, min(Rss, 100000))
+    return {"Rd1": _format_value(Rd), "Rd2": _format_value(Rd),
+            "Rss": _format_value(Rss)}
+
+
+# ═══════════ BJT Calculators (continued) ═══════════
+
+def _calc_common_base(tmpl: dict, params: dict) -> dict:
+    """BJT common-base amplifier. Av = gm*Rc, gm = Ic/VTH."""
+    Ic = _parse_value(str(params.get("Ic", "1m")))
+    Vcc = _parse_value(str(params.get("Vcc", "12")))
+    Vc = Vcc * 0.6
+    Rc = (Vcc - Vc) / Ic
+    Ve = Vcc * 0.1
+    Re = Ve / Ic
+    Vb = Vcc * 0.5  # base AC-grounded via bypass cap
+    Idiv = Ic * 0.1
+    R2 = Vb / Idiv
+    R1 = (Vcc - Vb) / Idiv
+    return {"Rc": _format_value(Rc), "Re": _format_value(Re),
+            "R1": _format_value(R1), "R2": _format_value(R2)}
+
+
+def _calc_cascode(tmpl: dict, params: dict) -> dict:
+    """BJT cascode amplifier (CE + CB).
+
+    Q1 (CE) provides gm; Q2 (CB) provides isolation and bandwidth.
+    """
+    Ic = _parse_value(str(params.get("Ic", "1m")))
+    Vcc = _parse_value(str(params.get("Vcc", "15")))
+    Vc2 = Vcc * 0.7
+    Rc = (Vcc - Vc2) / Ic
+    Ve1 = Vcc * 0.05
+    Re = Ve1 / Ic
+    Vb2 = Vcc * 0.4
+    Idiv = Ic * 0.1
+    R2 = Vb2 / Idiv
+    R1 = (Vcc - Vb2) / Idiv
+    return {"Rc": _format_value(Rc), "Re": _format_value(Re),
+            "R1": _format_value(R1), "R2": _format_value(R2)}
+
+
+# ═══════════ Oscillator Calculators ═══════════
+
+def _calc_wien_bridge_osc(tmpl: dict, params: dict) -> dict:
+    """Wien bridge oscillator: fosc = 1/(2*pi*R*C). Rf/Rg ≈ 2.15 for reliable startup."""
+    fosc = _parse_value(str(params.get("fc", "1k")))
+    R = _parse_value(str(params.get("R", "10k")))
+    C = 1.0 / (2 * math.pi * fosc * R)
+    Rg_val = 10000
+    Rf_val = Rg_val * 2.15  # slightly > 2 for reliable oscillation startup
+    return {"R": _format_value(R), "C": _format_value(C),
+            "Rf": _format_value(Rf_val), "Rg": _format_value(Rg_val)}
+
+
+def _calc_rc_phase_shift(tmpl: dict, params: dict) -> dict:
+    """RC phase-shift oscillator: fosc = 1/(2*pi*sqrt(6)*R*C). Rf/Rin ≥ 29."""
+    fosc = _parse_value(str(params.get("fc", "1k")))
+    R = _parse_value(str(params.get("R", "10k")))
+    C = 1.0 / (2 * math.pi * math.sqrt(6) * fosc * R)
+    Rf_val = 33000  # 33k → gain=33 > 29 minimum
+    return {"R": _format_value(R), "C": _format_value(C),
+            "Rf": _format_value(Rf_val)}
+
+
 _CALCULATORS = {
     "rc_lowpass": _calc_rc_lowpass,
     "lc_lowpass": _calc_lc_lowpass,
     "sallen_key_lp": _calc_sallen_key_lp,
+    "sallen_key_hp": _calc_sallen_key_lp,  # same formula, R/C swapped
     "inverting_amp": _calc_inverting_amp,
     "non_inverting_amp": _calc_non_inverting_amp,
     "differential_amp": _calc_differential_amp,
     "summing_amp": _calc_summing_amp,
     "voltage_divider": _calc_voltage_divider,
+    "common_emitter": _calc_common_emitter,
+    "emitter_follower": _calc_emitter_follower,
+    "current_mirror": _calc_current_mirror,
+    "bjt_diff_pair": _calc_bjt_diff_pair,
+    "mosfet_cs": _calc_mosfet_cs,
+    "mfb_bandpass": _calc_mfb_bandpass,
+    "twin_t_notch": _calc_twin_t_notch,
+    "integrator": _calc_integrator,
+    "differentiator": _calc_differentiator,
+    "instrumentation_amp": _calc_instrumentation_amp,
+    "schmitt_trigger": _calc_schmitt_trigger,
+    "common_drain": _calc_common_drain,
+    "mosfet_diff_pair": _calc_mosfet_diff_pair,
+    "common_base": _calc_common_base,
+    "cascode": _calc_cascode,
+    "wien_bridge_osc": _calc_wien_bridge_osc,
+    "rc_phase_shift": _calc_rc_phase_shift,
     "fixed": _calc_fixed,
 }
 
@@ -855,7 +1135,15 @@ def _spec_to_metric(calc_name: str) -> str:
     _MAP = {"rc_lowpass": "fc", "rc_highpass": "fc",
             "lc_lowpass": "fc", "sallen_key_lp": "fc",
             "inverting_amp": "gain", "non_inverting_amp": "gain",
-            "differential_amp": "gain", "summing_amp": "gain"}
+            "differential_amp": "gain", "summing_amp": "gain",
+            "common_emitter": "gain", "bjt_diff_pair": "gain",
+            "mosfet_cs": "gain", "cascode": "gain",
+            "common_base": "gain", "instrumentation_amp": "gain",
+            "sallen_key_hp": "fc", "mfb_bandpass": "fc",
+            "twin_t_notch": "fc", "integrator": "fc",
+            "differentiator": "fc", "wien_bridge_osc": "fc",
+            "rc_phase_shift_osc": "fc",
+            }
     return _MAP.get(calc_name, "")
 
 
@@ -869,9 +1157,8 @@ def _adjust_params(values: dict, calc_name: str, metric: str,
 
     if metric == "fc":
         # fc ~ 1/(RC) or 1/sqrt(LC). Scale inversely, split between components.
-        # Count adjustable components and use sqrt to avoid oscillation.
-        r_keys = [k for k in ("R", "R1", "R2") if k in new]
-        c_keys = [k for k in ("C", "C1", "C2") if k in new]
+        r_keys = [k for k in ("R", "R1", "R2", "R3") if k in new]
+        c_keys = [k for k in ("C", "C1", "C2", "C3") if k in new]
         l_keys = [k for k in ("L", "L1") if k in new]
         n_adj = len(r_keys) + len(c_keys) + len(l_keys)
         scale = ratio ** (1.0 / max(n_adj, 1)) if n_adj > 0 else ratio
@@ -883,13 +1170,15 @@ def _adjust_params(values: dict, calc_name: str, metric: str,
             new[k] = _format_value(_parse_value(str(new[k])) / scale)
 
     elif metric == "gain":
-        # Gain ~ Rf/R1 → scale Rf. For differential, also scale Rg to match.
-        for k in ("Rf",):
+        # Gain ~ feedback/input resistor ratio.
+        # Scale feedback resistors (Rf, Rc, Rd) proportionally.
+        for k in ("Rf", "Rc", "Rc1", "Rc2", "Rd", "Rd1", "Rd2"):
             if k in new:
                 new[k] = _format_value(_parse_value(str(new[k])) * ratio)
+        # Rg in instrumentation amp: lower Rg = higher gain (inverse)
         for k in ("Rg",):
-            if k in new:
-                new[k] = _format_value(_parse_value(str(new[k])) * ratio)
+            if k in new and calc_name == "instrumentation_amp":
+                new[k] = _format_value(_parse_value(str(new[k])) / ratio)
 
     return new
 

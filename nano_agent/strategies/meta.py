@@ -79,8 +79,224 @@ class MetaStrategy(BaseStrategy):
 
     # ── ⑤ 反馈评估 ────────────────────────────────────────
 
-    def evaluate_result(self, task: str, result: str, analysis: dict) -> dict:
-        """LLM 评估执行结果。"""
+    @staticmethod
+    def _extract_circuit_verdict(result: str) -> dict | None:
+        """Parse result text for circuit simulation signals.
+
+        Returns structured verdict dict if circuit-related signals found,
+        otherwise None (non-circuit task or no simulation data).
+        """
+        import re
+
+        verdict = {
+            "sim_passed": None,      # True/False/None (no sim data)
+            "electrical_ok": None,   # True/False/None
+            "spec_compliant": None,  # True/False/None
+            "errors": [],
+            "warnings": [],
+            "metrics": {},
+            "technical_score": None,  # 0-10 based on objective data
+            "is_circuit_task": False,
+        }
+
+        # ── Detect circuit task ──
+        circuit_keywords = (
+            "simulate_spice", "draw_analog_svg", "draw_analog_spice",
+            "design_circuit", "SPICE", "ngspice", "circuit", "filter",
+            "amplifier", "opamp", "oscillator", "simulation", "gain",
+            "cutoff", "rectifier", "Electrical Validation", "Measured fc",
+            "Measured gain", "Target fc", "Target gain",
+        )
+        circuit_patterns = (
+            r"Simulation\s*(Complete|verified|passed|Failed)",
+            r"Electrical\s*(Validation|Issues)",
+            r"SPICE\s*Netlist",
+            r"ngspice",
+        )
+        is_circuit = any(kw.lower() in result.lower() for kw in circuit_keywords)
+        if not is_circuit:
+            is_circuit = any(re.search(pat, result) for pat in circuit_patterns)
+        if not is_circuit:
+            return None
+
+        verdict["is_circuit_task"] = True
+
+        # ── Simulation status ──
+        sim_ok_patterns = (
+            r"✅\s*Simulation\s*(Complete|verified|passed)",
+            r"Simulation\s*verified",
+        )
+        sim_fail_patterns = (
+            r"❌\s*Simulation\s*Failed",
+            r"❌\s*\*?\*?Circuit\s*simulation\s*failed",
+            r"⚠️\s*Simulation\s*Failed",
+            r"⚠️\s*Ngspice\s*validation\s*failed",
+            r"Error on line",
+            r"FATAL",
+        )
+
+        for pat in sim_ok_patterns:
+            if re.search(pat, result):
+                verdict["sim_passed"] = True
+                break
+
+        if verdict["sim_passed"] is None:
+            for pat in sim_fail_patterns:
+                if re.search(pat, result):
+                    verdict["sim_passed"] = False
+                    # Extract first error line
+                    for line in result.split("\n"):
+                        if re.search(r"(Error|FATAL|parse error|too few nodes)", line,
+                                     re.IGNORECASE):
+                            err = line.strip()[:200]
+                            if err and "no errors" not in err.lower():
+                                verdict["errors"].append(err)
+                            break
+                    break
+
+        # ── Electrical validation ──
+        if re.search(r"Electrical\s*Validation\s*Failed|Electrical\s*Issues", result):
+            verdict["electrical_ok"] = False
+            # Extract first electrical issue
+            m = re.search(r"-\s*(.+?)(?:\n|$)", result)
+            if m:
+                verdict["warnings"].append(m.group(1).strip()[:200])
+        elif verdict["sim_passed"]:
+            verdict["electrical_ok"] = True
+
+        # ── Health check warnings ──
+        health_section = re.search(
+            r"Health Check.*?\n(.*?)(?=\n\n|\n📥|\n---|\Z)", result, re.DOTALL)
+        if health_section:
+            for line in health_section.group(1).split("\n"):
+                if "⚠️" in line:
+                    verdict["warnings"].append(line.strip()[:200])
+
+        # ── Metrics: measured vs target ──
+        metric_patterns = [
+            (r"\*\*Measured\s+(\w+)\*\*:\s*([\d.]+)\s*(\w*)", "measured"),
+            (r"\*\*Target\s+(\w+)\*\*:\s*([\d.]+)\s*(\w*)", "target"),
+        ]
+        for pat, label in metric_patterns:
+            for m in re.finditer(pat, result):
+                key = m.group(1)
+                val = float(m.group(2))
+                unit = m.group(3)
+                verdict["metrics"].setdefault(key, {})[label] = val
+                if unit:
+                    verdict["metrics"][key]["unit"] = unit
+
+        # ── Spec compliance ──
+        if re.search(r"✅\s*Within\s*spec", result):
+            verdict["spec_compliant"] = True
+        elif re.search(r"⚠️\s*Off\s*by\s*([\d.]+)%", result):
+            verdict["spec_compliant"] = False
+            m = re.search(r"⚠️\s*Off\s*by\s*([\d.]+)%", result)
+            if m:
+                verdict["warnings"].append(f"Spec off by {m.group(1)}%")
+
+        # ── Auto-fix / optimization count ──
+        opt_match = re.search(r"Optimized in (\d+) iteration", result)
+        if opt_match:
+            verdict["opt_iterations"] = int(opt_match.group(1))
+
+        # ── Compute technical_score from objective data ──
+        verdict["technical_score"] = MetaStrategy._compute_technical_score(verdict)
+
+        return verdict
+
+    @staticmethod
+    def _compute_technical_score(verdict: dict) -> float:
+        """Compute 0-10 technical score purely from simulation data.
+
+        Scoring logic (additive, capped at 10):
+          - sim_passed=True:       +4  (foundation)
+          - sim_passed=False:      +0  (automatic fail)
+          - electrical_ok=True:    +2
+          - spec_compliant=True:   +3  (met target)
+          - spec_compliant=False:  +0
+          - no errors/warnings:    +1
+          - spec_compliant unset
+            but sim+elec ok:       +1  (partial, no spec given)
+        """
+        score = 0.0
+
+        if verdict["sim_passed"] is True:
+            score += 4.0
+        elif verdict["sim_passed"] is False:
+            return max(0.0, score)  # sim failed: cap at current (0-1 at most)
+
+        if verdict["electrical_ok"] is True:
+            score += 2.0
+
+        if verdict["spec_compliant"] is True:
+            score += 3.0
+        elif verdict["spec_compliant"] is None:
+            # No spec given, but sim + electrical both ok
+            if verdict["sim_passed"] and verdict["electrical_ok"]:
+                score += 1.0  # partial credit
+
+        if not verdict["errors"] and not verdict["warnings"]:
+            score += 1.0
+
+        return min(10.0, score)
+
+    def evaluate_result(self, task: str, result: str, analysis: dict,
+                        circuit_verdict: dict = None) -> dict:
+        """LLM 评估执行结果。如果提供了 circuit_verdict（仿真数据），
+        将其作为客观参考注入评估 prompt，约束 LLM 的评分。
+        """
+        # ── Build structured circuit verdict section ──
+        verdict_text = ""
+        if circuit_verdict and circuit_verdict.get("is_circuit_task"):
+            v = circuit_verdict
+            lines = [
+                "\n**Circuit Simulation Verdict (GROUND TRUTH — use this to score):**",
+            ]
+            # Simulation status
+            sim_label = {True: "✅ PASSED", False: "❌ FAILED", None: "⚠️ UNKNOWN"}
+            lines.append(f"- Simulation: {sim_label.get(v['sim_passed'], '⚠️ UNKNOWN')}")
+
+            elec_label = {True: "✅ PASSED", False: "❌ FAILED", None: "N/A"}
+            lines.append(f"- Electrical validation: {elec_label.get(v['electrical_ok'], 'N/A')}")
+
+            spec_label = {True: "✅ WITHIN SPEC", False: "❌ OUT OF SPEC", None: "N/A"}
+            lines.append(f"- Spec compliance: {spec_label.get(v['spec_compliant'], 'N/A')}")
+
+            if v["metrics"]:
+                lines.append("- Measured vs Target:")
+                for metric, vals in v["metrics"].items():
+                    unit = vals.get("unit", "")
+                    measured = vals.get("measured")
+                    target = vals.get("target")
+                    if measured is not None:
+                        line = f"  • {metric}: measured={measured}{unit}"
+                        if target is not None:
+                            if measured > 0 and abs(target) > 1e-12:
+                                err = abs(measured - target) / abs(target) * 100
+                                line += f", target={target}{unit}, error={err:.1f}%"
+                            else:
+                                line += f", target={target}{unit}"
+                        lines.append(line)
+
+            if v["errors"]:
+                lines.append("- Errors from ngspice:")
+                for e in v["errors"][:3]:
+                    lines.append(f"  • {e[:150]}")
+
+            if v["warnings"]:
+                lines.append("- Warnings:")
+                for w in v["warnings"][:3]:
+                    lines.append(f"  • {w[:150]}")
+
+            technical = v.get("technical_score")
+            if technical is not None:
+                lines.append(f"\n**Pre-computed technical score (from simulation data): {technical:.0f}/10**")
+                lines.append("Use this as your baseline. You may adjust ±1 based on output quality, "
+                             "but do NOT override simulation failures with high scores.")
+
+            verdict_text = "\n".join(lines)
+
         prompt = (
             "Evaluate the result of executing this task. Return ONLY a JSON object:\n\n"
             "{\n"
@@ -89,13 +305,23 @@ class MetaStrategy(BaseStrategy):
             '  "issues": ["..."],\n'
             '  "suggestion": "how to improve"\n'
             "}\n\n"
+            "**Scoring rules when circuit simulation data is present:**\n"
+            "- Simulation FAILED → status MUST be 'failed', score ≤ 3\n"
+            "- Simulation passed but spec NOT met → status 'partial', score 4-6\n"
+            "- Simulation passed AND spec met → status 'success', score ≥ 9\n"
+            "- No simulation data → score based on general task completion quality\n\n"
             f"Task: {task}\n"
             f"Expected complexity: {analysis.get('complexity', '?')}/10\n"
+            f"{verdict_text}\n"
             f"Result: {result[:2000]}"
         )
         messages = [{"role": "user", "content": prompt}]
         data = self._chat_json(messages)
         if data and isinstance(data, dict) and "status" in data:
+            # ── Sanity check: don't let LLM override hard simulation failures ──
+            if circuit_verdict and circuit_verdict.get("sim_passed") is False:
+                data["status"] = "failed"
+                data["score"] = min(data.get("score", 3), 3)
             return data
         return {"status": "success", "score": 7, "issues": [], "suggestion": ""}
 
@@ -205,9 +431,12 @@ class MetaStrategy(BaseStrategy):
             logger.info(f"[Meta Result] {result[:300]}...")
 
             # ── ⑤ 反馈评估 ──
-            evaluation = self.evaluate_result(task, result, analysis)
+            circuit_verdict = self._extract_circuit_verdict(result)
+            evaluation = self.evaluate_result(task, result, analysis,
+                                              circuit_verdict=circuit_verdict)
             score = evaluation.get("score", 5)
-            logger.info(f"[Meta Eval] status={evaluation['status']} score={score}/10")
+            logger.info(f"[Meta Eval] status={evaluation['status']} score={score}/10"
+                        f"{' (technical=' + str(circuit_verdict.get('technical_score', '?')) + ')' if circuit_verdict else ''}")
 
             # 记录到 pipeline
             with shared_ctx.pipeline_lock:
@@ -227,8 +456,16 @@ class MetaStrategy(BaseStrategy):
             last_eval = evaluation
 
             # 成功 → 结束
-            if evaluation["status"] == "success" and score >= 7:
-                logger.info(f"[Meta] Success on attempt {attempt+1}")
+            # 有 spec 时要求 ≥9 分（仿真+电气+spec 三者俱佳）
+            # 无 spec 时降到 7 分（仿真+电气通过即可），避免无效重试
+            threshold = 9
+            if circuit_verdict and circuit_verdict.get("spec_compliant") is None \
+                    and circuit_verdict.get("sim_passed"):
+                # No spec was given — lower the bar
+                if not circuit_verdict.get("metrics"):
+                    threshold = 7  # purely qualitative, sim+elec ok is enough
+            if evaluation["status"] == "success" and score >= threshold:
+                logger.info(f"[Meta] Success on attempt {attempt+1} (threshold={threshold})")
                 break
 
             # 失败 → 尝试升级策略
