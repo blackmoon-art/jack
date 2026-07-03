@@ -93,8 +93,8 @@ _EXACT_ROUTES: list[tuple[str, str, dict]] = [
     ("时序图|交互时序|sequence diagram|timing diagram|sequenceDiagram|"
      "时序流程|消息交互|组件交互",
      "mermaid_chart", {}),
-    # 状态机
-    ("状态机|state machine|stateDiagram|状态转换|状态转移",
+    # 状态机 — 软件图优先，硬件电路走 draw_logic (在 _exact_match 中检测)
+    ("状态机|FSM|fsm|finite state machine|state machine|stateDiagram|状态转换|状态转移",
      "mermaid_chart", {}),
     # 甘特图
     ("甘特图|gantt|进度图|项目排期",
@@ -131,7 +131,7 @@ _EXACT_ROUTES: list[tuple[str, str, dict]] = [
      "draw_logic", {}),
     # 模拟电路 → NL→模板→SPICE→SVG (draw_analog_svg, 内置自动计算)
     ("模拟电路|analog.*circuit|"
-     "滤波器|filter.*circuit|运放|运放电路|放大电路|有源滤波|无源滤波|"
+     "滤波器|filter.*circuit|运放|运放电路|放大器|放大电路|有源滤波|无源滤波|"
      "sallen.key|multiple.feedback|状态变量|biquad|"
      "低通|高通|带通|带阻|频率响应|"
      "差分放大|差分对|diff.*pair|differential.*amp|"
@@ -337,9 +337,15 @@ _CIRCUIT_TOOLS = frozenset({
 _DRAW_INTENT_RE = re.compile(
     r"画|绘制|画个|画张|画幅|画一下|diagram|schematic|"
     r"电路图|原理图|框图|接线图|电路设计|layout|plot|"
-    r"\bdraw\b|\brender\b|\bgenerate\b|\bvisualize\b|"
+    r"\bdraw\b|\brender\b|\bgenerate\b|\bvisualize\b|\bdesign\b|"
     r"设计.*电路|仿真.*电路|模拟.*电路|做个.*电路|"
-    r"生成.*电路|画出|帮我画",
+    r"生成.*电路|画出|帮我画|"
+    # 电路类型名本身隐含绘制意图, 不需要额外画/设计前缀
+    r"滤波器|放大器|整流|分压器|运放|低通|高通|带通|带阻|"
+    r"RC滤波|LC滤波|RL滤波|RLC|Sallen|sallen|"
+    r"反相放大|同相放大|差分放大|求和放大|"
+    r"半波|全波|桥式|倍压|"
+    r"bode|bode.*plot|频率响应|幅频|相频",
     re.IGNORECASE,
 )
 
@@ -376,6 +382,12 @@ def _exact_match(task_lower: str) -> tuple[str, dict] | None:
                 if _ascii_word_match(kw, task_lower):
                     if is_circuit and not _has_draw_intent(task_lower):
                         continue
+                    # 状态机歧义消解：硬件电路关键词 → 数字逻辑
+                    if kw in ("FSM", "fsm", "state machine", "finite state machine"):
+                        if re.search(r"circuit|硬件|逻辑|数字|flip.?flop|register|"
+                                     r"gate|verilog|vhdl|fsm.*电路|电路.*fsm",
+                                     task_lower):
+                            return "draw_logic", {}
                     return tool_name, dict(params)
             else:
                 # 中文关键词：子串匹配
@@ -386,6 +398,13 @@ def _exact_match(task_lower: str) -> tuple[str, dict] | None:
                             return "generate_chart", {"chart_type": "waveform"}
                     if is_circuit and not _has_draw_intent(task_lower):
                         continue  # 纯知识问答，跳过电路工具
+                    # 状态机歧义消解：硬件电路关键词 → 数字逻辑
+                    if kw in ("状态机", "state machine", "状态转换", "状态转移",
+                              "FSM", "fsm", "finite state machine"):
+                        if re.search(r"电路|逻辑|硬件|数字|flip.?flop|register|"
+                                     r"门电路|gate|verilog|vhdl",
+                                     task_lower):
+                            return "draw_logic", {}
                     return tool_name, dict(params)
     return None
 

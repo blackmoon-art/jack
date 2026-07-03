@@ -19,7 +19,21 @@ import subprocess
 from datetime import datetime
 from pathlib import Path
 
+from .spice_common import (
+    GROUND_NAMES, OPAMP_SUBCKT, DIODE_MODEL,
+    check_subckt_support, replace_opamp_with_e_source,
+    has_opamp, has_diode, extract_nodes,
+)
+
 logger = logging.getLogger("nano_agent.tools.spice_simulator")
+
+# Backward compat aliases
+_GROUND_NAMES = GROUND_NAMES
+_OPAMP_SUBCKT = OPAMP_SUBCKT
+_DIODE_MODEL = DIODE_MODEL
+_check_subckt_support = check_subckt_support
+_replace_opamp_with_e_source = replace_opamp_with_e_source
+_extract_nodes = extract_nodes
 
 # ═══════════════════════════════════════════════════════════════
 # 共享模型定义

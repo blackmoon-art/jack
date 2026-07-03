@@ -952,96 +952,68 @@ nano_agent_plus/
 | 18 | **请求 Tracing** | 加 trace_id 贯穿 Agent → LLM → Tools 全链路。目前 ReflexionTrace 只覆盖 reflexion 策略，其他策略无调用链追踪 |
 | 19 | **日志结构化** | 目前日志为纯文本，改为结构化 JSON 日志便于采集和分析（保留 stderr 人类可读输出作为 fallback） |
 
-## 代码架构审查 (2026-07-02)
+## 代码架构审查 (2026-07-03 更新)
 
-对 ~5000 行代码库的全面架构与代码质量审查。
+对 ~5500 行代码库的架构与代码质量审查。
 
 ### 总体评分
 
 | 维度 | 评分 | 说明 |
 |---|---|---|
-| 架构设计 | ★★★★★ | 分层清晰，策略模式+注册表+依赖注入 |
-| 代码质量 | ★★★★☆ | 干净整洁，少数大文件需要拆分 |
-| 可扩展性 | ★★★★★ | 新增策略/工具只需声明元数据，零修改 Agent |
-| 线程安全 | ★★★★★ | threading.local + 双检查锁，质量高 |
+| 架构设计 | ★★★★★ | 分层清晰，策略模式+注册表+依赖注入，Provider可插拔 |
+| 代码质量 | ★★★★☆ | 干净整洁，模拟电路仿真闭环完整 |
+| 可扩展性 | ★★★★★ | 新增策略/工具/Provider只需声明元数据 |
+| 线程安全 | ★★★★★ | threading.local + 双检查锁 |
 | LLM 调用效率 | ★★★★★ | 三层路由 85% 请求零 LLM 调用 |
-| 测试覆盖 | ★★★☆☆ | 路由测试好，电路/SPICE 模块缺少单测 |
-| 安全性 | ★★★★☆ | 沙箱路径校验 + shell=False，小改进空间 |
+| 测试覆盖 | ★★★☆☆ | 路由+策略测试好，电路模块缺单测 |
+| 安全性 | ★★★★☆ | 沙箱路径校验 + shell=False |
 
-### 模块评估
+### 已解决的 P0 问题
 
-| 模块 | 行数 | 评分 | 亮点 |
+| # | 问题 | 解决方案 | 状态 |
 |---|---|---|---|
-| `visual_router.py` | 390 | ★★★★★ | 三层路由(关键词→意图→LLM)，`ascii_word_match` 中英混合防误匹配，时序图歧义消解 |
-| `llm.py` | 459 | ★★★★★ | 统一多后端接口，智能重试(429/5xx)，线程安全模型切换，Anthropic消息格式转换 |
-| `strategies/meta.py` | 300 | ★★★★★ | 自动编排6策略，`pipeline_state` 跨策略共享，策略升级阶梯 |
-| `strategies/reflexion.py` | 392 | ★★★★☆ | 智能评估跳过、早期退出、SQLite轨迹持久化、教训跨任务累积 |
-| `strategies/base.py` | 257 | ★★★★★ | StrategyContext 依赖注入替代猴子补丁，元数据驱动，并行工具执行+批量Orient |
-| `agent.py` | 625 | ★★★★☆ | 线程安全 per-request 隔离，视觉路由下沉到基座，策略注册表消除if-else |
-| `memory.py` | 591 | ★★★★☆ | 四层记忆门面，FTS5全文检索+CJK二字滑窗，文件轮转快速路径优化 |
-| `config.py` | 163 | ★★★★☆ | 懒加载.env(双检查锁)、单例缓存、`with_overrides` per-session隔离 |
-| `tools/__init__.py` | 199 | ★★★★☆ | TOOLS声明式自动注册、schema缓存、Observation统一返回 |
-| `tools/logic_svg.py` | 492 | ★★★☆☆ | 零依赖纯Python SVG，DSL解析拓扑排序。**缺单测** |
-| `tools/analog_svg.py` | 899 | ★★★☆☆ | 6阶段NL→模板→SPICE→SVG流水线。**缺单测，文件过大** |
-| `tools/spice_simulator.py` | 947 | ★★★☆☆ | ngspice批量仿真+AC/瞬态指标提取。**缺timeout，文件过大** |
-| `tools/chart/advanced.py` | 1233 | ★★★☆☆ | 20种图表类型全覆盖。**文件最大，建议按图表类型拆分** |
-| `tools/circuit.py` | 769 | ★★★☆☆ | DSL解析+schemdraw渲染。**`_draw`方法过长(~100行)** |
+| 1 | LLM Provider if-else分发 | `nano_agent/providers/` — BaseProvider ABC + AnthropicProvider + OpenAIProvider + ZhipuProvider | ✅ |
+| 2 | 日志缺请求级追踪 | `logging_config.py` TraceFilter + `StrategyContext.trace_id` + `set_trace_id()` | ✅ |
+| 3 | SPICE模型定义重复 | 提取 `tools/spice_common.py` — `_OPAMP_SUBCKT`, `_DIODE_MODEL` 共享 | ✅ |
+| 4 | ngspice 缺少 timeout | `subprocess.run(timeout=15)` + TimeoutExpired 处理 | ✅ |
 
-### 设计模式评价
+### 模拟电路：完整仿真闭环
 
-**做得好的：**
-- **策略注册表模式** (`STRATEGY_REGISTRY`) — 类自带 `auto_keywords`/`auto_priority` 元数据，新增策略不改 agent.py
-- **StrategyContext 依赖注入** — 显式契约替代猴子补丁，`pipeline_state` 实现跨策略信息传递
-- **三层路由 (规则优先，LLM兜底)** — 关键词匹配 85% 请求零延迟，LLM 只处理边界情况
-- **统一消息格式 + Provider 适配层** — Anthropic/OpenAI 差异完全隔离在 `_chat_anthropic`/`_chat_openai`
-- **CJK 二字滑窗分词** — 在 Orient、FTS5、教训搜索三处一致使用，中文检索召回率高
+```
+draw_analog_svg (NL→模板→SPICE→ngspice验证→SVG)
+  ├─ 11种模板: RC/LC/Sallen-Key低通, RC高通, 反相/同相/差分/求和放大, 半波/全波整流, 分压
+  ├─ 中文关键词匹配 (keywords_cn)
+  ├─ format_value 修复 (Meg→p遍历方向)
+  ├─ SPICE生成: 自动算元件值, X前缀, opamp子电路注入
+  ├─ 仿真门控: ngspice OP通过才出图, 失败返回错误供LLM修复
+  └─ draw_analog_spice 同样带仿真门控 → LLM fix→retry→show闭环
+  
+design_circuit (新增): 端到端闭环 — 需求→设计→仿真→分析→迭代优化
+```
 
-**可改进的：**
-- `agent.py` 的 `_agent_loop` 仍有"上帝方法"趋势，可进一步将并行执行逻辑下沉到 BaseStrategy
-- 工具名 (`"generate_chart"`, `"mermaid_chart"`) 在多处硬编码，建议定义常量
-- `_CHART_TOOLS` 集合与 ToolRegistry 实际注册可能不同步
+### 画图路由 (37条规则)
 
-### 发现的问题
+```
+generate_chart (20种): contour→bode→spectrum→waveform→regression→function→...
+mermaid_chart  (8种):  时序图→状态机(FSM)→甘特图→思维导图→类图→ER图→流程图→架构图
+draw_logic     (2条):  门级网表(AND/OR/DFF/MUX), 数字电路(ALU/寄存器/编码器)
+draw_analog_svg(1条):  模拟电路(滤波器/运放/共射/整流/分压/比较器)
+draw_block     (2条):  FIFO/OCC/DFT/PLL等IP → 框图; 系统框图/信号链/RF链
+__classify__   (1条):  通用"电路" → LLM三分类(digital/analog/block) → 上述工具
+ai_image       (1条):  照片/艺术/插画
+create_ppt     (1条):  PPT/幻灯片
+```
 
-#### 无严重问题
-未发现 crash、数据丢失、安全漏洞级别的严重问题。
+### 模块评估 (更新)
 
-#### 中等问题 (4个)
-
-| # | 问题 | 位置 | 影响 |
+| 模块 | 行数 | 评分 | 变化 |
 |---|---|---|---|
-| 1 | **模型定义重复** | `spice_simulator.py:28-43` = `spice_renderer.py:421-434` | `_OPAMP_SUBCKT`、`_DIODE_MODEL` 完全相同的两份拷贝 |
-| 2 | **`search_lessons` SQL LIKE 拼接** | `memory.py:318-322` | token 经过 `_escape_like` 转义但单引号场景有 SQL 语法错误风险 |
-| 3 | **ngspice 缺少 timeout** | `spice_simulator.py` | `subprocess.run` 未设 `timeout`，异常网表可能导致永久挂起 |
-| 4 | **工具名冲突** | `AnalogSVG.draw_analog_spice` vs `SpiceRenderer.draw_analog_spice` | 同名工具，注册顺序决定谁生效 |
-
-#### 轻微问题 (6个)
-
-| # | 问题 | 位置 |
-|---|---|---|
-| 1 | `chart/advanced.py` 1233行 + `spice_simulator.py` 947行 — 建议拆分 | tools/ |
-| 2 | `_wire_seq` 类变量非线程安全 | `logic_svg.py:181` |
-| 3 | `logic_svg.py` 递归DFS可能栈溢出（超大网表） | `logic_svg.py:_render` |
-| 4 | `analog_svg.py` BFS布局对反馈环路可能错位 | `analog_svg.py:_render_svg` |
-| 5 | `chart/__init__.py` SVG 文件未纳入清理 (只清 PNG) | `chart/__init__.py:_cleanup` |
-| 6 | `spice_simulator.py` / `spice_renderer.py` 共享 `_check_ngspice` 重复 | 两个文件 |
-
-### 测试覆盖
-
-| 覆盖充分 | 覆盖不足 |
-|---|---|
-| ✅ 视觉路由三层匹配 (34 tests) | ❌ `logic_svg.py` / `analog_svg.py` — 0 tests |
-| ✅ 策略核心逻辑 (MockLLM + fake_agent_loop) | ❌ `spice_simulator.py` — 0 tests，依赖外部 ngspice |
-| ✅ bash 安全/沙箱/文件操作 | ❌ Layer 3 LLM 兜底路由 — 无 mock test |
-| ✅ LLM JSON解析/重试 (17 tests) | ❌ 并行工具执行 — 无并发测试 |
-| ✅ 记忆四层 + CJK分词 | ❌ Meta 策略 pipeline_state 集成 — 无端到端测试 |
-
-### 改进优先级
-
-| 优先级 | 建议 | 预估工作量 |
-|---|---|---|
-| **P0** | ngspice subprocess 加 timeout | 1 行 |
-| **P0** | 提取共享 SPICE 模型到 `spice_models.py` | 30 分钟 |
+| `providers/` | ~520 | ★★★★★ | **新增**: BaseProvider ABC + 3个实现, llm.py 459→195 |
+| `tools/analog_svg.py` | 1565 | ★★★★☆ | 899→1565: +仿真门控 +中文匹配 +电学验证 |
+| `visual_router.py` | 426 | ★★★★★ | 390→426: +数字IP路由 +FSM关键词 +路由精确提示 |
+| `agent.py` | 725 | ★★★★☆ | +电路审查 +trace_id +re模块级导入 |
+| `llm.py` | 195 | ★★★★★ | 459→195: Provider委托, 仅保留重试+JSON |
+| `tools/spice_simulator.py` | 1042 | ★★★★☆ | +timeout +spice_common模型共享 |
 | **P1** | 拆分 `chart/advanced.py` (按图表类型) | 2 小时 |
 | **P1** | 拆分 `spice_simulator.py` (netlist/sim/metrics) | 2 小时 |
 | **P1** | `logic_svg.py` / `analog_svg.py` 加 DSL 解析单测 | 2 小时 |

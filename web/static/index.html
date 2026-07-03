@@ -112,14 +112,17 @@
 
 <header>
   <h1><svg width="36" height="36" viewBox="0 0 200 200" style="vertical-align:middle;margin-right:6px;"><rect width="200" height="200" rx="20" fill="#1a1a2e"/><path d="M70,155 Q35,145 30,110 Q25,75 50,55 Q55,40 45,25 Q60,30 68,42 Q75,35 90,30 Q105,25 120,35 Q130,28 140,25 Q145,30 138,48 Q160,65 158,100 Q155,140 125,155 Q100,168 70,155Z" fill="#e8751a" stroke="#1a1a2e" stroke-width="5"/><path d="M65,150 Q40,140 38,110 Q36,80 55,65 Q90,90 125,65 Q145,80 140,110 Q138,140 115,150 Q95,160 65,150Z" fill="#f5a623"/><path d="M50,55 Q55,40 45,25 Q60,30 68,42" fill="#e8751a" stroke="#1a1a2e" stroke-width="5" stroke-linejoin="round"/><path d="M140,25 Q145,30 138,48" fill="#e8751a" stroke="#1a1a2e" stroke-width="5" stroke-linejoin="round"/><path d="M55,50 Q58,38 50,28" fill="#1a1a2e"/><path d="M132,50 Q135,38 135,28" fill="#1a1a2e"/><path d="M75,120 Q60,130 55,145 Q60,160 80,160 Q100,165 120,155 Q130,145 125,125 Q115,118 100,120 Q85,118 75,120Z" fill="#fff" stroke="#1a1a2e" stroke-width="4"/><path d="M140,100 Q155,85 160,95 Q165,110 150,120 Q135,130 125,125" fill="#e8751a" stroke="#1a1a2e" stroke-width="5"/><path d="M155,100 Q160,92 158,95" fill="#fff"/><ellipse cx="80" cy="90" rx="8" ry="3" fill="#1a1a2e"/><ellipse cx="112" cy="90" rx="8" ry="3" fill="#1a1a2e"/><ellipse cx="96" cy="105" rx="5" ry="4" fill="#1a1a2e"/><path d="M88,112 Q96,118 104,112" stroke="#1a1a2e" stroke-width="2.5" fill="none" stroke-linecap="round"/><text x="148" y="50" font-size="18" fill="#7c3aed" font-family="serif" font-weight="bold" opacity="0.8">z</text><text x="158" y="38" font-size="14" fill="#7c3aed" font-family="serif" opacity="0.6">z</text><text x="164" y="28" font-size="10" fill="#7c3aed" font-family="serif" opacity="0.4">z</text></svg>Sleeping fox</h1>
-  <select id="strategy">
-    <option value="auto">🤖 Auto</option>
-    <option value="default">Default</option>
-    <option value="react">ReAct</option>
-    <option value="plan-execute">Plan-Execute</option>
-    <option value="reflexion">Reflexion</option>
-    <option value="tree-of-thought">Tree-of-Thought</option>
-  </select>
+  <div style="display:flex;align-items:center;gap:12px;">
+    <select id="strategy">
+      <option value="auto">🤖 Auto</option>
+      <option value="default">Default</option>
+      <option value="react">ReAct</option>
+      <option value="plan-execute">Plan-Execute</option>
+      <option value="reflexion">Reflexion</option>
+      <option value="tree-of-thought">Tree-of-Thought</option>
+    </select>
+    <span id="contact-btn" style="cursor:pointer;font-size:13px;color:#7c3aed;white-space:nowrap;" title="Contact">📧 Contact</span>
+  </div>
 </header>
 
 <div id="messages"></div>
@@ -128,10 +131,17 @@
   <input type="text" id="input" placeholder="输入任务..." autofocus />
   <select id="model">
     <option value="">Default</option>
-    <option value="deepseek-v4-flash">deepseek-v4-flash</option>
-    <option value="deepseek-v4-pro">deepseek-v4-pro</option>
-    <option value="deepseek-chat">deepseek-chat</option>
-    <option value="deepseek-reasoner">deepseek-reasoner</option>
+    <optgroup label="DeepSeek">
+      <option value="deepseek-v4-flash">deepseek-v4-flash</option>
+      <option value="deepseek-v4-pro">deepseek-v4-pro</option>
+      <option value="deepseek-chat">deepseek-chat</option>
+      <option value="deepseek-reasoner">deepseek-reasoner</option>
+    </optgroup>
+    <optgroup label="Zhipu (GLM)">
+      <option value="GLM-5.2">GLM-5.2</option>
+      <option value="GLM-4-Plus">GLM-4-Plus</option>
+      <option value="GLM-4-Flash">GLM-4-Flash</option>
+    </optgroup>
   </select>
   <label id="attach-btn">
     <span id="attach-text">📎</span><input type="file" id="file-input" multiple style="position:fixed;left:-9999px;" />
@@ -167,6 +177,7 @@ if (!SESSION_ID) {
 const $messages = document.getElementById('messages');
 const $input = document.getElementById('input');
 const $send = document.getElementById('send');
+
 const $strategy = document.getElementById('strategy');
 const $model = document.getElementById('model');
 const $fileInput = document.getElementById('file-input');
@@ -632,10 +643,98 @@ async function send() {
 $send.addEventListener('click', send);
 $input.addEventListener('keydown', e => { if (e.key==='Enter') send(); });
 </script>
+<style>
+#contact-toast { display:none; position:fixed; top:60px; right:20px; background:#1a1a2e;
+  border:1px solid #7c3aed; border-radius:8px; padding:16px 20px; z-index:9998;
+  font-size:14px; color:#e0e0e0; max-width:300px; }
+#contact-toast a { color:#7c3aed; word-break:break-all; }
+#contact-toast .close { float:right; cursor:pointer; color:#666; font-size:18px; line-height:1; }
+#survey-overlay { display:none; position:fixed; top:0;left:0;right:0;bottom:0;
+  background:rgba(0,0,0,0.6); z-index:9999; justify-content:center; align-items:center; }
+#survey-box { background:#1a1a2e; border:1px solid #7c3aed; border-radius:12px;
+  padding:24px 28px; max-width:360px; width:90%; text-align:center; }
+#survey-box h3 { margin:0 0 8px; color:#e0e0e0; font-size:16px; }
+#survey-box .stars { font-size:28px; margin:12px 0; cursor:pointer; }
+#survey-box .stars span { color:#555; transition:color .15s; padding:0 4px; }
+#survey-box .stars span.active,
+#survey-box .stars span:hover { color:#f59e0b; }
+#survey-box textarea { width:100%; height:60px; margin:8px 0; background:#0f172a;
+  border:1px solid #333; border-radius:6px; color:#e0e0e0; padding:8px;
+  font-family:inherit; font-size:13px; resize:none; }
+#survey-box button { margin:8px 4px 0; padding:8px 20px; border:none;
+  border-radius:6px; cursor:pointer; font-size:14px; }
+#survey-submit { background:#7c3aed; color:#fff; }
+#survey-skip { background:#333; color:#aaa; }
+</style>
+<div id="contact-toast">
+  <span class="close" id="contact-close">&times;</span>
+  Any questions? Contact me at:<br>
+  <a href="mailto:darkfall12234@gmail.com">darkfall12234@gmail.com</a>
+</div>
+<div id="survey-overlay"><div id="survey-box">
+  <h3>😊 How was your experience?</h3>
+  <div class="stars" id="survey-stars">
+    <span data-v="1">&#9733;</span><span data-v="2">&#9733;</span>
+    <span data-v="3">&#9733;</span><span data-v="4">&#9733;</span><span data-v="5">&#9733;</span>
+  </div>
+  <textarea id="survey-comment" placeholder="Any feedback? (optional)"></textarea>
+  <div>
+    <button id="survey-skip">Skip</button>
+    <button id="survey-submit">Submit</button>
+  </div>
+</div></div>
 <script>
-if ('serviceWorker' in navigator) {
-  navigator.serviceWorker.register('/static/sw.js');
-}
+// Contact popup
+document.getElementById('contact-btn').addEventListener('click', () => {
+  document.getElementById('contact-toast').style.display = 'block';
+});
+document.getElementById('contact-close').addEventListener('click', () => {
+  document.getElementById('contact-toast').style.display = 'none';
+});
+(function(){
+  const ov = document.getElementById('survey-overlay');
+  const stars = document.querySelectorAll('#survey-stars span');
+  const comment = document.getElementById('survey-comment');
+  let rating = 0;
+
+  stars.forEach(s => {
+    s.addEventListener('click', () => {
+      rating = parseInt(s.dataset.v);
+      stars.forEach((x,i) => x.classList.toggle('active', i < rating));
+    });
+  });
+
+  document.getElementById('survey-submit').addEventListener('click', async () => {
+    if (!rating) return;
+    ov.style.display = 'none';
+    await fetch('/api/survey', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({
+        rating, comment: comment.value,
+        model: document.getElementById('model').value
+      })
+    });
+    rating = 0; comment.value = '';
+    stars.forEach(x => x.classList.remove('active'));
+  });
+
+  document.getElementById('survey-skip').addEventListener('click', () => {
+    ov.style.display = 'none';
+  });
+
+  // 15% chance to show survey after agent finishes
+  let msgCount = 0;
+  const obs = new MutationObserver(() => {
+    const msgs = document.querySelectorAll('.message.assistant');
+    if (msgs.length > msgCount) {
+      msgCount = msgs.length;
+      if (msgCount >= 2 && Math.random() < 0.15) {
+        setTimeout(() => { ov.style.display = 'flex'; }, 2000);
+      }
+    }
+  });
+  obs.observe(document.getElementById('messages'), {childList:true, subtree:true});
+})();
 </script>
 </body>
 </html>

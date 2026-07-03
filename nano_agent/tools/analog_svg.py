@@ -18,50 +18,19 @@ import xml.etree.ElementTree as ET
 from datetime import datetime
 from pathlib import Path
 
+from .spice_common import (
+    parse_value, format_value, check_subckt_support,
+    replace_opamp_with_e_source, OPAMP_SUBCKT as _OPAMP_SUBCKT_MODEL,
+    GROUND_NAMES, prepare_opamp_spice, has_opamp,
+)
+
 logger = logging.getLogger("nano_agent.tools.analog_svg")
 
-# ═══════════ Value Helpers ═══════════
-
-_UNITS = {"p": 1e-12, "n": 1e-9, "u": 1e-6, "μ": 1e-6,
-          "m": 1e-3, "k": 1e3, "K": 1e3, "kHz": 1e3, "MHz": 1e6,
-          "GHz": 1e9, "Hz": 1, "Meg": 1e6, "M": 1e6, "G": 1e9}
-
-
-def _parse_value(s: str) -> float:
-    """Parse SPICE-style value string to float. '1k' → 1000, '10n' → 1e-8."""
-    s = str(s).strip()
-    if not s:
-        return 0
-    for unit, scale in sorted(_UNITS.items(), key=lambda x: -len(x[0])):
-        if s.endswith(unit):
-            try:
-                return float(s[:-len(unit)]) * scale
-            except ValueError:
-                pass
-    try:
-        return float(s)
-    except ValueError:
-        return 0
-
-
-def _format_value(v: float) -> str:
-    """Format float to compact SPICE-style string. 1590 → '1.59k', 1e-7 → '100n'."""
-    if v == 0:
-        return "0"
-    abs_v = abs(v)
-    # Iterate largest→smallest, pick first unit where value >= 1
-    for unit, scale in [("Meg", 1e6), ("k", 1e3), ("", 1),
-                         ("m", 1e-3), ("u", 1e-6), ("n", 1e-9), ("p", 1e-12)]:
-        if abs_v >= scale:
-            val = v / scale
-            if abs(val - round(val)) < 0.001 and abs(val) >= 10:
-                return f"{int(round(val))}{unit}"
-            if abs(val) >= 1:
-                return f"{val:.2f}".rstrip("0").rstrip(".") + unit
-            return f"{val:.3f}".rstrip("0").rstrip(".") + unit
-    # Very small: use pico
-    val = v / 1e-12
-    return f"{val:.1f}".rstrip("0").rstrip(".") + "p"
+# Backward-compatible aliases for internal use
+_parse_value = parse_value
+_format_value = format_value
+_check_ngspice_subckt = check_subckt_support
+_replace_opamp_with_e_source = replace_opamp_with_e_source
 
 
 # ═══════════ Circuit Templates ═══════════
@@ -70,7 +39,7 @@ _CIRCUIT_TEMPLATES = {
     # ── Filters ──
     ("filter", "rc_lowpass"): {
         "name": "RC Low-Pass Filter",
-        "keywords_cn": ["RC低通", "rc低通", "低通滤波器", "低通滤波"],
+        "keywords_cn": ["RC低通", "rc低通", "低通滤波器", "低通滤波", "滤波器", "滤波"],
         "guide": "A simple first-order passive RC low-pass filter.",
         "components": [
             {"type": "V", "name": "Vin", "nodes": ["in", "0"], "value": "AC 1"},
@@ -122,7 +91,8 @@ _CIRCUIT_TEMPLATES = {
     # ── Amplifiers ──
     ("amplifier", "inverting"): {
         "name": "Inverting Amplifier",
-        "keywords_cn": ["反相放大", "反相放大器", "反向放大", "反比例放大", "inverting"],
+        "keywords_cn": ["反相放大", "反相放大器", "反向放大", "反比例放大", "inverting",
+                        "放大器", "放大电路", "运放", "运放电路"],
         "guide": "An inverting op-amp amplifier. Gain = -Rf/R1.",
         "components": [
             {"type": "V", "name": "Vin", "nodes": ["in", "0"], "value": "AC 1"},
@@ -597,10 +567,11 @@ def _pin_pos(cx, cy, pin_idx, total_pins, ctype):
     elif ctype == "V":
         return (cx - 18, cy) if pin_idx == 0 else (cx + 18, cy)
     elif ctype == "X":
+        # SPICE subcircuit pin order: in_p(非反相) in_n(反相) out vcc vss
         if pin_idx == 0:
-            return (cx - 35, cy - 12)  # in-
+            return (cx - 35, cy - 12)  # in_p (non-inverting, +)
         elif pin_idx == 1:
-            return (cx - 35, cy + 12)  # in+
+            return (cx - 35, cy + 12)  # in_n (inverting, -)
         elif pin_idx == 2:
             return (cx + 35, cy)       # out
         elif pin_idx == 3:
@@ -735,10 +706,10 @@ def _draw_opamp(svg, x, y, name):
                                 "y2": str(y), "stroke": _SVG_COLORS["stroke"], "stroke-width": "1.5"})
     ET.SubElement(svg, "text", {"x": str(x0 - 12), "y": str(y0 + H * 0.3 + 4),
                                 "text-anchor": "end", "fill": _SVG_COLORS["text"],
-                                "font-family": "monospace", "font-size": "8"}).text = "-"
+                                "font-family": "monospace", "font-size": "8"}).text = "+"
     ET.SubElement(svg, "text", {"x": str(x0 - 12), "y": str(y0 + H * 0.7 + 4),
                                 "text-anchor": "end", "fill": _SVG_COLORS["text"],
-                                "font-family": "monospace", "font-size": "8"}).text = "+"
+                                "font-family": "monospace", "font-size": "8"}).text = "-"
     if name:
         ET.SubElement(svg, "text", {"x": str(x), "y": str(y0 + H + 14), "text-anchor": "middle",
                                     "fill": _SVG_COLORS["text"], "font-family": "monospace",
@@ -759,63 +730,29 @@ def _draw_ground(svg, x, y):
 
 # ═══════════ design_circuit helpers ═══════════
 
-# ngspice subcircuit support detection (cached)
-_subckt_support: bool | None = None
-_OPAMP_SUBCKT_MODEL = (
-    ".subckt opamp in_p in_n out vcc vss\n"
-    "G1 0 n1 in_p in_n 1\n"
-    "Rop1 n1 0 100k\n"
-    "Cop1 n1 0 1.59e-4\n"
-    "Eop1 out 0 n1 0 1\n"
-    "Rop2 out 0 75\n"
-    ".ends opamp\n"
-)
-
-
-def _check_ngspice_subckt() -> bool:
-    """One-time check: does ngspice support .subckt?"""
-    global _subckt_support
-    if _subckt_support is not None:
-        return _subckt_support
-    import subprocess, tempfile
-    test = ".subckt t 1 2\nR1 1 2 1k\n.ends\nX1 3 4 t\n.op\n.end\n"
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".cir", delete=False) as f:
-        f.write(test); f.flush()
-        try:
-            r = subprocess.run(["ngspice", "-b", f.name],
-                             capture_output=True, text=True, timeout=5)
-            _subckt_support = "Mismatch" not in r.stderr and "Mismatch" not in r.stdout
-        except Exception:
-            _subckt_support = False
-        Path(f.name).unlink(missing_ok=True)
-    return _subckt_support
-
-
-def _replace_opamp_with_e_source(spice: str, gain: int = 100000) -> str:
-    """Replace X... opamp with inline behavioral VCVS."""
-    result = []
-    for line in spice.split("\n"):
-        tokens = line.strip().split()
-        if tokens and tokens[0].upper().startswith("X") and len(tokens) >= 4:
-            xname = tokens[0][1:]
-            in_p, in_n, out = tokens[1], tokens[2], tokens[3]
-            result.append(f"E{xname} {out} 0 {in_p} {in_n} {gain}")
-        else:
-            result.append(line)
-    return "\n".join(result)
+# All shared SPICE utilities now imported from spice_common
+# Aliases at module top: _parse_value, _format_value, _check_ngspice_subckt, _replace_opamp_with_e_source
 
 
 def _parse_specs(specs: str) -> dict | None:
-    """Parse 'fc=10kHz gain=20' → {value: 10000, tolerance: 0.05}."""
+    """Parse 'fc=10kHz gain=20' → {key: 'fc', value: 10000, tolerance: 0.05}.
+
+    Only the FIRST key=value pair is used as the optimization target.
+    Additional pairs are logged as info.
+    """
     if not specs or not specs.strip():
         return None
     result = {}
     for part in specs.split():
         if "=" in part:
             k, v = part.split("=", 1)
-            result["key"] = k.strip().lower()
-            result["value"] = _parse_value(v.strip())
-            result["tolerance"] = 0.05
+            k = k.strip().lower()
+            val = _parse_value(v.strip())
+            if "key" not in result:
+                result["key"] = k
+                result["value"] = val
+                result["tolerance"] = 0.05
+            # Additional specs are noted but only the first is optimized
     return result if "key" in result else None
 
 
@@ -1036,7 +973,7 @@ class AnalogSVG:
 
         # 两阶段都通过 → 渲染 SVG
         try:
-            svg = _render_svg(components, svg_title)
+            svg = self._render_schemdraw_svg(spice, svg_title) or _render_svg(components, svg_title)
         except Exception as e:
             logger.exception(f"Analog SVG render failed: {e}")
             return f"Error rendering analog circuit: {e}"
@@ -1305,7 +1242,7 @@ class AnalogSVG:
             if not components:
                 return "Error: no valid SPICE components found. " \
                        "Supported: R, C, L, D, V, X (op-amp subcircuit)."
-            svg = _render_svg(components, title)
+            svg = self._render_schemdraw_svg(spice_stripped, title) or _render_svg(components, title)
         except Exception as e:
             logger.exception(f"Analog SPICE render failed: {e}")
             return f"Error rendering SPICE circuit: {e}"
@@ -1409,7 +1346,7 @@ class AnalogSVG:
 
         # 4. Render final SVG
         try:
-            svg = _render_svg(components, circuit_name)
+            svg = self._render_schemdraw_svg(spice, circuit_name) or _render_svg(components, circuit_name)
         except Exception as e:
             return f"❌ **SVG rendering failed:** {e}"
 
@@ -1483,6 +1420,101 @@ class AnalogSVG:
         return None
 
     @staticmethod
+    def _render_schemdraw_svg(spice: str, title: str = "") -> str:
+        """Render SPICE netlist to SVG via schemdraw (professional layout)."""
+        try:
+            from nano_agent.tools.spice_renderer import _build_graph, _layout
+            from schemdraw import Drawing
+            import schemdraw.elements as elm
+
+            graph = _build_graph(spice)
+            if not graph["components"]:
+                return None
+
+            layout = _layout(graph)
+            d = Drawing(canvas='svg', unit=3)
+            comps = graph["components"]
+            main_chain = layout["main_chain"]
+            branches = layout["branches"]
+            ground_nets = graph["ground_nets"]
+
+            if not comps:
+                return None
+
+            branch_at_col = {}
+            for parent_col, comp_idx, direction in branches:
+                branch_at_col.setdefault(parent_col, []).append((comp_idx, direction))
+
+            placed = set()
+            _ELEM_MAP = {"R": "Resistor", "C": "Capacitor", "L": "Inductor2",
+                         "D": "Diode"}
+            for col, comp_idx in enumerate(main_chain):
+                comp = comps[comp_idx]
+                ctype = comp["type"]
+                value = comp.get("value", "")
+
+                if ctype == "V":
+                    vu = value.upper()
+                    if "SIN" in vu or "AC" in vu:
+                        el = elm.SourceSin()
+                    elif "DC" in vu:
+                        el = elm.SourceV()
+                    elif "PULSE" in vu:
+                        el = elm.SourcePulse()
+                    else:
+                        el = elm.SourceV()
+                elif ctype == "X":
+                    el = elm.Opamp()
+                elif ctype == "D":
+                    el = elm.Diode()
+                else:
+                    cls_name = _ELEM_MAP.get(ctype, "Resistor")
+                    el_cls = getattr(elm, cls_name)
+                    el = el_cls()
+                    if value and ctype != "V":
+                        el.label(value)
+
+                if col == 0:
+                    d.add(el)
+                else:
+                    d.add(el.right())
+                placed.add(comp_idx)
+
+                if col in branch_at_col:
+                    for bci, bdir in branch_at_col[col]:
+                        if bci in placed:
+                            continue
+                        bcomp = comps[bci]
+                        bctype = bcomp["type"]
+                        bvalue = bcomp.get("value", "")
+                        if bctype == "V":
+                            bel = elm.SourceV()
+                        elif bctype == "X":
+                            bel = elm.Opamp()
+                        else:
+                            bcls_name = _ELEM_MAP.get(bctype, "Resistor")
+                            bel_cls = getattr(elm, bcls_name)
+                            bel = bel_cls()
+                            if bvalue:
+                                bel.label(bvalue)
+                        d.push()
+                        d.add(bel.down())
+                        for pn, _ in bcomp["pins"]:
+                            if pn in ground_nets:
+                                d.add(elm.Ground())
+                                break
+                        d.pop()
+                        placed.add(bci)
+
+            svg_bytes = d.get_imagedata('svg')
+            return svg_bytes.decode('utf-8') if isinstance(svg_bytes, bytes) else str(svg_bytes)
+        except ImportError:
+            return None
+        except Exception as e:
+            logger.warning(f"schemdraw render failed: {e}")
+            return None
+
+    @staticmethod
     def _match_template(desc: str):
         """Match NL description to template + calculate values."""
         desc_lower = desc.lower().strip()
@@ -1508,15 +1540,25 @@ class AnalogSVG:
                 matches.append((score, cat, sub))
 
         if not matches:
-            # Default: try to find any matching keyword
+            # Default: try to find any matching English category
             for (cat, sub), tmpl in _CIRCUIT_TEMPLATES.items():
                 if cat in desc_lower:
                     matches.append((1, cat, sub))
                     break
 
         if not matches:
-            # Fallback: RC low-pass
-            cat, sub = "filter", "rc_lowpass"
+            # Fallback: infer from Chinese category-indicating words
+            if any(w in desc_lower for w in ("放大", "运放")):
+                cat, sub = "amplifier", "inverting"
+            elif any(w in desc_lower for w in ("滤波",)):
+                cat, sub = "filter", "rc_lowpass"
+            elif any(w in desc_lower for w in ("整流",)):
+                cat, sub = "rectifier", "half_wave"
+            elif any(w in desc_lower for w in ("分压",)):
+                cat, sub = "divider", "voltage_divider"
+            else:
+                # Last resort: RC low-pass
+                cat, sub = "filter", "rc_lowpass"
         else:
             matches.sort(reverse=True)
             cat, sub = matches[0][1], matches[0][2]

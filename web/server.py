@@ -455,6 +455,59 @@ async def clear_session(session_id: str):
     return {"ok": True}
 
 
+@app.post("/api/survey")
+async def submit_survey(request: Request):
+    """Store user survey feedback."""
+    import json as _json
+    from pathlib import Path as _Path
+    try:
+        body = await request.json()
+    except Exception:
+        return {"ok": False, "error": "Invalid JSON"}
+    rating = body.get("rating", 0)
+    comment = body.get("comment", "")
+    model = body.get("model", "")
+
+    survey_file = _Path(__file__).parent / "survey_results.jsonl"
+    record = {
+        "timestamp": datetime.now().isoformat(),
+        "rating": rating,
+        "comment": comment,
+        "model": model,
+        "ip": request.client.host if request.client else "",
+    }
+    try:
+        with open(survey_file, "a") as f:
+            f.write(_json.dumps(record, ensure_ascii=False) + "\n")
+    except Exception as e:
+        logger.warning(f"Failed to write survey: {e}")
+        return {"ok": False, "error": str(e)}
+    return {"ok": True}
+
+
+@app.get("/api/survey/stats")
+async def survey_stats():
+    """Get survey statistics."""
+    import json as _json
+    from pathlib import Path as _Path
+    survey_file = _Path(__file__).parent / "survey_results.jsonl"
+    if not survey_file.exists():
+        return {"total": 0, "avg_rating": 0, "ratings": []}
+    records = []
+    with open(survey_file) as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                try:
+                    records.append(_json.loads(line))
+                except Exception:
+                    pass
+    total = len(records)
+    avg = sum(r.get("rating", 0) for r in records) / max(total, 1)
+    return {"total": total, "avg_rating": round(avg, 2),
+            "recent": records[-20:]}
+
+
 @app.get("/api/health")
 async def health():
     # 每小时触发一次 chart 清理

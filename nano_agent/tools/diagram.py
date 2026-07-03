@@ -140,14 +140,18 @@ class Diagram:
 
         plant_code = "\n".join(plant_lines)
 
-        # 编码: 优先 deflate+base64 (更紧凑), hex 作为 fallback
-        compressed = zlib.compress(plant_code.encode('utf-8'), level=9)
-        encoded = base64.urlsafe_b64encode(compressed).decode().rstrip("=")
+        # 编码: raw deflate+base64 (PlantUML ~1 prefix), hex 作为 fallback (~h)
+        # zlib.compress 输出 zlib 格式 (RFC 1950, 2-byte header + deflate + 4-byte Adler-32)
+        # PlantUML ~1 需要 raw deflate (RFC 1951) — 去掉 zlib 头和校验尾
+        zlib_data = zlib.compress(plant_code.encode('utf-8'), level=9)
+        raw_deflate = zlib_data[2:-4]  # strip zlib wrapper → raw deflate
+        encoded = base64.urlsafe_b64encode(raw_deflate).decode().rstrip("=")
         hex_str = plant_code.encode('utf-8').hex()
 
-        # 用更短的编码（PlantUML 均支持）；超过 5000 字符的 URL 可能被服务器拒绝
+        # zlib.compress 输出 zlib 格式 (RFC 1950)，PlantUML 需 ~1 前缀来识别
+        # hex 格式用 ~h 前缀
         if len(encoded) <= len(hex_str):
-            url = f"{self.PLANTUML_BASE}/png/{encoded}"
+            url = f"{self.PLANTUML_BASE}/png/~1{encoded}"
         else:
             url = f"{self.PLANTUML_BASE}/png/~h{hex_str}"
 
@@ -241,10 +245,10 @@ class Diagram:
         if fence:
             code = fence.group(1).strip()
 
-        # 状态图 → PlantUML 渲染（布局远优于 Mermaid）
-        import re as _re2
-        if _re2.match(r'stateDiagram', code, _re2.IGNORECASE):
-            return self._render_plantuml(code)
+        # 状态图 → 直接用 Mermaid.ink 渲染
+        # (PlantUML 编码接口不稳定，~1 deflate 已不可用)
+        # 不在此处做特殊处理，统一走下面的 mermaid.ink 路径
+        pass
 
         # 智能配置注入
         payload = self._smart_mermaid_config(code, theme)

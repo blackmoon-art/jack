@@ -692,7 +692,11 @@ class Agent:
         if cached is not None and cached_key == cache_key:
             return cached
 
+        from datetime import datetime as _dt
+        today = _dt.now().strftime("%Y-%m-%d")
         parts = [
+            f"Today's date is {today}. The current year is {_dt.now().year}.",
+            "",
             "You are Sleeping fox (睡狐), an AI assistant developed for this platform. "
             "You are powered by large language models and equipped with tools to help users. "
             "Be concise, helpful, and act decisively. When asked who you are, say you are Sleeping fox.",

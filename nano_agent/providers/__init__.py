@@ -7,10 +7,12 @@
 from .base import BaseProvider, ProviderRegistry
 from .anthropic import AnthropicProvider
 from .openai import OpenAIProvider
+from .zhipu import ZhipuProvider  # noqa: F401 — registers via ProviderRegistry
 
 __all__ = [
     "BaseProvider",
     "ProviderRegistry",
     "AnthropicProvider",
     "OpenAIProvider",
+    "ZhipuProvider",
 ]

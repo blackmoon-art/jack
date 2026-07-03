@@ -70,7 +70,7 @@ class ProviderRegistry:
         "claude": "anthropic",
         "deepseek": "openai_compatible",
         "qwen": "openai_compatible",
-        "glm": "openai_compatible",
+        "glm": "zhipu",
         "moonshot": "openai_compatible",
     }
 
@@ -100,7 +100,8 @@ class ProviderRegistry:
     @classmethod
     def resolve_by_model(cls, model: str) -> str:
         """根据模型名推断 provider 字符串。"""
+        model_lower = model.lower()
         for prefix, provider in cls._MODEL_PREFIX_MAP.items():
-            if model.startswith(prefix):
+            if model_lower.startswith(prefix):
                 return provider
         return "openai_compatible"

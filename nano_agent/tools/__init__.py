@@ -129,6 +129,11 @@ class ToolRegistry:
                         continue
                     if name == "draw_block" and not self._enable_analog:
                         continue
+                # enable_analog_circuit 也控制新的模拟电路工具
+                if not self._enable_analog:
+                    if attr_name in ("_analog_svg", "_spice_renderer",
+                                     "_spice_simulator"):
+                        continue
                 func = getattr(instance, method_name)
                 self._register(name, desc, func, properties, required=required)
 
@@ -145,6 +150,11 @@ class ToolRegistry:
 
     def _register(self, name: str, desc: str, func, properties: dict,
                   required: list | None = None):
+        if name in self._tools:
+            old_func = self._tools[name]["func"]
+            logger.warning(
+                f"Tool '{name}' registered twice! "
+                f"Overwriting {old_func.__qualname__} with {func.__qualname__}")
         self._tools[name] = {
             "func": func,
             "schema": {
