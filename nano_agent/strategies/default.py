@@ -78,8 +78,10 @@ class DefaultStrategy(BaseStrategy):
             return agent_loop_fn(messages)[0]
 
         # ── Phase 3: 纯文本回答 — 检查是否需要画图 ──
-        if self._should_force_visual(task, self.memory):
-            return self._force_visual(task, full_text, messages, agent_loop_fn)
+        visual_route = route_visual(task)
+        if self._should_force_visual(task, self.memory, visual_route=visual_route):
+            return self._force_visual(task, full_text, messages, agent_loop_fn,
+                                      visual_route=visual_route)
 
         if not full_text.strip():
             return agent_loop_fn(messages)[0]
@@ -123,12 +125,13 @@ class DefaultStrategy(BaseStrategy):
         return full_text, None, reasoning
 
     @staticmethod
-    def _should_force_visual(task: str, memory=None) -> bool:
-        """检测任务是否需要视觉输出（画图/图表）。
+    def _should_force_visual(task: str, memory=None, visual_route=None) -> bool:
+        """Detect if task needs visual output (chart/diagram).
 
-        委托给 visual_router.is_visual_request 做关键词判断，
-        额外处理“编辑类任务 + 上一轮视觉”的上下文场景。
+        visual_route: cached route_visual(task) result to avoid re-matching.
         """
+        if visual_route is not None:
+            return True
         if is_visual_request(task):
             return True
 
@@ -155,13 +158,16 @@ class DefaultStrategy(BaseStrategy):
         return names
 
     def _force_visual(self, task: str, full_text: str, messages: list,
-                      agent_loop_fn) -> str:
-        """强制让 LLM 调用绘图工具。包含代码兜底。"""
+                      agent_loop_fn, visual_route=None) -> str:
+        """强制让 LLM 调用绘图工具。包含代码兜底。
+
+        visual_route: 已缓存的 route_visual(task) 结果，避免重复匹配。
+        """
         logger.info(f"VISUAL: '{task[:50]}'")
         self.emit("text", {"text": "🔧 正在生成图片..."})
 
-        # 查询视觉路由，获取匹配的工具
-        route = route_visual(task)
+        # 使用已缓存的路由结果，避免重复调用 route_visual
+        route = visual_route or route_visual(task)
 
         # 确定目标工具集合
         visual_tools = self._get_visual_tool_names()

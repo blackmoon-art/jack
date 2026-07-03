@@ -496,18 +496,23 @@ class Agent:
             self.execute_tool(tool_call, messages)
             return schemas
 
-        # 需要 LLM 生成内容 → 注入 hint 到最后一个 user 消息
+        # 需要 LLM 生成内容 → 注入 hint + 裁剪 schema
         params_hint = f" (params hint: {tool_params})" if tool_params else ""
         hint = (
             f"\n[Visual hint: Use the '{tool_name}' tool{params_hint}."
             f" Generate appropriate content.]"
-            f"\nIMPORTANT: Do NOT use generate_chart, mermaid_chart, draw_circuit,"
-            f" or any other visual tool for this task. Only use '{tool_name}'."
         )
+        # Schema 裁剪：只保留匹配工具 + 必要基础工具，省 ~1800 tokens/次
+        _ESSENTIAL = {"bash", "read", "write", "edit",
+                      "search_and_fetch", "web_search", "fetch_url",
+                      "calculate"}
         _ALL_VISUAL = {"generate_chart", "mermaid_chart", "draw_circuit",
-                       "create_ppt", "ai_image", "image_analyze"}
-        route_exclude = [t for t in _ALL_VISUAL if t != tool_name]
-        schemas = [s for s in schemas if s["function"]["name"] not in route_exclude]
+                       "draw_logic", "draw_analog_svg", "draw_analog_spice",
+                       "draw_block", "draw_digital", "draw_analog",
+                       "create_ppt", "ai_image", "image_analyze",
+                       "mermaid_chart", "drawio_diagram"}
+        keep = _ESSENTIAL | {tool_name}
+        schemas = [s for s in schemas if s["function"]["name"] in keep]
         if messages and messages[-1].get("role") == "user":
             messages[-1]["content"] += hint
 
