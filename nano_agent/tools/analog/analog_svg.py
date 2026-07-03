@@ -1364,7 +1364,7 @@ class AnalogSVG:
                     }
             if not _CIRCUIT_TEMPLATES:
                 raise ValueError("No templates loaded")
-            logger.info(f"Loaded {len(_CIRCUIT_TEMPLATES)} circuit templates from YAML")
+            logger.debug(f"Loaded {len(_CIRCUIT_TEMPLATES)} circuit templates from YAML")
         except Exception as e:
             logger.warning(f"YAML load failed ({e}), templates may be empty")
 
@@ -2232,5 +2232,4 @@ class AnalogSVG:
         return tmpl, values
 
 
-# ── Module init: load templates from YAML at import time ──
 AnalogSVG._load_templates()

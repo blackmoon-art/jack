@@ -93,13 +93,18 @@ class ToolRegistry:
         self._ai_image = AIImage(work_dir, charts_dir=charts_dir)
         self._circuit = Circuit(work_dir, charts_dir=charts_dir)
         self._logic_svg = LogicSVG(work_dir, charts_dir=charts_dir)
-        self._analog_svg = AnalogSVG(work_dir, charts_dir=charts_dir)
-        self._spice_renderer = SpiceRenderer(work_dir, charts_dir=charts_dir)
         self._enable_analog = enable_analog_circuit
         self._enable_digital = enable_digital_circuit
+        if self._enable_analog:
+            self._analog_svg = AnalogSVG(work_dir, charts_dir=charts_dir)
+            self._spice_renderer = SpiceRenderer(work_dir, charts_dir=charts_dir)
+            self._spice_simulator = SpiceSimulator(work_dir, charts_dir=charts_dir)
+        else:
+            self._analog_svg = None
+            self._spice_renderer = None
+            self._spice_simulator = None
         self._image_analyze = ImageAnalyzer(work_dir)
         self._document_parse = DocumentParser(work_dir)
-        self._spice_simulator = SpiceSimulator(work_dir, charts_dir=charts_dir)
         self._digital_circuit = DigitalCircuit(work_dir, charts_dir=charts_dir)
 
         # 自动注册工具
