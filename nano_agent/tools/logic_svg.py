@@ -233,15 +233,15 @@ class LogicSVG:
                     except Exception:
                         pass
 
-        # Pick best
-        best = max(candidates, key=lambda c: c[0])
-        best_score, best_svg, best_config = best
-
+        # Pick best (or use fallback if all candidates failed)
         if not candidates:
             best_svg = self._render_sugiyama_with_params(
                 gates, inputs, outputs, title, 120, 80, 12, "barycenter")
             best_config = "fallback"
             best_score = 0
+        else:
+            best = max(candidates, key=lambda c: c[0])
+            best_score, best_svg, best_config = best
 
         logger.info(f"Layout: best={best_config} score={best_score:.1f}")
         return best_svg
@@ -709,17 +709,14 @@ class LogicSVG:
         def route_mid(px, gix):
             """Find a safe vertical channel between px and gix."""
             lo, hi = min(px, gix), max(px, gix)
-            # Find channels strictly between lo and hi
-            candidates = [ch for ch in safe_channels if lo + 10 < ch < hi - 10]
+            # Find channels strictly between lo and hi, excluding gate bodies
+            candidates = [ch for ch in safe_channels
+                          if lo + 10 < ch < hi - 10
+                          and not any(fx1 < ch < fx2 for fx1, fx2 in forbidden)]
             if candidates:
                 # Pick the channel closest to midpoint
                 target = (lo + hi) / 2
                 best = min(candidates, key=lambda ch: abs(ch - target))
-                # Verify it's not inside any gate
-                for fx1, fx2 in forbidden:
-                    if fx1 < best < fx2:
-                        # This channel is inside a gate! Try another
-                        continue
                 return best
             # Fallback: midpoint, but push outside gate if needed
             mid = (lo + hi) / 2

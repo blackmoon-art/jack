@@ -288,6 +288,15 @@ class DigitalCircuit:
         """
         MAX_LAYOUT_RETRIES = 3
 
+        # ── Guard: cap counter width to prevent simulation hang ──
+        import re as _re
+        _cm = _re.search(r'(\d+)\s*-?\s*bit\s*(?:binary\s*)?counter', description.lower())
+        if not _cm:
+            _cm = _re.search(r'(\d+)\s*位\s*(?:计数|counter)', description.lower())
+        if _cm and int(_cm.group(1)) > 16:
+            return (f"❌ **Counter width {_cm.group(1)}-bit exceeds maximum 16-bit.**\n"
+                    f"  Please choose a smaller width to avoid simulation timeout.")
+
         # ═══ Stage 1: Verilog generation ═══
         if verilog.strip():
             tmpl = {"name": title or "Custom Circuit", "verilog": verilog,
@@ -429,8 +438,8 @@ class DigitalCircuit:
         parts.append("### Stage 4: Gate-Level Schematic + Layout Analysis")
         parts.append(f"**🔍 Gate Check: Layout score ≥ {layout_threshold:.0f}? (max {MAX_LAYOUT_RETRIES} retries)**")
 
-        layout_quality = {"score": 10.0, "crossings": 0, "overlaps": 0,
-                          "issues": [], "details": []}
+        layout_quality = {"score": 0.0, "crossings": 0, "overlaps": 0,
+                          "issues": ["No layout rendered"], "details": []}
         svg_url = ""
         dsl = _yosys_netlist_to_logic_dsl(
             gate_netlist=synth.get("gate_netlist", ""),
@@ -712,6 +721,10 @@ class DigitalCircuit:
 
         if counter_match:
             n_bits = int(counter_match.group(1))
+            if n_bits > 16:
+                raise ValueError(
+                    f"Counter width {n_bits}-bit exceeds maximum 16-bit. "
+                    f"Please choose a smaller width.")
             if n_bits != 4:  # use dynamic generation for non-4-bit counters
                 return DigitalCircuit._generate_ripple_counter(n_bits)
 
