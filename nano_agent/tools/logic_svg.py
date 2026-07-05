@@ -794,33 +794,10 @@ class LogicSVG:
                 out_y = gy
                 port_positions[out_name] = (out_x, out_y, False)
 
-        # ── Draw output ports ──
-        max_gate_x = max(gx for gx, _ in gate_positions.values()) if gate_positions else 400
-        output_col_x = max_gate_x + col_gap * 0.6
-        output_y_map = {}
-        # Place each output port at its driving gate's Y, with stub wire connection.
-        # Only offset if multiple outputs share the exact same Y (rare, e.g. same gate).
-        gate_output_counts = {}  # gate_idx → how many outputs from this gate
-        used_ys = {}  # y_int → count
-        for name in sorted(outputs):
-            if name in produced_by:
-                gi = produced_by[name]
-                base_y = gate_y.get(gi, 50 + len(output_y_map) * ROW_SPACING + ROW_SPACING // 2)
-                # Track outputs per gate for micro-offset
-                count = gate_output_counts.get(gi, 0)
-                gate_output_counts[gi] = count + 1
-                y = base_y + count * (self.PORT_H + 2)
-            else:
-                y = 50 + len(output_y_map) * ROW_SPACING + ROW_SPACING // 2
-            # Collision check: if a different gate's output already uses this Y, nudge
-            y_int = round(y)
-            while y_int in used_ys and used_ys[y_int] != gi:
-                y += self.PORT_H + 2
-                y_int = round(y)
-            used_ys[y_int] = gi
-            output_y_map[name] = y
-            port_positions[name] = (output_col_x, y, False)
-            self._draw_port(svg, output_col_x, y, name, False)
+        # ── Phase 4.5: Output Alignment — ports at driving gate Y, tight gap ──
+        output_col_x, output_y_map = self._place_output_ports(
+            svg, outputs, produced_by, gate_positions, gate_y,
+            col_gap, ROW_SPACING, port_positions)
 
         # ── Draw wires with strict column-gap routing ──
         # Build sorted list of all safe vertical channels (gaps between gate columns)
@@ -921,17 +898,7 @@ class LogicSVG:
             self._draw_wire_seg(svg, sx, fy, ex, fy)       # left along bus
             self._draw_wire_seg(svg, ex, fy, ex, ey)       # up to input pin
 
-        # ── Draw output port connections ──
-        for gi, g in enumerate(gates):
-            out_name = g["output"]
-            if out_name in outputs and out_name in port_positions:
-                gx, gy = gate_positions[gi]
-                ox, oy, _ = port_positions[out_name]
-                sx = gx + self.W // 2 + self.PIN
-                ex = ox - self.PORT_W // 2
-                mid_x = route_mid(sx, ex)
-                self._route_with_detour(svg, gate_positions, sx, gy, mid_x, ex, oy)
-
+        # Output port connections are drawn by _place_output_ports (stub wires).
         return ET.tostring(svg, encoding="unicode")
 
     def _route_with_detour(self, svg, gate_positions, px, py, mid_x, gix, giy, channels=None, shared=None):
@@ -1087,6 +1054,57 @@ class LogicSVG:
                 "fill": self.COLORS["text"], "font-family": self.FONT,
                 "font-size": "8", "dy": "0.3em",
             }).text = gtype  # full gate type name (AND, NAND, XOR, XNOR, etc.)
+
+    # ── Output Alignment ───────────────────────────
+
+    def _place_output_ports(self, svg, outputs, produced_by,
+                             gate_positions, gate_y, col_gap,
+                             ROW_SPACING, port_positions):
+        """Phase 4.5: Place output ports aligned to driving gates.
+
+        Each output port is placed at its driving gate's Y, at a tight
+        horizontal gap from the rightmost gate. Stub wires from gate
+        output pins to ports are drawn here.
+        """
+        max_gate_x = max(gx for gx, _ in gate_positions.values()) if gate_positions else 400
+        output_col_x = max_gate_x + col_gap * 0.3  # tight gap
+
+        gate_output_counts = {}
+        used_ys = {}
+        output_y_map = {}
+
+        for name in sorted(outputs):
+            if name in produced_by:
+                gi = produced_by[name]
+                base_y = gate_y.get(gi, 50 + len(output_y_map) * ROW_SPACING + ROW_SPACING // 2)
+                count = gate_output_counts.get(gi, 0)
+                gate_output_counts[gi] = count + 1
+                y = base_y + count * (self.PORT_H + 2)
+            else:
+                y = 50 + len(output_y_map) * ROW_SPACING + ROW_SPACING // 2
+
+            # Collision check per driving gate
+            y_int = round(y)
+            while y_int in used_ys and used_ys[y_int] != gi:
+                y += self.PORT_H + 2
+                y_int = round(y)
+            used_ys[y_int] = gi
+            output_y_map[name] = y
+            port_positions[name] = (output_col_x, y, False)
+            self._draw_port(svg, output_col_x, y, name, False)
+
+            # Stub wire: short horizontal line from gate output pin to port
+            if name in produced_by:
+                gi = produced_by[name]
+                gx, gy = gate_positions[gi]
+                sx = gx + self.W // 2 + self.PIN
+                sy = gy
+                ex = output_col_x - self.PORT_W // 2
+                self._draw_wire_seg(svg, sx, sy, ex, sy)  # horizontal to port column
+                if abs(sy - y) > 2:
+                    self._draw_wire_seg(svg, ex, sy, ex, y)  # vertical to port Y
+
+        return output_col_x, output_y_map
 
     # ── 端口 ────────────────────────────────────────
 
