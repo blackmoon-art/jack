@@ -738,7 +738,7 @@ _ROW_GAP = 90
 
 def _render_svg(components: list[dict], title: str = "") -> str:
     """Render analog circuit as dark-theme SVG."""
-    # ── Layout: BFS from AC sources ──
+    # ── Layout: BFS from AC sources with feedback awareness ──
     # Build adjacency: node → [comp_index]
     node_to_comps = {}
     comp_nodes = {}
@@ -750,7 +750,7 @@ def _render_svg(components: list[dict], title: str = "") -> str:
             nids.append(ns)
         comp_nodes[i] = nids
 
-    # Source nodes: AC voltage source outputs
+    # Source nodes: AC voltage source outputs (or any non-GND node)
     sources = set()
     for i, c in enumerate(components):
         if c["type"] == "V" and "AC" in str(c.get("filled_value", "")).upper():
@@ -763,11 +763,12 @@ def _render_svg(components: list[dict], title: str = "") -> str:
                 sources.add(n)
                 break
 
-    # BFS from sources (skip GND)
+    # BFS from sources (skip GND), track feedback edges
     comp_level = {}
     node_level = {}
     visited_nodes = set()
     visited_comps = set()
+    feedback_comps = set()  # components that form feedback loops
     for s in sources:
         node_level[s] = 0
         visited_nodes.add(s)
@@ -778,21 +779,37 @@ def _render_svg(components: list[dict], title: str = "") -> str:
         nlev = node_level.get(nid, 0)
         for ci in node_to_comps.get(nid, []):
             if ci in visited_comps:
+                # Already placed — this is a feedback/reconvergent path
+                existing_level = comp_level.get(ci, 0)
+                if nlev > existing_level + 1:
+                    feedback_comps.add(ci)
                 continue
             visited_comps.add(ci)
             comp_level[ci] = nlev
             for other_nid in comp_nodes[ci]:
-                if other_nid != "0" and other_nid not in visited_nodes:
+                if other_nid == "0":
+                    continue
+                if other_nid in visited_nodes:
+                    # Node already seen — feedback path
+                    if node_level.get(other_nid, 0) < nlev:
+                        feedback_comps.add(ci)
+                else:
                     visited_nodes.add(other_nid)
                     node_level[other_nid] = nlev + 1
                     queue.append(other_nid)
 
-    # Assign levels to unvisited
+    # Assign levels to unvisited (isolated subcircuits)
     max_lev = max(comp_level.values()) if comp_level else 0
     for i in range(len(components)):
         if i not in comp_level:
             max_lev += 1
             comp_level[i] = max_lev
+
+    # Push feedback components to later columns to reduce crossing
+    if feedback_comps:
+        fb_max = max(comp_level.values()) + 1
+        for ci in feedback_comps:
+            comp_level[ci] = fb_max
 
     # Group by level
     level_comps = {}
@@ -808,19 +825,39 @@ def _render_svg(components: list[dict], title: str = "") -> str:
             gy = 60 + ri * _ROW_GAP
             comp_pos[ci] = (gx, gy)
 
-    # Node positions (average of connected component centers)
+    # Node positions: X=rightmost comp, Y=average (left→right signal flow)
     node_pos = {}
     for nid, cis in node_to_comps.items():
         pts = [comp_pos[ci] for ci in cis if ci in comp_pos]
         if pts:
-            node_pos[nid] = (sum(p[0] for p in pts) / len(pts),
-                             sum(p[1] for p in pts) / len(pts))
+            max_x = max(p[0] for p in pts)
+            avg_y = sum(p[1] for p in pts) / len(pts)
+            node_pos[nid] = (max_x + _COL_GAP // 3, avg_y)
     if "0" not in node_pos:
         max_y = max(y for _, y in comp_pos.values()) if comp_pos else 200
         node_pos["0"] = (80, max_y + 80)
 
+    # Widen column gap for dense circuits to reduce wire crowding
+    effective_gap = _COL_GAP
+    max_col_size = max(len(v) for v in level_comps.values()) if level_comps else 1
+    if max_col_size >= 3:
+        effective_gap = int(_COL_GAP * 1.5)
+        # Recompute X positions with wider gap
+        for lev in sorted(level_comps):
+            gx = 80 + lev * effective_gap
+            for ri, ci in enumerate(level_comps[lev]):
+                gy = 60 + ri * _ROW_GAP
+                comp_pos[ci] = (gx, gy)
+        # Recompute node positions
+        for nid, cis in node_to_comps.items():
+            pts = [comp_pos[ci] for ci in cis if ci in comp_pos]
+            if pts:
+                max_x = max(p[0] for p in pts)
+                avg_y = sum(p[1] for p in pts) / len(pts)
+                node_pos[nid] = (max_x + effective_gap // 3, avg_y)
+
     # SVG dimensions
-    svg_w = max(400, (total_cols + 1) * _COL_GAP)
+    svg_w = max(400, (total_cols + 1) * effective_gap)
     max_rows = max(len(v) for v in level_comps.values()) if level_comps else 1
     svg_h = max(300, max_rows * _ROW_GAP + 140, max(y for _, y in node_pos.values()) + 100)
 
@@ -1021,17 +1058,61 @@ def score_analog_layout(svg_content: str) -> dict:
     n_wires = len(wires)
     n_comps = max(len(comp_positions), 1)
 
-    # Fallback for schemdraw SVGs without wire elements: return canvas-based score
+    # Fallback for schemdraw SVGs: schemdraw uses CSS classes, not inline stroke
     if n_wires == 0 and n_comps <= 2:
-        result["score"] = 8.0  # schemdraw output, assume decent
-        result["issues"] = ["Schemdraw render — wire analysis unavailable"]
-        result["components"] = n_comps
-        result["summary"] = (
-            f"Layout: schemdraw render on {canvas_w}x{canvas_h} canvas. "
-            f"Wire-level analysis unavailable for schemdraw output. "
-            f"Score: 8/10."
-        )
-        return result
+        schemdraw_wires = []
+        schemdraw_comps = []
+        for elem in root.iter():
+            tag = elem.tag.split("}")[-1] if "}" in elem.tag else elem.tag
+            if tag not in ("path", "line"):
+                continue
+            if tag == "line":
+                x1 = float(elem.get("x1", 0)); y1 = float(elem.get("y1", 0))
+                x2 = float(elem.get("x2", 0)); y2 = float(elem.get("y2", 0))
+                schemdraw_wires.append((x1, y1, x2, y2))
+            elif tag == "path":
+                d = elem.get("d", "")
+                segs = _parse_wire_path_segments(d)
+                total_len = sum(abs(s[2]-s[0]) + abs(s[3]-s[1]) for s in segs)
+                if total_len < 300:
+                    schemdraw_wires.extend(segs)
+                else:
+                    bbox = _svg_path_bbox_analog(d)
+                    if bbox:
+                        schemdraw_comps.append(((bbox[0]+bbox[2])/2, (bbox[1]+bbox[3])/2))
+
+        if schemdraw_wires:
+            schemdraw_crossings = 0
+            for i, w1 in enumerate(schemdraw_wires):
+                for j, w2 in enumerate(schemdraw_wires):
+                    if j <= i: continue
+                    if _segments_cross_analog(w1, w2):
+                        eps = 8
+                        shared = any(
+                            abs(w1[k] - w2[l]) < eps and abs(w1[k+1] - w2[l+1]) < eps
+                            for k in (0, 2) for l in (0, 2))
+                        if not shared:
+                            schemdraw_crossings += 1
+
+            n_sd_wires = len(schemdraw_wires)
+            n_sd_comps = max(len(schemdraw_comps), 1)
+            sd_cross_score = 10 * math.exp(-schemdraw_crossings / max(n_sd_comps, 1) / 0.8)
+            result["crossings"] = schemdraw_crossings
+            result["wire_segments"] = n_sd_wires
+            result["components"] = n_sd_comps
+            result["score"] = sd_cross_score * 0.5 + 5.0
+            result["score"] = max(0.0, min(10.0, result["score"]))
+            if schemdraw_crossings > 0:
+                result["issues"] = [f"{schemdraw_crossings} wire crossing(s) (schemdraw)"]
+            else:
+                result["issues"] = ["Clean layout — no issues (schemdraw)"]
+            result["summary"] = (
+                f"Layout: schemdraw render, {n_sd_comps} components, "
+                f"{n_sd_wires} wire segments. "
+                f"Issues: {result['issues'][0]}. "
+                f"Score: {result['score']:.0f}/10."
+            )
+            return result
 
     # ═══ 1. Crossing (25%) ═══
     crossings = 0
@@ -1213,7 +1294,7 @@ def score_analog_layout(svg_content: str) -> dict:
 def _parse_wire_path_segments(d: str) -> list:
     """Parse SVG path d-string into line segment list [(x1,y1,x2,y2), ...]."""
     import re
-    nums = [float(x) for x in re.findall(r"[-]?\d+\.?\d*", d)]
+    nums = [float(x) for x in re.findall(r"[-]?\d+\.?\d*(?:e[-+]?\d+)?", d, re.IGNORECASE)]
     segs = []
     for i in range(0, len(nums) - 2, 2):
         if i + 3 < len(nums):
@@ -1245,7 +1326,7 @@ def _segments_cross_analog(w1: tuple, w2: tuple) -> bool:
 def _svg_path_bbox_analog(d: str) -> tuple | None:
     """Approximate bounding box of an SVG path."""
     import re
-    nums = [float(x) for x in re.findall(r"[-]?\d+\.?\d*", d)]
+    nums = [float(x) for x in re.findall(r"[-]?\d+\.?\d*(?:e[-+]?\d+)?", d, re.IGNORECASE)]
     if len(nums) < 2:
         return None
     # Extract M/L command points (skip arc/curve control params)
