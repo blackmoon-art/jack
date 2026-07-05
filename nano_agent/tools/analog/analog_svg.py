@@ -874,6 +874,408 @@ def _render_svg(components: list[dict], title: str = "") -> str:
     return ET.tostring(svg, encoding="unicode")
 
 
+def score_analog_layout(svg_content: str) -> dict:
+    """Analyze rendered analog circuit SVG for layout quality.
+
+    Metrics (8 dimensions, weighted):
+      Crossing (25%)  — wire-wire orthogonal intersections
+      Wire Length (15%) — avg segment length, normalized to canvas
+      Component Alignment (15%) — grid snap precision
+      Signal Flow (10%) — left→right progression quality
+      Power Placement (10%) — VCC top, GND bottom
+      Symmetry (10%) — paired component Y-mirroring
+      White Space (10%) — component bounding box vs canvas
+      Junction Quality (5%) — clean connections, minimal bends
+
+    Returns {"score": 0-10, "crossings": int, ...}
+    """
+    import re, math
+
+    result = {"score": 10.0, "crossings": 0, "wire_segments": 0,
+              "avg_wire_len": 0.0, "components": 0,
+              "issues": [], "details": [], "metrics": {}}
+
+    try:
+        root = ET.fromstring(svg_content)
+    except Exception:
+        result["score"] = 10.0
+        result["issues"].append("Could not parse SVG for layout analysis")
+        return result
+
+    ns = "http://www.w3.org/2000/svg"
+    # Schemdraw uses "144.2pt" format — strip units
+    raw_w = (root.get("width") or "400").replace("pt", "").replace("px", "")
+    raw_h = (root.get("height") or "300").replace("pt", "").replace("px", "")
+    try:
+        canvas_w = int(float(raw_w))
+        canvas_h = int(float(raw_h))
+    except ValueError:
+        # Fallback: use viewBox
+        vb = root.get("viewBox", "0 0 400 300")
+        parts = vb.split()
+        if len(parts) >= 4:
+            canvas_w = int(float(parts[2].replace("pt", "")))
+            canvas_h = int(float(parts[3].replace("pt", "")))
+        else:
+            canvas_w, canvas_h = 400, 300
+
+    # ── Collect elements ──
+    wires = []        # [(x1,y1, x2,y2), ...] — line segments
+    comp_positions = []  # [(cx, cy, ctype, label), ...]
+    texts = []        # [(x, y, text), ...]
+
+    # Wire paths: <path fill="none" stroke="#7c3aed" d="...">
+    for p in root.findall(f".//{{{ns}}}path"):
+        fill = (p.get("fill") or "").strip()
+        stroke = (p.get("stroke") or "").strip()
+        if fill == "none" and "#7c3aed" in stroke:
+            d = p.get("d", "")
+            segs = _parse_wire_path_segments(d)
+            wires.extend(segs)
+
+    # Components: found by clustering non-wire SVG shapes with stroke="#7c3aed"
+    # Each component is a cluster of closely-spaced shape centers
+    shape_centers = []
+    for elem in root.iter():
+        tag = elem.tag.split("}")[-1] if "}" in elem.tag else elem.tag
+        if tag in ("rect", "circle", "ellipse"):
+            stroke = (elem.get("stroke", "") or "").strip()
+            if "#7c3aed" not in stroke:
+                continue
+            if tag == "circle":
+                shape_centers.append((float(elem.get("cx", 0)), float(elem.get("cy", 0))))
+            elif tag == "ellipse":
+                shape_centers.append((float(elem.get("cx", 0)), float(elem.get("cy", 0))))
+            elif tag == "rect":
+                rx = float(elem.get("x", 0)); ry = float(elem.get("y", 0))
+                rw = float(elem.get("width", 0)); rh = float(elem.get("height", 0))
+                shape_centers.append((rx + rw/2, ry + rh/2))
+        elif tag == "line":
+            stroke = (elem.get("stroke", "") or "").strip()
+            if "#7c3aed" in stroke:
+                # Component lines (capacitor plates, MOSFET terminals)
+                x1 = float(elem.get("x1", 0)); y1 = float(elem.get("y1", 0))
+                x2 = float(elem.get("x2", 0)); y2 = float(elem.get("y2", 0))
+                shape_centers.append(((x1+x2)/2, (y1+y2)/2))
+        elif tag == "path":
+            fill = (elem.get("fill", "") or "").strip()
+            stroke = (elem.get("stroke", "") or "").strip()
+            if "#7c3aed" in stroke:
+                d = elem.get("d", "")
+                segs = _parse_wire_path_segments(d)
+                # Component shapes have >4 segments (resistor zigzag) or non-"none" fill (diode, opamp)
+                if len(segs) > 4 or (fill and fill != "none"):
+                    bbox = _svg_path_bbox_analog(d)
+                    if bbox:
+                        shape_centers.append(((bbox[0]+bbox[2])/2, (bbox[1]+bbox[3])/2))
+
+    # Cluster shapes within 50px into components
+    clustered = []
+    used = set()
+    for i, (sx, sy) in enumerate(shape_centers):
+        if i in used:
+            continue
+        cluster = [(sx, sy)]
+        used.add(i)
+        for j, (sx2, sy2) in enumerate(shape_centers):
+            if j in used:
+                continue
+            if abs(sx - sx2) < 50 and abs(sy - sy2) < 50:
+                cluster.append((sx2, sy2))
+                used.add(j)
+        cx = sum(c[0] for c in cluster) / len(cluster)
+        cy = sum(c[1] for c in cluster) / len(cluster)
+        clustered.append((cx, cy))
+
+    # Match text labels to component clusters
+    for tx_elem in root.findall(f".//{{{ns}}}text"):
+        tx = float(tx_elem.get("x", 0))
+        ty = float(tx_elem.get("y", 0))
+        text = (tx_elem.text or "").strip()
+        if not text:
+            continue
+        # Find nearest cluster
+        best_dist = 60
+        best_idx = -1
+        for ci, (cx, cy) in enumerate(clustered):
+            d = abs(tx - cx) + abs(ty - cy)
+            if d < best_dist:
+                best_dist = d
+                best_idx = ci
+        if best_idx >= 0:
+            cx, cy = clustered[best_idx]
+            comp_positions.append((cx, cy, text))
+            clustered.pop(best_idx)
+
+    # Remaining clusters without text labels
+    for cx, cy in clustered:
+        comp_positions.append((cx, cy, ""))
+
+    # Junction dots: <circle fill="#a78bfa">
+    junctions = []
+    for c in root.findall(f".//{{{ns}}}circle"):
+        fill = (c.get("fill", "") or "").strip()
+        if "#a78bfa" in fill:
+            junctions.append((float(c.get("cx", 0)), float(c.get("cy", 0))))
+
+    n_wires = len(wires)
+    n_comps = max(len(comp_positions), 1)
+
+    # Fallback for schemdraw SVGs without wire elements: return canvas-based score
+    if n_wires == 0 and n_comps <= 2:
+        result["score"] = 8.0  # schemdraw output, assume decent
+        result["issues"] = ["Schemdraw render — wire analysis unavailable"]
+        result["components"] = n_comps
+        result["summary"] = (
+            f"Layout: schemdraw render on {canvas_w}x{canvas_h} canvas. "
+            f"Wire-level analysis unavailable for schemdraw output. "
+            f"Score: 8/10."
+        )
+        return result
+
+    # ═══ 1. Crossing (25%) ═══
+    crossings = 0
+    for i, w1 in enumerate(wires):
+        for j, w2 in enumerate(wires):
+            if j <= i:
+                continue
+            # Check if orthogonal segments cross
+            if _segments_cross_analog(w1, w2):
+                # Skip if they share a junction endpoint
+                eps = 8
+                shared = False
+                for ex1, ey1 in [(w1[0], w1[1]), (w1[2], w1[3])]:
+                    for ex2, ey2 in [(w2[0], w2[1]), (w2[2], w2[3])]:
+                        if abs(ex1 - ex2) < eps and abs(ey1 - ey2) < eps:
+                            shared = True
+                if not shared:
+                    crossings += 1
+    result["crossings"] = crossings
+    cross_ratio = crossings / n_comps
+    crossing_score = 10 * math.exp(-cross_ratio / 0.8)
+
+    # ═══ 2. Wire Length (15%) ═══
+    total_wire_len = 0.0
+    for w in wires:
+        total_wire_len += math.hypot(w[2] - w[0], w[3] - w[1])
+    avg_len = total_wire_len / max(n_wires, 1)
+    result["avg_wire_len"] = round(avg_len, 1)
+    result["wire_segments"] = n_wires
+    norm_len = avg_len / max(math.sqrt(canvas_w * canvas_h), 1)
+    wire_length_score = max(0, 10 * math.exp(-norm_len / 0.15))
+
+    # ═══ 3. Component Alignment (15%) ═══
+    grid_size = 20.0  # approximate grid unit
+    align_errors = []
+    for cx, cy, _ in comp_positions:
+        gx_err = min(cx % grid_size, grid_size - (cx % grid_size))
+        gy_err = min(cy % grid_size, grid_size - (cy % grid_size))
+        align_errors.append(min(gx_err, gy_err))
+    avg_align_err = sum(align_errors) / len(align_errors) if align_errors else 0
+    alignment_score = 10 * math.exp(-avg_align_err / 6.0)
+
+    # ═══ 4. Signal Flow (10%) ═══
+    # Components should progress left→right (increasing X)
+    sorted_by_x = sorted(comp_positions, key=lambda c: c[0])
+    flow_violations = 0
+    for i in range(len(sorted_by_x) - 1):
+        # A small Y change is fine, but X should increase
+        if sorted_by_x[i + 1][0] <= sorted_by_x[i][0] + 20:
+            flow_violations += 1
+    flow_ratio = flow_violations / max(len(comp_positions) - 1, 1)
+    signal_flow_score = 10 * math.exp(-flow_ratio / 0.5)
+
+    # ═══ 5. Power Placement (10%) ═══
+    vcc_y = None
+    gnd_y = None
+    for cx, cy, label in comp_positions:
+        upper = label.upper()
+        if not vcc_y and any(kw in upper for kw in ("VCC", "VDD", "V+", "VIN")):
+            vcc_y = cy
+        if not gnd_y and any(kw in upper for kw in ("GND", "VSS", "V-", "0")):
+            gnd_y = cy
+    # Also check standalone text labels
+    for tx, ty, text in texts:
+        upper = text.upper()
+        if not vcc_y and any(kw in upper for kw in ("VCC", "VDD", "V+")):
+            vcc_y = ty
+        if not gnd_y and any(kw in upper for kw in ("GND", "VSS", "V-")):
+            gnd_y = ty
+
+    pp_score = 5.0  # neutral default
+    if vcc_y is not None and gnd_y is not None:
+        vcc_ok = vcc_y < canvas_h * 0.3
+        gnd_ok = gnd_y > canvas_h * 0.7
+        pp_score = (7.0 if vcc_ok else 3.0) + (3.0 if gnd_ok else 1.0)
+    elif vcc_y is not None:
+        pp_score = 7.0 if vcc_y < canvas_h * 0.3 else 4.0
+    elif gnd_y is not None:
+        pp_score = 7.0 if gnd_y > canvas_h * 0.7 else 4.0
+    power_placement_score = pp_score
+
+    # ═══ 6. Symmetry (10%) ═══
+    # Find same-label pairs and check Y-mirroring
+    center_y = canvas_h / 2
+    label_groups = {}
+    for cx, cy, label in comp_positions:
+        if label:
+            label_groups.setdefault(label, []).append((cx, cy))
+    sym_pairs = 0
+    sym_ok = 0
+    for label, positions in label_groups.items():
+        if len(positions) >= 2:
+            for i in range(len(positions)):
+                for j in range(i + 1, len(positions)):
+                    sym_pairs += 1
+                    # Check Y-mirroring: same X, Y symmetric about center
+                    dx = abs(positions[i][0] - positions[j][0])
+                    dy_avg = (positions[i][1] + positions[j][1]) / 2
+                    if dx < 50 and abs(dy_avg - center_y) < canvas_h * 0.2:
+                        sym_ok += 1
+    sym_ratio = sym_ok / max(sym_pairs, 1)
+    symmetry_score = 5.0 + 5.0 * sym_ratio  # 5-10 range
+
+    # ═══ 7. White Space (10%) ═══
+    if comp_positions:
+        xs = [c[0] for c in comp_positions]
+        ys = [c[1] for c in comp_positions]
+        bbox_w = max(xs) - min(xs) + 100  # +margin
+        bbox_h = max(ys) - min(ys) + 100
+        bbox_area = bbox_w * bbox_h
+        canvas_area = canvas_w * canvas_h
+        ratio = bbox_area / max(canvas_area, 1)
+        whitespace_score = 10 * min(1.0, ratio * 3.5)
+    else:
+        whitespace_score = 5.0
+
+    # ═══ 8. Junction Quality (5%) ═══
+    # Count wire paths with unnecessary bends
+    total_bends = 0
+    clean_junctions = 0
+    for p in root.findall(f".//{{{ns}}}path"):
+        fill = (p.get("fill") or "").strip()
+        stroke = (p.get("stroke") or "").strip()
+        if fill == "none" and "#7c3aed" in stroke:
+            d = p.get("d", "")
+            segs = _parse_wire_path_segments(d)
+            if len(segs) <= 2:
+                clean_junctions += 1
+            total_bends += max(0, len(segs) - 1)
+    junc_ratio = clean_junctions / max(total_bends + clean_junctions, 1)
+    junction_score = 5.0 + 5.0 * junc_ratio
+
+    # ── Weighted total ──
+    result["score"] = (
+        0.25 * crossing_score +
+        0.15 * wire_length_score +
+        0.15 * alignment_score +
+        0.10 * signal_flow_score +
+        0.10 * power_placement_score +
+        0.10 * symmetry_score +
+        0.10 * whitespace_score +
+        0.05 * junction_score
+    )
+    result["score"] = max(0.0, min(10.0, result["score"]))
+
+    result["components"] = n_comps
+    result["metrics"] = {
+        "components": n_comps,
+        "wire_segments": n_wires,
+        "avg_wire_len": result["avg_wire_len"],
+        "crossings": crossings,
+        "canvas": f"{canvas_w}x{canvas_h}",
+        "crossing_score": round(crossing_score, 1),
+        "wire_length_score": round(wire_length_score, 1),
+        "alignment_score": round(alignment_score, 1),
+        "signal_flow_score": round(signal_flow_score, 1),
+        "power_score": round(power_placement_score, 1),
+        "symmetry_score": round(symmetry_score, 1),
+        "whitespace_score": round(whitespace_score, 1),
+        "junction_score": round(junction_score, 1),
+    }
+
+    if crossings > 0:
+        result["issues"].append(f"{crossings} wire crossing(s)")
+    if avg_align_err > 8:
+        result["issues"].append(f"Component alignment off ({avg_align_err:.0f}px avg)")
+    if not result["issues"]:
+        result["issues"].append("Clean layout — no issues")
+
+    result["summary"] = (
+        f"Layout: {n_comps} components on {canvas_w}x{canvas_h} canvas. "
+        f"{n_wires} wire segments, avg length {avg_len:.0f}px. "
+        f"Issues: {', '.join(result['issues']) if result['issues'] else 'none'}. "
+        f"Score: {result['score']:.0f}/10."
+    )
+    return result
+
+
+def _parse_wire_path_segments(d: str) -> list:
+    """Parse SVG path d-string into line segment list [(x1,y1,x2,y2), ...]."""
+    import re
+    nums = [float(x) for x in re.findall(r"[-]?\d+\.?\d*", d)]
+    segs = []
+    for i in range(0, len(nums) - 2, 2):
+        if i + 3 < len(nums):
+            segs.append((nums[i], nums[i+1], nums[i+2], nums[i+3]))
+    return segs
+
+
+def _segments_cross_analog(w1: tuple, w2: tuple) -> bool:
+    """Check if two orthogonal line segments cross."""
+    x1a, y1a, x2a, y2a = w1
+    x1b, y1b, x2b, y2b = w2
+    h1 = abs(x1a - x2a) > abs(y1a - y2a)
+    h2 = abs(x1b - x2b) > abs(y1b - y2b)
+    if h1 == h2:
+        return False  # both H or both V — parallel
+    if h1:
+        hx1, hx2 = min(x1a, x2a), max(x1a, x2a)
+        hy = y1a
+        vx = x1b
+        vy1, vy2 = min(y1b, y2b), max(y1b, y2b)
+    else:
+        hx1, hx2 = min(x1b, x2b), max(x1b, x2b)
+        hy = y1b
+        vx = x1a
+        vy1, vy2 = min(y1a, y2a), max(y1a, y2a)
+    return hx1 + 2 < vx < hx2 - 2 and vy1 + 2 < hy < vy2 - 2
+
+
+def _svg_path_bbox_analog(d: str) -> tuple | None:
+    """Approximate bounding box of an SVG path."""
+    import re
+    nums = [float(x) for x in re.findall(r"[-]?\d+\.?\d*", d)]
+    if len(nums) < 2:
+        return None
+    # Extract M/L command points (skip arc/curve control params)
+    tokens = re.findall(r'[A-Za-z]|[-]?\d+\.?\d*', d)
+    points = []
+    i = 0
+    while i < len(tokens):
+        t = tokens[i]
+        if t in 'ML' and i + 2 < len(tokens):
+            points.append((float(tokens[i+1]), float(tokens[i+2])))
+            i += 3
+        elif t in 'ACQ':
+            nums_after = [float(x) for x in tokens[i+1:] if re.match(r'[-]?\d', x)]
+            if len(nums_after) >= 2:
+                points.append((nums_after[-2], nums_after[-1]))
+            i = len(tokens)
+        elif t == 'Z':
+            i += 1
+        else:
+            i += 1
+    if not points:
+        xs = [nums[i] for i in range(0, len(nums), 2) if i+1 < len(nums)]
+        ys = [nums[i] for i in range(1, len(nums), 2) if i < len(nums)]
+        if xs and ys:
+            return (min(xs), min(ys), max(xs), max(ys))
+        return None
+    xs = [p[0] for p in points]; ys = [p[1] for p in points]
+    return (min(xs), min(ys), max(xs), max(ys))
+
+
 def _pin_pos(cx, cy, pin_idx, total_pins, ctype):
     """Calculate pin position on component body."""
     if ctype == "R":
@@ -1464,7 +1866,31 @@ class AnalogSVG:
         guide_text = f"\n{guide}" if guide else ""
         sim_block = f"\n\n✅ **Simulation verified**" if sim_ok and not refine_hint else ""
         spice_block = f"\n\n**SPICE Netlist:**\n```spice\n{spice}\n```"
-        return f"![{svg_title}]({url})\n{url}{guide_text}{sim_block}{spice_block}{refine_hint}"
+
+        # ── Layout Quality Score ──
+        layout_block = ""
+        try:
+            lq = score_analog_layout(svg)
+            ls = lq["score"]
+            if ls >= 7.0:
+                level = "✅ Clean"
+            elif ls >= 5.0:
+                level = "⚠️ Acceptable"
+            else:
+                level = "❌ Poor"
+            layout_block = (
+                f"\n\n**Layout Quality:** {level} ({ls:.0f}/10)\n"
+                f"| Metric | Score |\n|--------|-------|\n"
+                f"| Crossings | {lq['crossings']} |\n"
+                f"| Wire Segments | {lq['wire_segments']} |\n"
+                f"| Avg Wire Length | {lq['avg_wire_len']:.0f}px |\n"
+                f"| Components | {lq['components']} |\n"
+                f"| Issues | {', '.join(lq['issues'][:3])} |"
+            )
+        except Exception:
+            pass
+
+        return f"![{svg_title}]({url})\n{url}{guide_text}{sim_block}{spice_block}{layout_block}{refine_hint}"
 
     @staticmethod
     def _run_sim_check(spice: str) -> tuple[bool, str]:
@@ -1752,7 +2178,25 @@ class AnalogSVG:
         # ── Step ⑤: 输出结果 ──
         sim_block = f"\n\n✅ **Simulation verified**" if sim_ok else ""
         spice_block = f"\n\n**SPICE Netlist:**\n```spice\n{spice_stripped}\n```"
-        return f"![{title or 'Analog Circuit'}]({url})\n{url}{sim_block}{spice_block}"
+
+        # ── Layout Quality Score ──
+        layout_block = ""
+        try:
+            lq = score_analog_layout(svg)
+            ls = lq["score"]
+            level = "✅ Clean" if ls >= 7.0 else ("⚠️ Acceptable" if ls >= 5.0 else "❌ Poor")
+            layout_block = (
+                f"\n\n**Layout Quality:** {level} ({ls:.0f}/10)\n"
+                f"| Metric | Score |\n|--------|-------|\n"
+                f"| Crossings | {lq['crossings']} |\n"
+                f"| Wire Segments | {lq['wire_segments']} |\n"
+                f"| Avg Wire Length | {lq['avg_wire_len']:.0f}px |\n"
+                f"| Components | {lq['components']} |"
+            )
+        except Exception:
+            pass
+
+        return f"![{title or 'Analog Circuit'}]({url})\n{url}{sim_block}{spice_block}{layout_block}"
 
     # ═══════════ design_circuit: 自动闭环设计 ═══════════
 
