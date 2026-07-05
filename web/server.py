@@ -521,6 +521,19 @@ async def health():
     }
 
 
+@app.get("/changelog")
+async def changelog():
+    """Serve the project changelog."""
+    from fastapi.responses import PlainTextResponse
+    changelog_path = Path(__file__).parent.parent / "CHANGELOG.md"
+    if changelog_path.exists():
+        return PlainTextResponse(
+            changelog_path.read_text(encoding="utf-8"),
+            media_type="text/plain; charset=utf-8",
+        )
+    return {"error": "CHANGELOG.md not found"}
+
+
 # ── Digital Circuit API ─────────────────────────────
 
 @app.post("/api/digital-circuit")
