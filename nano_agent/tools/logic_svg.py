@@ -205,11 +205,11 @@ class LogicSVG:
 
         if n_gates <= 10:
             spacings = [(150, 130), (180, 160)]
-            sortings = ["barycenter", "natural"]
+            sortings = ["barycenter", "median", "natural"]
             channels = [28, 40]
         elif n_gates <= 30:
             spacings = [(240, 220), (300, 280), (360, 340)]
-            sortings = ["barycenter", "natural"]
+            sortings = ["barycenter", "median", "natural"]
             channels = [40, 52, 64]
         else:
             spacings = [(340, 300), (440, 380), (580, 480)]
@@ -552,6 +552,62 @@ class LogicSVG:
                 for d in sorted(cols.keys()):
                     for ri, gi in enumerate(cols[d]):
                         row_of[gi] = ri
+        elif _sorting == "median":
+            # 3-pass Median heuristic: use median instead of mean for robustness
+            for _pass in range(3):
+                # Left → right: sort by input median
+                for d in sorted(cols.keys()):
+                    if d == 1 and not inputs:
+                        continue
+                    med = {}
+                    for gi in cols[d]:
+                        g = gates[gi]
+                        input_rows = []
+                        for inp in g["inputs"]:
+                            wpos = wire_pos(inp)
+                            if wpos:
+                                input_rows.append(wpos[1])
+                        if input_rows:
+                            sorted_rows = sorted(input_rows)
+                            n = len(sorted_rows)
+                            if n % 2 == 1:
+                                m = sorted_rows[n // 2]
+                            else:
+                                m = (sorted_rows[n // 2 - 1] + sorted_rows[n // 2]) / 2
+                            if _rng is not None:
+                                m += _rng.uniform(-1.0, 1.0)
+                            med[gi] = m
+                        else:
+                            med[gi] = float("inf")
+                    cols[d].sort(key=lambda gi: (med[gi], row_of.get(gi, 0)))
+                for d in sorted(cols.keys()):
+                    for ri, gi in enumerate(cols[d]):
+                        row_of[gi] = ri
+                # Right → left: sort by output median
+                for d in sorted(cols.keys(), reverse=True):
+                    med = {}
+                    for gi in cols[d]:
+                        out_name = gates[gi]["output"]
+                        consumer_rows = []
+                        for cgi in consumed_by.get(out_name, []):
+                            if cgi in row_of:
+                                consumer_rows.append(row_of[cgi])
+                        if consumer_rows:
+                            sorted_rows = sorted(consumer_rows)
+                            n = len(sorted_rows)
+                            if n % 2 == 1:
+                                m = sorted_rows[n // 2]
+                            else:
+                                m = (sorted_rows[n // 2 - 1] + sorted_rows[n // 2]) / 2
+                            if _rng is not None:
+                                m += _rng.uniform(-1.0, 1.0)
+                            med[gi] = m
+                        else:
+                            med[gi] = float("inf")
+                    cols[d].sort(key=lambda gi: (med[gi], row_of.get(gi, 0)))
+                for d in sorted(cols.keys()):
+                    for ri, gi in enumerate(cols[d]):
+                        row_of[gi] = ri
         else:
             # Large circuits: natural ordering by input signal index
             # (preserves bit-slice structure in adders, ALUs, etc.)
@@ -742,25 +798,29 @@ class LogicSVG:
         max_gate_x = max(gx for gx, _ in gate_positions.values()) if gate_positions else 400
         output_col_x = max_gate_x + col_gap * 0.6
         output_y_map = {}
-        # Place output ports near their source gates, with collision avoidance
-        out_idx = 0
-        used_y = set()
+        # Place each output port at its driving gate's Y, with stub wire connection.
+        # Only offset if multiple outputs share the exact same Y (rare, e.g. same gate).
+        gate_output_counts = {}  # gate_idx → how many outputs from this gate
+        used_ys = {}  # y_int → count
         for name in sorted(outputs):
             if name in produced_by:
                 gi = produced_by[name]
-                y = gate_y.get(gi, 50 + out_idx * ROW_SPACING + ROW_SPACING // 2)
+                base_y = gate_y.get(gi, 50 + len(output_y_map) * ROW_SPACING + ROW_SPACING // 2)
+                # Track outputs per gate for micro-offset
+                count = gate_output_counts.get(gi, 0)
+                gate_output_counts[gi] = count + 1
+                y = base_y + count * (self.PORT_H + 2)
             else:
-                y = 50 + out_idx * ROW_SPACING + ROW_SPACING // 2
-            # Avoid overlapping output ports: if Y already used, offset vertically
+                y = 50 + len(output_y_map) * ROW_SPACING + ROW_SPACING // 2
+            # Collision check: if a different gate's output already uses this Y, nudge
             y_int = round(y)
-            while y_int in used_y:
-                y += self.PORT_H + 4
+            while y_int in used_ys and used_ys[y_int] != gi:
+                y += self.PORT_H + 2
                 y_int = round(y)
-            used_y.add(y_int)
+            used_ys[y_int] = gi
             output_y_map[name] = y
             port_positions[name] = (output_col_x, y, False)
             self._draw_port(svg, output_col_x, y, name, False)
-            out_idx += 1
 
         # ── Draw wires with strict column-gap routing ──
         # Build sorted list of all safe vertical channels (gaps between gate columns)
