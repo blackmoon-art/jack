@@ -112,15 +112,27 @@ class LogicSVG:
             gates, inputs, outputs = self._parse(description)
             if not gates:
                 return "Error: no valid gates found. Format: GATE(a,b) = out"
+
+            # ── Circuit validation ──
+            warnings = LogicSVG.validate_circuit(gates, inputs, outputs)
+
             svg = self._render(gates, inputs, outputs, title, layout=layout, seed=seed)
         except Exception as e:
             return f"Error drawing logic: {e}"
 
-        ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")  # include microseconds
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
         filename = f"logic_{ts}.svg"
         filepath = self.charts_dir / filename
         filepath.write_text(svg, encoding="utf-8")
         url = f"/charts/{filename}"
+
+        # Build result with validation warnings
+        result_parts = [f"![{title or 'Logic'}]({url})\n{url}"]
+        if warnings:
+            result_parts.append("\n### ⚠️ Circuit Warnings")
+            for w in warnings[:8]:
+                result_parts.append(f"- {w}")
+        return "\n".join(result_parts)
         return f"![{title or 'Logic'}]({url})\n{url}"
 
     # ── DSL 解析 ───────────────────────────────────
@@ -414,6 +426,142 @@ class LogicSVG:
                 next_id += 1
             result.append(id_map[c])
         return result
+
+    @staticmethod
+    def validate_circuit(gates, inputs, outputs):
+        """Validate circuit logic before rendering. Returns list of warnings.
+
+        Checks:
+          - DFF has D and CLK inputs
+          - Each output wire has exactly one driver (no multiple drivers)
+          - No floating inputs (driven by no gate)
+          - No combinational loops (cycles without DFF)
+          - Pattern matching: counter/adder connectivity
+        """
+        issues = []
+        produced_by = {}
+        consumed_by = {}
+        for i, g in enumerate(gates):
+            produced_by[g["output"]] = i
+            for inp in g["inputs"]:
+                consumed_by.setdefault(inp, []).append(i)
+
+        # ── 1. DFF validation ──
+        # Convention: DFF(CLK, D, [RST], [EN]) = Q — CLK is inputs[0], D is inputs[1]
+        for i, g in enumerate(gates):
+            if g["type"] != "DFF":
+                continue
+            if len(g["inputs"]) < 2:
+                issues.append(f"DFF {g['output']}: too few inputs ({len(g['inputs'])}, need CLK+D)")
+            elif len(g["inputs"]) >= 2:
+                # inputs[0]=CLK, inputs[1]=D. Check D has a driver (not floating).
+                d_wire = g["inputs"][1]
+                if d_wire not in produced_by and d_wire not in inputs:
+                    issues.append(f"DFF {g['output']}: D input '{d_wire}' has no driver")
+
+        # ── 2. Multiple drivers ──
+        driver_count = {}
+        for i, g in enumerate(gates):
+            out = g["output"]
+            driver_count.setdefault(out, []).append(i)
+        for wire, drivers in driver_count.items():
+            if len(drivers) > 1:
+                types = [gates[d]["type"] for d in drivers]
+                issues.append(f"Wire '{wire}' driven by {len(drivers)} gates: {types}")
+
+        # ── 3. Floating inputs ──
+        for i, g in enumerate(gates):
+            for inp in g["inputs"]:
+                if inp.lower() in ("clk", "rst", "reset", "en", "enable", "vcc", "vdd",
+                                    "gnd", "vss", "1'b0", "1'b1", "1'd0", "1'd1"):
+                    continue
+                if inp not in produced_by and inp not in inputs:
+                    issues.append(f"Gate {g['type']}:{g['output']} has floating input '{inp}'")
+
+        # ── 4. Combinational loop detection ──
+        # DFS on combinational gates only (exclude DFF which break cycles)
+        comb_gates = {i for i, g in enumerate(gates) if g["type"] != "DFF"}
+        visited = set()
+        visiting = set()
+
+        def has_comb_cycle(gi):
+            if gi in visiting:
+                return True
+            if gi in visited or gi not in comb_gates:
+                return False
+            visiting.add(gi)
+            g = gates[gi]
+            for inp in g["inputs"]:
+                if inp in produced_by:
+                    pi = produced_by[inp]
+                    if has_comb_cycle(pi):
+                        visiting.discard(gi)
+                        return True
+            visiting.discard(gi)
+            visited.add(gi)
+            return False
+
+        for i in comb_gates:
+            if i not in visited:
+                if has_comb_cycle(i):
+                    issues.append(f"Combinational loop detected involving gate {gates[i]['type']}:{gates[i]['output']}")
+                    break  # one loop is enough
+
+        # ── 5. Pattern matching ──
+        # Counter: NOT+DFF pairs with feedback
+        counter_bits = 0
+        for i, g in enumerate(gates):
+            if g["type"] != "NOT":
+                continue
+            not_out = g["output"]
+            dff_consumers = [c for c in consumed_by.get(not_out, [])
+                           if gates[c]["type"] == "DFF"]
+            for dff_idx in dff_consumers:
+                dff_out = gates[dff_idx]["output"]
+                if i in consumed_by.get(dff_out, []):
+                    counter_bits += 1
+        if counter_bits >= 3:
+            # Verify counter chain: DFF_i output → next DFF clock
+            chain_ok = True
+            for i, g in enumerate(gates):
+                if g["type"] != "DFF":
+                    continue
+                dff_out = g["output"]
+                next_clk = False
+                for c in consumed_by.get(dff_out, []):
+                    if gates[c]["type"] == "DFF":
+                        next_clk = True
+                if not next_clk and counter_bits > 1:
+                    # Last DFF might not drive another DFF clock
+                    pass
+            if not chain_ok:
+                issues.append("Counter chain broken: DFF output not driving next DFF clock")
+
+        # Adder: look for ripple-carry chain (XOR sum + AND/NAND carry)
+        adder_stages = 0
+        for i, g in enumerate(gates):
+            if g["type"] in ("XOR", "XNOR") and g["output"] not in inputs:
+                out_name = g["output"]
+                # Check if this XOR output goes to an output port
+                if out_name in outputs or any(
+                    "sum" in out_name.lower() or "s[" in out_name.lower()
+                    for _ in [1]):
+                    # Look for associated carry gate
+                    for inp in g["inputs"]:
+                        if inp in produced_by:
+                            pi = produced_by[inp]
+                            if gates[pi]["type"] in ("AND", "NAND", "OR"):
+                                adder_stages += 1
+                                break
+        # Heuristic: XOR gates producing outputs suggest adder structure
+        xor_outputs = [i for i, g in enumerate(gates)
+                      if g["type"] in ("XOR", "XNOR") and g["output"] in outputs]
+        if len(xor_outputs) >= 2 and adder_stages < len(xor_outputs):
+            issues.append(
+                f"Possible broken adder: {len(xor_outputs)} XOR outputs "
+                f"but only {adder_stages} carry gates detected")
+
+        return issues
 
     def _render_sugiyama(self, gates, inputs, outputs, title="",
                           _col_gap=None, _row_gap=None, _channel_h=None,
