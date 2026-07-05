@@ -578,18 +578,76 @@ class LogicSVG:
             for gi in cols[d]:
                 col_of[gi] = col_idx
 
+        # ── Phase 2.5: Compaction — tighten sparse adjacent columns ──
+        # Build reverse map: column index → list of gate indices
+        col_gates = {}
+        for gi, ci in col_of.items():
+            col_gates.setdefault(ci, []).append(gi)
+        # Count wires between adjacent column pairs
+        wire_count_between = {}  # (col_i, col_j) → wire count
+        for gi, g in enumerate(gates):
+            gi_col = col_of.get(gi)
+            if gi_col is None:
+                continue
+            for inp in g["inputs"]:
+                if inp in produced_by:
+                    pi = produced_by[inp]
+                    pi_col = col_of.get(pi)
+                    if pi_col is not None and pi_col != gi_col:
+                        key = (min(pi_col, gi_col), max(pi_col, gi_col))
+                        wire_count_between[key] = wire_count_between.get(key, 0) + 1
+        # Assign gap multipliers based on gate count AND wire density
+        compacted_gap = {}  # old_col → gap multiplier
+        sorted_cols = sorted(col_gates.keys())
+        for i, col in enumerate(sorted_cols):
+            n_gates = len(col_gates[col])
+            # Check wire density to adjacent columns
+            n_wires_left = wire_count_between.get((col - 1, col), 0) if col > min(sorted_cols) else 0
+            n_wires_right = wire_count_between.get((col, col + 1), 0) if col < max(sorted_cols) else 0
+            max_wires = max(n_wires_left, n_wires_right)
+            # Only compact truly sparse columns with minimal wiring (≤1 wire crossing)
+            if n_gates <= 1 and max_wires <= 1:
+                compacted_gap[col] = 0.75
+            elif n_gates == 0:
+                compacted_gap[col] = 0.5  # empty column (unlikely but possible)
+            else:
+                compacted_gap[col] = 1.0
+
         # ── Phase 3: Y-position assignment with routing channels ──
         # Add extra spacing between rows for routing tracks
         max_gates_in_col = max(len(v) for v in cols.values()) if cols else 1
         ROW_SPACING = row_gap + channel_h  # add routing channels
         svg_h = max(max_gates_in_col, len(inputs), len(outputs)) * ROW_SPACING + 80
-        svg_w = total_cols * col_gap + 100
 
-        # Gate Y positions
+        # Compute compacted column X positions
+        compacted_col_x = {}
+        cx = 60 + (col_gap if inputs else 0)  # first gate column after input
+        prev_col = -1
+        for col in sorted(compacted_gap.keys()):
+            if prev_col >= 0:
+                # Use average of the two gaps
+                gap = col_gap * (compacted_gap.get(prev_col, 1.0) + compacted_gap.get(col, 1.0)) / 2
+                cx += gap
+            compacted_col_x[col] = cx
+            prev_col = col
+        total_compacted_width = cx + col_gap + 100
+        svg_w = max(total_cols * col_gap + 100, int(total_compacted_width))
+
+        # Gate positions (X from compacted columns, Y from row index)
         gate_y = {}  # gate_index → y center
         for d in sorted(cols.keys()):
             for ri, gi in enumerate(cols[d]):
                 gate_y[gi] = 50 + ri * ROW_SPACING + ROW_SPACING // 2
+        # Compute compacted gate X positions
+        gate_positions_temp = {}
+        for gi, ci in col_of.items():
+            gx = compacted_col_x.get(ci, 60 + ci * col_gap)
+            gy = gate_y[gi]
+            gate_positions_temp[gi] = (gx, gy)
+        # Update svg_w from compacted width
+        if gate_positions_temp:
+            max_gx = max(gx for gx, _ in gate_positions_temp.values())
+            svg_w = max(svg_w, int(max_gx + col_gap + 60))
 
         # Feedback bus: reserve space below all gates for routing feedback edges
         max_gate_y = max(gate_y.values()) + self.H // 2 if gate_y else 100
@@ -661,9 +719,10 @@ class LogicSVG:
         # ── Draw gates ──
         gate_positions = {}
         for d in sorted(cols.keys()):
-            gx = 60 + (d + (1 if inputs else 0)) * col_gap
+            # Use compacted X if available, otherwise fall back to uniform grid
             for ri, gi in enumerate(cols[d]):
                 g = gates[gi]
+                gx = gate_positions_temp.get(gi, (60 + (d + (1 if inputs else 0)) * col_gap, 0))[0]
                 gy = gate_y[gi]
                 gate_positions[gi] = (gx, gy)
                 self._draw_gate(svg, gx, gy, g["type"], g.get("label", ""))
@@ -680,7 +739,8 @@ class LogicSVG:
                 port_positions[out_name] = (out_x, out_y, False)
 
         # ── Draw output ports ──
-        output_col_x = 60 + (max_depth + (1 if inputs else 0)) * col_gap + 40
+        max_gate_x = max(gx for gx, _ in gate_positions.values()) if gate_positions else 400
+        output_col_x = max_gate_x + col_gap * 0.6
         output_y_map = {}
         # Place output ports near their source gates, with collision avoidance
         out_idx = 0
