@@ -102,16 +102,17 @@ class LogicSVG:
         self.charts_dir.mkdir(parents=True, exist_ok=True)
 
     def draw_logic(self, description: str, title: str = "",
-                    layout: str = "sugiyama") -> str:
+                    layout: str = "sugiyama", seed: int | None = None) -> str:
         """解析 DSL → 布局 → 渲染 SVG。
 
         layout param kept for API compatibility.
+        seed: if set, perturbs barycenter weights for layout variation on retry.
         """
         try:
             gates, inputs, outputs = self._parse(description)
             if not gates:
                 return "Error: no valid gates found. Format: GATE(a,b) = out"
-            svg = self._render(gates, inputs, outputs, title, layout=layout)
+            svg = self._render(gates, inputs, outputs, title, layout=layout, seed=seed)
         except Exception as e:
             return f"Error drawing logic: {e}"
 
@@ -185,16 +186,17 @@ class LogicSVG:
     }
     FONT = "monospace"
 
-    def _render(self, gates, inputs, outputs, title="", layout="sugiyama") -> str:
+    def _render(self, gates, inputs, outputs, title="", layout="sugiyama", seed=None) -> str:
         """Layout + SVG rendering. layout param kept for API compat, always Sugiyama."""
-        return self._render_iterative(gates, inputs, outputs, title)
+        return self._render_iterative(gates, inputs, outputs, title, seed=seed)
 
     def _render_iterative(self, gates, inputs, outputs, title="",
-                           max_attempts=16, target_score=8.0) -> str:
+                           max_attempts=16, target_score=8.0, seed=None) -> str:
         """Metric-driven iterative layout: try different params, score with SVG analyzer, keep best.
 
         Uses the same score_layout_quality() that the gate check uses,
         ensuring internal optimization and gate threshold are aligned.
+        seed: if set, passed through to barycenter perturbation for layout variation.
         """
         n_gates = len(gates)
         best_svg = None
@@ -224,7 +226,7 @@ class LogicSVG:
                     try:
                         svg_xml = self._render_sugiyama_with_params(
                             gates, inputs, outputs, title,
-                            col_gap, row_gap, channel_h, sorting)
+                            col_gap, row_gap, channel_h, sorting, seed=seed)
                         s = LogicSVG.score_layout_quality(svg_xml).get("score", 0)
                         candidates.append((s, svg_xml,
                             f"sugiyama gap={col_gap}/{row_gap} sort={sorting} ch={channel_h}"))
@@ -340,15 +342,16 @@ class LogicSVG:
 
     def _render_sugiyama_with_params(self, gates, inputs, outputs, title,
                                       col_gap, row_gap, channel_h,
-                                      sorting="barycenter") -> str:
+                                      sorting="barycenter", seed=None) -> str:
         """Render Sugiyama with explicit parameters (no auto-scaling)."""
         return self._render_sugiyama(gates, inputs, outputs, title,
                                      _col_gap=col_gap, _row_gap=row_gap,
-                                     _channel_h=channel_h, _sorting=sorting)
+                                     _channel_h=channel_h, _sorting=sorting,
+                                     _seed=seed)
 
     def _render_sugiyama(self, gates, inputs, outputs, title="",
                           _col_gap=None, _row_gap=None, _channel_h=None,
-                          _sorting=None) -> str:
+                          _sorting=None, _seed=None) -> str:
         """Classic Sugiyama layered layout (for small circuits ≤10 gates)."""
         LogicSVG._wire_seq = 0
         n_gates = len(gates)
@@ -370,7 +373,7 @@ class LogicSVG:
             channel_h = 20
             sorting = "natural"
 
-        # ── Phase 1: Topological depth assignment ──
+        # ── Phase 1: Topological depth assignment with feedback detection ──
         produced_by = {}
         consumed_by = {}  # wire_name → [(gate_index, input_index), ...]
         for i, g in enumerate(gates):
@@ -378,25 +381,51 @@ class LogicSVG:
             for inp in g["inputs"]:
                 consumed_by.setdefault(inp, []).append(i)
 
+        # Feedback edges: (producer_gate_idx, consumer_gate_idx, wire_name)
+        # These are cycle-closing edges — routing them through a dedicated bus
+        # avoids crossing forward-going wires.
+        feedback_edges = set()
+
         depth = {}
         visiting = set()
-        def get_depth(gi):
+        def get_depth(gi, from_gate=None):
             if gi in depth:
                 return depth[gi]
             if gi in visiting:
+                # Cycle detected: edge from parent to gi is feedback
+                if from_gate is not None:
+                    # Find which wire connects from_gate → gi
+                    g_out = gates[from_gate]["output"]
+                    if g_out in consumed_by:
+                        for cgi in consumed_by[g_out]:
+                            if cgi == gi:
+                                feedback_edges.add((from_gate, gi, g_out))
+                                break
                 return 1
             visiting.add(gi)
             g = gates[gi]
             max_in = 0
             for inp in g["inputs"]:
                 if inp in produced_by:
-                    max_in = max(max_in, get_depth(produced_by[inp]))
+                    producer = produced_by[inp]
+                    # Skip known feedback edges to make graph acyclic
+                    if (producer, gi, inp) in feedback_edges:
+                        continue
+                    max_in = max(max_in, get_depth(producer, gi))
             visiting.discard(gi)
             depth[gi] = max_in + 1
             return depth[gi]
 
         for i in range(len(gates)):
             get_depth(i)
+
+        # Second pass: re-run depth assignment ignoring ALL feedback edges
+        # (some edges weren't marked in first pass because the cycle was
+        # detected from the other direction)
+        if feedback_edges:
+            depth.clear()
+            for i in range(len(gates)):
+                get_depth(i)
 
         # Group gates by depth
         cols = {}
@@ -422,6 +451,13 @@ class LogicSVG:
         else:
             input_col = -1
 
+        # Seed-based initial row randomization for layout variation on retry
+        import random as _random
+        _rng = _random.Random(_seed) if _seed is not None else None
+        if _rng is not None:
+            for d in cols:
+                _rng.shuffle(cols[d])
+
         for d in sorted(cols.keys()):
             col_idx = d + (1 if inputs else 0)
             for ri, gi in enumerate(cols[d]):
@@ -442,13 +478,12 @@ class LogicSVG:
 
         # Phase 2: Sorting strategy
         if sorting == "random":
-            import random as _random
             for d in sorted(cols.keys()):
-                _random.shuffle(cols[d])
+                (_rng or _random).shuffle(cols[d])
                 for ri, gi in enumerate(cols[d]):
                     row_of[gi] = ri
         elif sorting == "natural":
-            # Natural ordering by input signal index
+            # Natural ordering by input signal index (+ seed jitter)
             def _input_order(gi):
                 g = gates[gi]
                 for inp in g["inputs"]:
@@ -457,7 +492,10 @@ class LogicSVG:
                         return int(m.group(1))
                 return 0
             for d in sorted(cols.keys()):
-                cols[d].sort(key=_input_order)
+                if _rng is not None:
+                    cols[d].sort(key=lambda gi: _input_order(gi) + _rng.uniform(-1.5, 1.5))
+                else:
+                    cols[d].sort(key=_input_order)
                 for ri, gi in enumerate(cols[d]):
                     row_of[gi] = ri
         elif _sorting is not None or n_gates <= 20:
@@ -475,7 +513,10 @@ class LogicSVG:
                             wpos = wire_pos(inp)
                             if wpos:
                                 input_rows.append(wpos[1])
-                        bary[gi] = sum(input_rows) / len(input_rows) if input_rows else float("inf")
+                        b = sum(input_rows) / len(input_rows) if input_rows else float("inf")
+                        if _rng is not None:
+                            b += _rng.uniform(-1.5, 1.5)
+                        bary[gi] = b
                     cols[d].sort(key=lambda gi: (bary[gi], row_of.get(gi, 0)))
 
                 for d in sorted(cols.keys()):
@@ -491,7 +532,10 @@ class LogicSVG:
                         for cgi in consumed_by.get(out_name, []):
                             if cgi in row_of:
                                 consumer_rows.append(row_of[cgi])
-                        bary[gi] = sum(consumer_rows) / len(consumer_rows) if consumer_rows else float("inf")
+                        b = sum(consumer_rows) / len(consumer_rows) if consumer_rows else float("inf")
+                        if _rng is not None:
+                            b += _rng.uniform(-1.5, 1.5)
+                        bary[gi] = b
                     cols[d].sort(key=lambda gi: (bary[gi], row_of.get(gi, 0)))
 
                 for d in sorted(cols.keys()):
@@ -510,7 +554,10 @@ class LogicSVG:
                         return int(m.group(1))
                 return 0
             for d in sorted(cols.keys()):
-                cols[d].sort(key=_input_order)
+                if _rng is not None:
+                    cols[d].sort(key=lambda gi: _input_order(gi) + _rng.uniform(-1.5, 1.5))
+                else:
+                    cols[d].sort(key=_input_order)
                 for ri, gi in enumerate(cols[d]):
                     row_of[gi] = ri
 
@@ -533,6 +580,17 @@ class LogicSVG:
             for ri, gi in enumerate(cols[d]):
                 gate_y[gi] = 50 + ri * ROW_SPACING + ROW_SPACING // 2
 
+        # Feedback bus: reserve space below all gates for routing feedback edges
+        max_gate_y = max(gate_y.values()) + self.H // 2 if gate_y else 100
+        FEEDBACK_BUS_Y = max_gate_y + 30
+        FEEDBACK_TRACK_H = 10  # vertical spacing per feedback wire
+        svg_h = max(svg_h, FEEDBACK_BUS_Y + len(feedback_edges) * FEEDBACK_TRACK_H + 40)
+
+        # Build quick lookup: (to_gate_idx, input_wire_name) is feedback
+        feedback_lookup = set()
+        for (fg, tg, wn) in feedback_edges:
+            feedback_lookup.add((tg, wn))
+
         # ── Channel routing: assign each wire a unique track ──
         # Track index → horizontal position between columns
         # We assign tracks per column-pair to avoid overlapping wires
@@ -551,10 +609,11 @@ class LogicSVG:
             col_track_counters[key] = track + 1
             return track
 
-        # Pre-assign tracks for all connections
+        # Pre-assign tracks for all connections (skip feedback edges)
         for gi, g in enumerate(gates):
             for inp in g["inputs"]:
-                assign_track(inp, gi)
+                if (gi, inp) not in feedback_lookup:
+                    assign_track(inp, gi)
 
         # ── Build SVG ──
         svg = ET.Element("svg", {
@@ -671,7 +730,6 @@ class LogicSVG:
             return mid
 
         gap_tracks = {}
-        feedback_track = 0
 
         for gi, g in enumerate(gates):
             gx, gy = gate_positions[gi]
@@ -680,36 +738,53 @@ class LogicSVG:
             for ii, inp_name in enumerate(g["inputs"]):
                 if inp_name not in port_positions:
                     continue
+                # Skip feedback edges — routed separately via dedicated bus
+                if (gi, inp_name) in feedback_lookup:
+                    continue
+
                 px, py, _ = port_positions[inp_name]
                 iy_off = (ii - (nin - 1) / 2) * self.IY
                 gix = gx - self.W // 2 - self.PIN
                 giy = gy + iy_off
 
-                # Detect feedback: source is to the RIGHT of destination
-                is_feedback = (px > gix + 20)
+                mid_x = route_mid(px, gix)
+                ch_key = round(mid_x)
+                track = gap_tracks.get(ch_key, 0)
+                gap_tracks[ch_key] = track + 1
+                mid_x += (track - 1) * 4
 
-                if is_feedback:
-                    # Same-column or adjacent: route vertically within column
-                    # For far feedback, route through column gaps normally
-                    if abs(px - gix) < col_gap * 1.5:
-                        # Close: route with detour check
-                        mid_x = (px + gix) / 2
-                        self._route_with_detour(svg, gate_positions, px, py, mid_x, gix, giy)
-                    else:
-                        mid_x = route_mid(px, gix)
-                        ch_key = round(mid_x)
-                        track = gap_tracks.get(ch_key, 0)
-                        gap_tracks[ch_key] = track + 1
-                        mid_x += (track - 1) * 4
-                        self._route_with_detour(svg, gate_positions, px, py, mid_x, gix, giy)
-                else:
-                    mid_x = route_mid(px, gix)
-                    ch_key = round(mid_x)
-                    track = gap_tracks.get(ch_key, 0)
-                    gap_tracks[ch_key] = track + 1
-                    mid_x += (track - 1) * 4
+                self._route_with_detour(svg, gate_positions, px, py, mid_x, gix, giy)
 
-                    self._route_with_detour(svg, gate_positions, px, py, mid_x, gix, giy)
+        # ── Draw feedback edges through dedicated bus below all gates ──
+        feedback_track = 0
+        for (fg, tg, wn) in sorted(feedback_edges):
+            if fg not in gate_positions or tg not in gate_positions:
+                continue
+            fgx, fgy = gate_positions[fg]
+            tgx, tgy = gate_positions[tg]
+
+            # Find which input of tg uses wire wn
+            tg_gate = gates[tg]
+            try:
+                inp_idx = tg_gate["inputs"].index(wn)
+            except ValueError:
+                continue
+            tg_iy_off = (inp_idx - (len(tg_gate["inputs"]) - 1) / 2) * self.IY
+
+            # Start: from_gate output pin (right side)
+            sx = fgx + self.W // 2 + self.PIN
+            sy = fgy
+            # End: to_gate input pin (left side)
+            ex = tgx - self.W // 2 - self.PIN
+            ey = tgy + tg_iy_off
+            # Feedback bus Y level
+            fy = FEEDBACK_BUS_Y + feedback_track * FEEDBACK_TRACK_H
+            feedback_track += 1
+
+            # Orthogonal route: out → down → left → up → in
+            self._draw_wire_seg(svg, sx, sy, sx, fy)       # down to bus
+            self._draw_wire_seg(svg, sx, fy, ex, fy)       # left along bus
+            self._draw_wire_seg(svg, ex, fy, ex, ey)       # up to input pin
 
         # ── Draw output port connections ──
         for gi, g in enumerate(gates):
@@ -1071,14 +1146,14 @@ class LogicSVG:
         gate_span_x = max(gxs) - min(gxs) if gxs else 0
         gate_span_y = max(g[1] for g in gates) - min(g[1] for g in gates) if gates else 0
 
-        # ── Weighted scoring: cross 0.30, wire_len 0.20, density 0.15, hierarchy 0.15, fanout 0.10, aspect 0.10 ──
+        # ── Weighted scoring: cross+overlap 0.60, density 0.20, wire_len/hierarchy/fanout/aspect 0.05 each ──
         import math
 
         # 1. Cross+overlap score (0.60): cross weight 3, overlap weight 4
         cross_ratio = result["crossings"] / n_gates
         overlap_ratio = result["overlaps"] / n_gates
-        cross_sub = 10 * math.exp(-cross_ratio / 300.0)
-        overlap_sub = 10 * math.exp(-overlap_ratio / 200.0)
+        cross_sub = 10 * math.exp(-cross_ratio / 1.0)
+        overlap_sub = 10 * math.exp(-overlap_ratio / 0.5)
         cross_score = (3 * cross_sub + 4 * overlap_sub) / 7
 
         # 2. Wire length score (0.20)
