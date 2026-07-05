@@ -416,9 +416,9 @@ class DigitalCircuit:
             parts.append(f"```verilog\n{verilog}\n```")
             return "\n".join(parts)
 
-        if gate_count > 500:
+        if gate_count > 2000:
             parts.append(f"⚠️ Synthesis complete — **{gate_count} gates** (too many!)")
-            parts.append("⛔ **Gate: Gate count >500 → Return to Stage 1 (simplify circuit)**")
+            parts.append("⛔ **Gate: Gate count >2000 → Return to Stage 1 (simplify circuit)**")
             parts.append(f"```verilog\n{verilog}\n```")
             return "\n".join(parts)
         elif gate_count == 0:
@@ -546,6 +546,9 @@ class DigitalCircuit:
 
     def _llm_generate_verilog(self, description: str) -> str:
         """Use LLM to generate Verilog code for a circuit description."""
+        if self.llm is None:
+            logger.warning("LLM not configured, cannot generate Verilog")
+            return ""
         try:
             messages = [{"role": "user", "content": (
                 "Generate synthesizable Verilog for this circuit. "

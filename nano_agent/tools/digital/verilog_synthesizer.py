@@ -39,11 +39,11 @@ def synthesize(verilog: str, top_module: str = "") -> dict:
         top_module = m.group(1) if m else "top"
 
     tmpdir = Path(tempfile.mkdtemp(prefix="yosys_"))
-    v_path = tmpdir / "dut.v"
-    json_path = tmpdir / "netlist.json"
-    verilog_path = tmpdir / "netlist.v"
-
     try:
+        v_path = tmpdir / "dut.v"
+        json_path = tmpdir / "netlist.json"
+        verilog_path = tmpdir / "netlist.v"
+
         v_path.write_text(verilog.strip())
 
         # yosys synthesis: synth → simplemap (force gate-level) → write_json → stat
@@ -156,6 +156,14 @@ stat -top {top_module}
         return {"success": False, "gate_netlist": "",
                 "gate_count": 0, "cell_types": {},
                 "errors": [str(e)], "warnings": []}
+    finally:
+        # Clean up temp directory
+        import shutil
+        try:
+            if tmpdir.exists():
+                shutil.rmtree(tmpdir)
+        except Exception:
+            pass
 
 
 def _yosys_netlist_to_logic_dsl(gate_netlist: str = "", cells: list | None = None,

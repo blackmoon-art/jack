@@ -117,9 +117,10 @@ def run_simulation(vvp_path: str) -> dict:
         errors = []
         for line in lines:
             upper = line.upper()
-            if "PASS" in upper:
+            # Word-boundary match: "PASS:" or "PASS " as a standalone token
+            if re.search(r'\bPASS\b', upper):
                 passed += 1
-            if "FAIL" in upper or "ERROR" in upper:
+            if re.search(r'\bFAIL\b', upper) or re.search(r'\bERROR\b', upper):
                 failed += 1
                 errors.append(line[:300])
 
@@ -144,11 +145,18 @@ def run_simulation(vvp_path: str) -> dict:
 
 
 def cleanup_vvp(vvp_path: str):
-    """Clean up temporary vvp file."""
+    """Clean up temporary vvp file and its parent temp directory."""
     p = Path(vvp_path)
     try:
         if p.exists():
             p.unlink(missing_ok=True)
+    except Exception:
+        pass
+    # Also remove the temp directory (contains dut.v, tb.v)
+    try:
+        import shutil
+        if p.parent.exists() and p.parent.name.startswith("iverilog_"):
+            shutil.rmtree(p.parent)
     except Exception:
         pass
 
@@ -197,6 +205,10 @@ def auto_testbench(verilog: str, num_vectors: int = 8) -> str:
             if dir_match.group(4):
                 current_width = dir_match.group(4).strip()
             token = dir_match.group(5).strip()
+            # Strip leftover type keywords from the name portion
+            token = re.sub(r'\b(reg|wire|logic|input|output)\b\s*', '', token).strip()
+        if not token:
+            continue
         # Parse port name(s) on this line
         for part in token.split(","):
             name = part.strip()
@@ -209,6 +221,15 @@ def auto_testbench(verilog: str, num_vectors: int = 8) -> str:
 
     if not inputs and not outputs:
         return ""
+
+    # Detect clock and reset ports for proper stimulus generation
+    _CLK_NAMES = {"clk", "clock"}
+    _RST_NAMES = {"rst", "reset", "rst_n", "reset_n"}
+    clk_ports = [n for n, _ in inputs if n.lower() in _CLK_NAMES]
+    rst_ports = [n for n, _ in inputs if n.lower() in _RST_NAMES]
+    # Non-clock, non-reset inputs get random stimulus
+    data_inputs = [(n, w) for n, w in inputs
+                   if n.lower() not in _CLK_NAMES and n.lower() not in _RST_NAMES]
 
     # Build testbench
     tb_lines = [f"module tb;"]
@@ -235,16 +256,30 @@ def auto_testbench(verilog: str, num_vectors: int = 8) -> str:
         [f".{n}({n})" for n, _ in outputs])
     tb_lines.append(f"  {top} uut({port_list});")
 
+    # Clock oscillator for clock ports
+    for clk in clk_ports:
+        tb_lines.append(f"  always #5 {clk} = ~{clk};")
+
     # Test vectors
     tb_lines.append("  initial begin")
     tb_lines.append('    $display("Auto-testbench for ' + top + '");')
+
+    # Initialize clock and reset
+    for clk in clk_ports:
+        tb_lines.append(f"    {clk} = 0;")
+    for rst in rst_ports:
+        tb_lines.append(f"    {rst} = 1;")
+    if rst_ports:
+        tb_lines.append("    #15;")
+        for rst in rst_ports:
+            tb_lines.append(f"    {rst} = 0;")
 
     import random
     rng = random.Random(42)  # deterministic
 
     for vi in range(num_vectors):
-        # Generate random inputs
-        for name, width in inputs:
+        # Generate random inputs (skip clock/reset — handled separately)
+        for name, width in data_inputs:
             if width:
                 idx1 = width.index(":")
                 hi = int(width[1:idx1])
@@ -255,6 +290,7 @@ def auto_testbench(verilog: str, num_vectors: int = 8) -> str:
                 tb_lines.append(f"    {name} = {val};")
         tb_lines.append("    #10;")
 
+    # Check at least one output toggled for sequential circuits
     tb_lines.append(f'    $display("PASS: auto_testbench ({num_vectors} vectors)");')
     tb_lines.append("    $finish;")
     tb_lines.append("  end")
