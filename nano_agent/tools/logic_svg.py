@@ -360,6 +360,61 @@ class LogicSVG:
                                      _channel_h=channel_h, _sorting=sorting,
                                      _seed=seed)
 
+    @staticmethod
+    def _detect_clusters(gates):
+        """Group gates into macro-node clusters for cleaner layout.
+
+        Detects:
+          - Counter bit: NOT(q_i)=n + DFF(prev_q, n)=q_i  (feedback cycle)
+          - Feed-forward: output of A goes exclusively to B
+
+        Returns: cluster_id for each gate index (list of ints, same length as gates)
+        """
+        n = len(gates)
+        cluster_of = list(range(n))  # initially each gate is its own cluster
+
+        # Build adjacency
+        produced_by = {}
+        consumed_by = {}
+        for i, g in enumerate(gates):
+            produced_by[g["output"]] = i
+            for inp in g["inputs"]:
+                consumed_by.setdefault(inp, []).append(i)
+
+        # Pattern 1: Counter bit — NOT and DFF with mutual dependency
+        for i, g in enumerate(gates):
+            if g["type"] != "NOT":
+                continue
+            not_out = g["output"]
+            # NOT output must go to exactly one DFF
+            consumers = consumed_by.get(not_out, [])
+            if len(consumers) != 1:
+                continue
+            dff_idx = consumers[0]
+            dff_gate = gates[dff_idx]
+            if dff_gate["type"] != "DFF":
+                continue
+            # DFF output must go back to this NOT (feedback cycle)
+            dff_out = dff_gate["output"]
+            not_consumers_of_dff = consumed_by.get(dff_out, [])
+            if i not in not_consumers_of_dff:
+                continue
+            # Valid counter bit cluster: merge NOT and DFF
+            cid = min(cluster_of[i], cluster_of[dff_idx])
+            cluster_of[i] = cid
+            cluster_of[dff_idx] = cid
+
+        # Compress cluster IDs to contiguous range
+        id_map = {}
+        next_id = 0
+        result = []
+        for c in cluster_of:
+            if c not in id_map:
+                id_map[c] = next_id
+                next_id += 1
+            result.append(id_map[c])
+        return result
+
     def _render_sugiyama(self, gates, inputs, outputs, title="",
                           _col_gap=None, _row_gap=None, _channel_h=None,
                           _sorting=None, _seed=None) -> str:
@@ -383,6 +438,13 @@ class LogicSVG:
             col_gap, row_gap = 180, 120
             channel_h = 20
             sorting = "natural"
+
+        # ── Phase 0: Cluster detection (counter bits, etc.) ──
+        cluster_of = LogicSVG._detect_clusters(gates)
+        # Build cluster → gate list mapping
+        cluster_gates = {}
+        for gi, ci in enumerate(cluster_of):
+            cluster_gates.setdefault(ci, []).append(gi)
 
         # ── Phase 1: Topological depth assignment with feedback detection ──
         produced_by = {}
@@ -474,6 +536,19 @@ class LogicSVG:
             for ri, gi in enumerate(cols[d]):
                 row_of[gi] = ri
                 col_of[gi] = col_idx
+
+        # ── Cluster collapsing: merge cluster members into shared column ──
+        # Run BEFORE barycenter so crossing reduction can optimize the merged layout.
+        for ci, members in cluster_gates.items():
+            if len(members) <= 1:
+                continue
+            min_col = min(col_of[gi] for gi in members)
+            for gi in members:
+                col_of[gi] = min_col
+
+        # Recompute total columns after cluster merging
+        active_cols = set(col_of.values())
+        total_cols = len(active_cols)
 
         # Helper: get position (col, row) for a wire name
         def wire_pos(name):
