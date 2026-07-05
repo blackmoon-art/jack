@@ -456,7 +456,7 @@ def _validate_with_ngspice(spice_text: str, work_dir: Path) -> tuple[bool, str]:
     # Prepare netlist: inject models + .op analysis
     full_spice = spice_text.strip()
     has_opamp = "XU" in full_spice or " X" in full_spice
-    has_diode = full_spice.upper().startswith("D")
+    has_diode = bool(re.search(r'(?:^|\s)D\d\w*\s', full_spice))
 
     if has_opamp and ".subckt opamp" not in full_spice.lower():
         full_spice = _OPAMP_SUBCKT + "\n" + full_spice
@@ -465,8 +465,12 @@ def _validate_with_ngspice(spice_text: str, work_dir: Path) -> tuple[bool, str]:
 
     full_spice += "\n.op\n.end\n"
 
-    cir_path = work_dir / "_validate.cir"
-    cir_path.write_text(full_spice)
+    import tempfile as _tempfile
+    with _tempfile.NamedTemporaryFile(
+        mode="w", suffix=".cir", delete=False, dir=work_dir
+    ) as _tf:
+        _tf.write(full_spice)
+        cir_path = Path(_tf.name)
 
     try:
         result = subprocess.run(

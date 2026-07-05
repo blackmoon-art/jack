@@ -141,12 +141,12 @@ def check_subckt_support() -> bool:
 
 def has_opamp(spice: str) -> bool:
     """Check if SPICE netlist contains opamp (X component) instances."""
-    return bool(re.search(r'^X\w+', spice, re.MULTILINE))
+    return bool(re.search(r'(?:^|\s)X\w+\s', spice, re.MULTILINE))
 
 
 def has_diode(spice: str) -> bool:
     """Check if SPICE netlist contains diode (D component) instances."""
-    return bool(re.search(r'^D\w+', spice, re.MULTILINE))
+    return bool(re.search(r'(?:^|\s)D\d\w*\s', spice, re.MULTILINE))
 
 
 def replace_opamp_with_e_source(spice: str, gain: int = 100000) -> str:

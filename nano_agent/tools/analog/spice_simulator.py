@@ -94,7 +94,9 @@ def _prep_netlist(spice_text: str, analysis: str = "") -> tuple[str, str]:
     _MODEL_MAP = {"NPN": NPN_MODEL, "PNP": PNP_MODEL,
                   "NMOS": NMOS_MODEL, "PMOS": PMOS_MODEL}
     for mn in sorted(models_needed):
-        if mn in _MODEL_MAP and mn.lower() not in text.lower():
+        if mn in _MODEL_MAP and not re.search(
+            r'\.model\s+' + re.escape(mn) + r'\b', text, re.IGNORECASE
+        ):
             text = _MODEL_MAP[mn].strip() + "\n" + text
 
     # Get non-ground nodes for .print
@@ -927,9 +929,13 @@ class SpiceSimulator:
         except Exception as e:
             return f"❌ **Error preparing netlist:** {e}"
 
-        # 2. Write temp file and run ngspice
-        cir_path = self.charts_dir / "_simulate.cir"
-        cir_path.write_text(prepared)
+        # 2. Write temp file and run ngspice (unique name avoids concurrency races)
+        import tempfile as _tempfile
+        with _tempfile.NamedTemporaryFile(
+            mode="w", suffix=".cir", delete=False, dir=self.charts_dir
+        ) as _tf:
+            _tf.write(prepared)
+            cir_path = Path(_tf.name)
 
         try:
             result = subprocess.run(

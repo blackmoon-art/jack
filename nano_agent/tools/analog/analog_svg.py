@@ -655,7 +655,7 @@ def _parse_spice(spice_text: str) -> list[dict]:
         ctype = first[0].upper()
         cname = first
 
-        if ctype not in ("R", "C", "L", "D", "V", "X"):
+        if ctype not in ("R", "C", "L", "D", "V", "X", "Q", "M"):
             continue
 
         if ctype in ("R", "C", "L"):
@@ -679,6 +679,22 @@ def _parse_spice(spice_text: str) -> list[dict]:
             raw_nodes = tokens[1:3]
             value = " ".join(tokens[3:])
             model = ""
+
+        elif ctype == "Q":
+            # BJT: Qname C B E [S] model
+            if len(tokens) < 5:
+                continue
+            raw_nodes = tokens[1:4]  # C, B, E
+            model = tokens[4]
+            value = ""
+
+        elif ctype == "M":
+            # MOSFET: Mname D G S B model
+            if len(tokens) < 6:
+                continue
+            raw_nodes = tokens[1:5]  # D, G, S, B
+            model = tokens[5]
+            value = ""
 
         elif ctype == "X":
             # Xname node1 node2 ... model_name
