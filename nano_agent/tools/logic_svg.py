@@ -216,22 +216,33 @@ class LogicSVG:
             sortings = ["natural", "barycenter"]
             channels = [52, 68, 92]
 
-        # Sweep sugiyama params
-        candidates = []
+        # Pre-filter: fast-score all combos with internal scorer, then
+        # render+SVG-score only the top candidates to save CPU.
+        MAX_RENDER = 5  # max combos to actually render
+        prescores = []
         for col_gap, row_gap in spacings:
             for sorting in sortings:
                 for channel_h in channels:
-                    if len(candidates) >= max_attempts:
-                        break
-                    try:
-                        svg_xml = self._render_sugiyama_with_params(
-                            gates, inputs, outputs, title,
-                            col_gap, row_gap, channel_h, sorting, seed=seed)
-                        s = LogicSVG.score_layout_quality(svg_xml).get("score", 0)
-                        candidates.append((s, svg_xml,
-                            f"sugiyama gap={col_gap}/{row_gap} sort={sorting} ch={channel_h}"))
-                    except Exception:
-                        pass
+                    iscore = LogicSVG._score_layout_internal(
+                        gates, inputs, outputs, col_gap, row_gap, channel_h)
+                    prescores.append((iscore, col_gap, row_gap, sorting, channel_h))
+
+        # Sort by internal score descending, keep top MAX_RENDER
+        prescores.sort(key=lambda x: x[0], reverse=True)
+        top_combos = prescores[:MAX_RENDER]
+
+        # Render only the best pre-scored combos
+        candidates = []
+        for iscore, col_gap, row_gap, sorting, channel_h in top_combos:
+            try:
+                svg_xml = self._render_sugiyama_with_params(
+                    gates, inputs, outputs, title,
+                    col_gap, row_gap, channel_h, sorting, seed=seed)
+                s = LogicSVG.score_layout_quality(svg_xml).get("score", 0)
+                candidates.append((s, svg_xml,
+                    f"sugiyama gap={col_gap}/{row_gap} sort={sorting} ch={channel_h}"))
+            except Exception:
+                pass
 
         # Pick best (or use fallback if all candidates failed)
         if not candidates:

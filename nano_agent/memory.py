@@ -520,18 +520,26 @@ class Memory:
     def load_relevant(self, query: str, top_k: int = 3) -> str:
         """全文检索与 query 最相关的历史记忆。供 Agent 注入上下文。
 
-        Returns:
-            格式化的记忆文本，或空字符串。
+        Results are cached per query to avoid repeated FTS5 searches
+        during Reflexion retry loops.
         """
         if not self._long_term:
             return ""
+        cache_key = (query, top_k)
+        if not hasattr(self, '_relevant_cache'):
+            self._relevant_cache = {}
+        if cache_key in self._relevant_cache:
+            return self._relevant_cache[cache_key]
         results = self._long_term.search(query, top_k=top_k)
         if not results:
-            return ""
-        parts = []
-        for r in results:
-            parts.append(f"- [{r['created_at'][:10]}] {r['task'][:100]}\n  → {r['result'][:200]}")
-        return "\n".join(parts)
+            parts_list = ""
+        else:
+            parts = []
+            for r in results:
+                parts.append(f"- [{r['created_at'][:10]}] {r['task'][:100]}\n  → {r['result'][:200]}")
+            parts_list = "\n".join(parts)
+        self._relevant_cache[cache_key] = parts_list
+        return parts_list
 
     # ── 文件轮转工具 ────────────────────────────────────
 

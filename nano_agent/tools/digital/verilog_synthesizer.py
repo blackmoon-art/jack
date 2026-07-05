@@ -58,7 +58,7 @@ stat -top {top_module}
 """
         result = subprocess.run(
             ["yosys", "-p", yosys_script.strip()],
-            capture_output=True, text=True, timeout=60,
+            capture_output=True, text=True, timeout=20,
             cwd=str(tmpdir),
         )
         output = (result.stderr + result.stdout)
@@ -150,7 +150,7 @@ stat -top {top_module}
     except subprocess.TimeoutExpired:
         return {"success": False, "gate_netlist": "",
                 "gate_count": 0, "cell_types": {},
-                "errors": ["Synthesis timed out (>60s)"], "warnings": []}
+                "errors": ["Synthesis timed out (>20s)"], "warnings": []}
     except Exception as e:
         logger.warning(f"yosys failed: {e}")
         return {"success": False, "gate_netlist": "",

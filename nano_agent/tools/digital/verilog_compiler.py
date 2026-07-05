@@ -52,7 +52,7 @@ def compile_verilog(verilog: str, testbench: str = "") -> dict:
         else:
             cmd.append(str(v_path))
 
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30,
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=10,
                                 cwd=str(tmpdir))
         full_output = (result.stderr + result.stdout).strip()
         logger.info(f"iverilog exit={result.returncode}")
@@ -81,7 +81,7 @@ def compile_verilog(verilog: str, testbench: str = "") -> dict:
 
     except subprocess.TimeoutExpired:
         return {"success": False, "vvp_path": None,
-                "errors": ["Compilation timed out (>30s)"], "warnings": []}
+                "errors": ["Compilation timed out (>10s)"], "warnings": []}
     except Exception as e:
         logger.warning(f"iverilog failed: {e}")
         return {"success": False, "vvp_path": None,
@@ -104,7 +104,7 @@ def run_simulation(vvp_path: str) -> dict:
     try:
         result = subprocess.run(
             ["vvp", str(vvp_path)],
-            capture_output=True, text=True, timeout=30,
+            capture_output=True, text=True, timeout=10,
             cwd=str(Path(vvp_path).parent),
         )
         output = (result.stdout + result.stderr).strip()
@@ -135,7 +135,7 @@ def run_simulation(vvp_path: str) -> dict:
     except subprocess.TimeoutExpired:
         return {"success": False, "output_lines": [],
                 "assertions_passed": 0, "assertions_failed": 0,
-                "errors": ["Simulation timed out (>30s)"]}
+                "errors": ["Simulation timed out (>10s)"]}
     except Exception as e:
         logger.warning(f"vvp failed: {e}")
         return {"success": False, "output_lines": [],
