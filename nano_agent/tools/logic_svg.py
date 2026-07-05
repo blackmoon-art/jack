@@ -682,14 +682,21 @@ class LogicSVG:
         # ── Draw output ports ──
         output_col_x = 60 + (max_depth + (1 if inputs else 0)) * col_gap + 40
         output_y_map = {}
-        # Place output ports near their source gates
+        # Place output ports near their source gates, with collision avoidance
         out_idx = 0
+        used_y = set()
         for name in sorted(outputs):
             if name in produced_by:
                 gi = produced_by[name]
                 y = gate_y.get(gi, 50 + out_idx * ROW_SPACING + ROW_SPACING // 2)
             else:
                 y = 50 + out_idx * ROW_SPACING + ROW_SPACING // 2
+            # Avoid overlapping output ports: if Y already used, offset vertically
+            y_int = round(y)
+            while y_int in used_y:
+                y += self.PORT_H + 4
+                y_int = round(y)
+            used_y.add(y_int)
             output_y_map[name] = y
             port_positions[name] = (output_col_x, y, False)
             self._draw_port(svg, output_col_x, y, name, False)
