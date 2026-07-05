@@ -608,30 +608,31 @@ LLM 看到反馈后的行动逻辑：
 
 端到端数字电路设计系统：自然语言 → Verilog → iverilog 编译 → vvp 仿真 → yosys 综合 → 门级 SVG 原理图 → Meta 策略评估。
 
-### 逻辑链 (门控闭环)
+### 逻辑链 (9 阶段门控闭环)
 
 ```
 用户输入 "4-bit counter"
         │
   ① Verilog 生成
-  模板匹配 或 LLM 自由生成 或 verilog= 参数
+  模板匹配 / LLM 自由生成 / verilog= 参数
+  动态 N-bit: "8-bit counter" → _generate_ripple_counter(8)
         │
   ② 编译 (iverilog)
   compile_verilog() → iverilog -o sim.vvp
         │
   ③ 仿真 (vvp)  ←── LLM 判断 PASS/FAIL ──┐
   run_simulation() → vvp sim.vvp           │
-  解析 PASS/FAIL 断言                      │
+  词边界 \bPASS\b / \bFAIL\b 断言         │
+  自动 testbench: 检测 clk→osc, rst→init  │
         │                                  │
         ├─ ✅ PASS → 继续                   │
         └─ ❌ FAIL → 返回 ① 重新生成 Verilog ─┘
         │
   ④ 综合 (yosys) ←── 指标打分 ──┐
   synthesize() → gate_count      │
-  打分: gate_count 是否合理       │
   · 0 gates → 综合失败           │
-  · >500 gates → 门太多, 简化    │
-  · 1-500 → 合理, 继续           │
+  · >2000 gates → 门太多, 简化   │
+  · 1-2000 → 合理, 继续          │
         │                        │
         ├─ ✅ 通过 → 继续          │
         └─ ❌ 不通过 → 返回 ①      │
@@ -640,20 +641,26 @@ LLM 看到反馈后的行动逻辑：
   _yosys_netlist_to_logic_dsl()
   bit_id → wire_name (a[7], count[0])
         │
-  ⑥ SVG 渲染 ←── 布局打分 ──┐
-  Sugiyama 布局               │
-  score_layout_quality()      │
-  打分: crossings/overlaps    │
-  · score ≥ 8 → 优秀, 继续    │
-  · score 5-7 → 可接受, 继续  │
-  · score < 5 → 换布局算法    │
-    (bit-slice / force)       │
-  · 重试 3 次仍 < 5 → 继续    │
-        │                     │
-        ├─ ✅ 通过 → 继续       │
-        └─ ❌ 不通过 → 换算法 ─┘
+  ⑥ Sugiyama 布局流水线 ←── 布局打分 ──┐
+  ┌──────────────────────────────────┐   │
+  │ 6a. Topological Sort + 反馈检测  │   │
+  │ 6b. Cluster 检测 (Counter Bit)   │   │
+  │ 6c. Layer Assignment             │   │
+  │ 6d. Barycenter/Median 排序       │   │
+  │ 6e. Coordinate Assign + Compact  │   │
+  │ 6f. Output Alignment (stub 线)   │   │
+  │ 6g. Orthogonal Routing + 反馈bus │   │
+  └──────────────────────────────────┘   │
+  score_layout_quality(): 8 维加权       │
+  · score ≥ 7 → 优秀, 继续               │
+  · score 5-7 → 可接受, 继续             │
+  · score < 5 → 重试 (seed 扰动)         │
+  · retry 3 次仍 < 5 → 继续              │
+        │                                │
+        ├─ ✅ 通过 → 继续                  │
+        └─ ❌ 不通过 → seed 重试 ──────────┘
         │
-  ⑦ Meta 评估 (最终打分)
+  ⑦ Meta 评估
   技术分 + LLM 软打分
   max_retries=6, 不达标升级策略
         │
@@ -679,40 +686,55 @@ LLM 看到反馈后的行动逻辑：
 | 组合逻辑 | full_adder | 7 | 进位链 |
 | 组合逻辑 | mux_2to1 | 1 | 选择器 |
 | 时序逻辑 | dff | 1 | D 触发器 |
-| 时序逻辑 | counter_4bit | 10 | 4-bit 同步计数器 (6 组合 + 4 DFF) |
+| 时序逻辑 | counter_4bit | 8 | 4-bit ripple 计数器 (4 DFF + 4 NOT, 聚类为4组) |
 
-### 布局算法
-
-| 算法 | 适用 | 说明 |
-|------|------|------|
-| **Sugiyama** (默认) | 全部电路 | 拓扑分层 + barycenter 排序 + 列间隙布线 |
-| Bit-Slice | 加法器/ALU/计数器 | `draw_logic(dsl, layout="bit_slice")` |
-| Force-Directed | 不规则网表 | `draw_logic(dsl, layout="force")` |
-
-### 打分规则
+### 布局算法: Sugiyama 流水线
 
 ```
-sim_passed=True     → +3   (基础分)
-compile_passed=True → +2   (编译通过)
-synth_passed=True   → +1   (综合成功)
-gate_count > 0      → +1   (有真实门网表)
-assertions 全过     → +2   (功能正确)
-无 errors/warnings  → +1   (质量干净)
-layout ≥ 8/10       → +1   (布线干净)
-layout < 5/10       → -1   (布线混乱)
-─────────────────────────
-满分                 10
+Netlist (Yosys DSL)
+   │
+   ▼
+Topological Sort    get_depth() + 反馈边检测 + cycle breaking
+   │
+   ▼
+Cluster Detection   识别 NOT+DFF → Counter Bit 宏节点
+   │
+   ▼
+Layer Assignment    聚类列合并, 重算 total_cols
+   │
+   ▼
+Crossing Reduction  Barycenter / Median / Natural (3-sweep + seed 扰动)
+   │
+   ▼
+Coordinate Assign   compacted col_gap (max_wires≤1 → 0.75x)
+   │
+   ▼
+Output Alignment    stub 线直连驱动门, tight 0.3x gap
+   │
+   ▼
+Orthogonal Routing  H→V→H + detour + 反馈 bus + gap_tracks
+   │
+   ▼
+Layout Score        8 维加权评分
+   │
+   ▼
+SVG
 ```
 
-### 布局指标 (12 维，供 LLM 评估)
+### 布局质量评分 (8 维加权)
 
-```
-gates, canvas, aspect_ratio, gate_types
-crossings, overlaps
-avg_wire_len, max_wire_len, min_wire_len
-max_fanout, avg_fanout
-gate_density, wire_density
-```
+| 指标 | 权重 | 说明 |
+|------|:---:|------|
+| Crossing | 25% | 正交线段交叉检测, 排除共享端点 |
+| Wire Length | 15% | 平均线长/画布对角线 |
+| Component Alignment | 15% | 门中心到 20px 网格距离 |
+| Signal Flow | 10% | X 轴单调递增比例 |
+| Power Placement | 10% | VCC 在顶 30% / GND 在底 30% |
+| Symmetry | 10% | 同标签门 Y 镜像 |
+| White Space | 10% | 元件包围盒 ÷ 画布面积 |
+| Junction Quality | 5% | 干净连接比例 (≤2 段) |
+
+**总分**: `0.25*cross + 0.15*wire + 0.15*align + 0.10*flow + 0.10*power + 0.10*sym + 0.10*space + 0.05*junc`
 
 ### 测试覆盖
 
@@ -720,12 +742,23 @@ gate_density, wire_density
 
 | 类别 | 数量 | 覆盖 |
 |------|:---:|------|
-| 模板匹配 | 6 | 中英文关键词、未知模板异常 |
+| 模板匹配 | 6 | 中英文关键词、N-bit 动态生成、未知模板异常 |
 | DSL 转换 | 4 | AND/XOR/NOT/DFF 原语、多位端口名 |
 | 门分解 | 6 | NAND/NOR/XOR/XNOR/MUX → AND/OR/NOT |
-| 自动 testbench | 3 | 端口解析、编译+运行验证 |
+| 自动 testbench | 3 | 端口解析 (含类型关键词清洗)、时钟检测、编译+运行 |
 | SVG 解析 | 5 | 半加器/全加器/DFF反馈/bracket输出/空DSL |
 | 布局分析 | 4 | 门类型计数、summary、异常SVG容错 |
+
+`tests/test_analog_circuit.py` — 47 个测试:
+
+| 类别 | 数量 | 覆盖 |
+|------|:---:|------|
+| 模板匹配 | 13 | 中英文关键词 (放大器/运放/滤波/整流/分压/共射/BJT/MOSFET) |
+| SPICE 生成 | 5 | RC/反相/跟随器/仪表放大器/Wien桥 |
+| 参数计算 | 8 | RC/反相/分压/同相/共射/射随/电流镜/差分对/MOSFET |
+| BJT/MOSFET | 8 | 共射/射随/电流镜/差分对/MOS CS/共漏/共基/Cascode |
+| 新模板 | 12 | Sallen-Key/带通/陷波/积分/微分/Schmitt/精密整流/比较器/相移 |
+| 闭环优化 | 1 | 指标映射 |
 
 ## 记忆系统
 
