@@ -1344,29 +1344,46 @@ class AnalogSVG:
 
     @staticmethod
     def _load_templates() -> None:
-        """Load circuit templates from YAML (primary) or hardcoded fallback."""
+        """Load circuit templates from YAML (primary) or hardcoded fallback.
+
+        Only replaces the hardcoded fallback when YAML loads successfully.
+        If YAML fails, the module-level hardcoded templates remain intact.
+        """
         global _CIRCUIT_TEMPLATES
         yaml_path = Path(__file__).parent / "templates" / "circuits.yaml"
         try:
             import yaml as _yaml
-            _CIRCUIT_TEMPLATES = {}
-            if yaml_path.exists():
-                with open(yaml_path) as f:
-                    data = _yaml.safe_load(f)
-                for t in data.get("templates", []):
-                    _CIRCUIT_TEMPLATES[(t["category"], t["id"])] = {
-                        "name": t["name"],
-                        "keywords_cn": t.get("keywords_cn", []),
-                        "guide": t.get("guide", ""),
-                        "components": t.get("components", []),
-                        "params": t.get("params", {}),
-                        "calculate": t.get("calculate", "fixed"),
-                    }
-            if not _CIRCUIT_TEMPLATES:
-                raise ValueError("No templates loaded")
-            logger.debug(f"Loaded {len(_CIRCUIT_TEMPLATES)} circuit templates from YAML")
+        except ImportError:
+            logger.debug("PyYAML not installed, using hardcoded templates")
+            return
+
+        if not yaml_path.exists():
+            logger.debug(f"YAML template file not found: {yaml_path}")
+            return
+
+        new_templates = {}
+        try:
+            with open(yaml_path) as f:
+                data = _yaml.safe_load(f)
+            for t in data.get("templates", []):
+                new_templates[(t["category"], t["id"])] = {
+                    "name": t["name"],
+                    "keywords_cn": t.get("keywords_cn", []),
+                    "guide": t.get("guide", ""),
+                    "components": t.get("components", []),
+                    "params": t.get("params", {}),
+                    "calculate": t.get("calculate", "fixed"),
+                }
         except Exception as e:
-            logger.warning(f"YAML load failed ({e}), templates may be empty")
+            logger.warning(f"YAML parse failed ({e}), using hardcoded templates")
+            return
+
+        if not new_templates:
+            logger.warning("YAML loaded but no templates found, using hardcoded templates")
+            return
+
+        _CIRCUIT_TEMPLATES = new_templates
+        logger.debug(f"Loaded {len(_CIRCUIT_TEMPLATES)} circuit templates from YAML")
 
     def draw_analog_svg(self, description: str, title: str = "") -> str:
         """Pipeline: ① 生成电路拓扑 → ② SPICE Netlist → ③ Ngspice验证 → ④ Self-Refine修正 → ⑤ Schemdraw渲染 → ⑥ 输出"""
