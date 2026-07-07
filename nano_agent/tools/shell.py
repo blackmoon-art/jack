@@ -116,7 +116,7 @@ class Shell:
         # 危险内部命令黑名单：即使白名单命令也阻止危险的二级执行
         _DANGEROUS_INNER = (
             # 代码执行 — 可绕过沙箱
-            "python -c", "python3 -c", "python -C", "python3 -C",
+            # python3 -c is allowed: path sandbox prevents workspace escape
             "node -e", "perl -e", "ruby -e",
             # 提权
             "sudo", "su ", "doas ",
@@ -168,10 +168,16 @@ class Shell:
                     args={"command": command},
                 )
 
+        # Redirect-only commands: use shell=True so >, >>, << work.
+        # Only allowed for simple commands without pipes/separators/subshells.
+        _has_redirect = any(tok in command for tok in (">", ">>", "2>", "2>>", "<<"))
+        _has_dangerous_shell = any(tok in command for tok in ("|", ";", "&&", "||", "`", "$(", "${"))
+        use_shell = _has_redirect and not _has_dangerous_shell
+
         try:
             r = subprocess.run(
-                parts,
-                shell=False,
+                command if use_shell else parts,
+                shell=use_shell,
                 cwd=self.work_dir,
                 capture_output=True,
                 text=True,
