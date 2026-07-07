@@ -16,6 +16,7 @@ _SAFE_COMMAND_PREFIXES = [
     "mkdir", "touch", "cp", "mv", "rm", "chmod", "chown",
     "curl", "wget", "diff", "sort", "uniq", "cut", "sed", "awk", "tr",
     "which", "command", "type", "file", "stat", "du", "df",
+    "tee",
     "pip", "pip3", "poetry", "uv", "cargo",
     "nano",
 ]
@@ -27,6 +28,7 @@ _PUBLIC_SAFE_COMMANDS = [
     "pwd", "echo", "date", "whoami", "uname", "env", "printenv",
     "which", "command", "type", "file", "stat", "du", "df",
     "diff", "sort", "uniq", "cut", "tr",
+    "tee",
 ]
 _PUBLIC_SAFE_COMMANDS_TUPLE = tuple(_PUBLIC_SAFE_COMMANDS)
 
