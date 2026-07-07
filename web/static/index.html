@@ -565,6 +565,12 @@ async function send() {
                 '/$1'
               );
 
+              // URL-encode non-ASCII filenames in markdown links and images
+              answerText = answerText.replace(
+                /(\]\(|\/charts\/|\/api\/download\/)([^)\s]*[一-鿿][^)\s]*)/g,
+                (match, prefix, filename) => prefix + encodeURIComponent(filename)
+              );
+
               // 也从最终答案中提取图片 URL（LLM 可能在回复中嵌入新图片）
               const ansImgUrls = answerText.match(/!\[[^\]]*\]\((\/charts\/[^)]+)\)/g);
               if (ansImgUrls) ansImgUrls.forEach(m => {
