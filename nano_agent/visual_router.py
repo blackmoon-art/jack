@@ -354,7 +354,22 @@ _DRAW_INTENT_RE = re.compile(
 
 
 def _has_draw_intent(task: str) -> bool:
-    """检查任务是否有绘制/可视化意图。"""
+    """检查任务是否有绘制/可视化意图。
+
+    纯知识问答（学习路线/教程/原理）不算绘制意图，
+    即使包含电路关键词也不触发电路工具生成。
+    """
+    # 学习/教育类 → 不画图
+    # 单独"介绍/是什么"开头但没有明确绘制动作 → 知识问答
+    if re.search(r"^(介绍|什么是|聊聊|说说)\S*", task.strip()):
+        # 除非也有明确的画图指令
+        if not re.search(r"画|绘制|生成|设计|做个", task):
+            return False
+    if re.search(r"学习路线|学习路径|教程|入门|怎么.*计算|"
+                 r"知识点|总结|归纳|面试|题目|考试|复习|笔记|"
+                 r"roadmap|tutorial|guide",
+                 task, re.IGNORECASE):
+        return False
     return bool(_DRAW_INTENT_RE.search(task))
 
 
