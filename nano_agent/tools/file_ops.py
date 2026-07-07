@@ -93,7 +93,7 @@ class FileOps:
                 # ASCII 安全文件名
                 import re as _re
                 safe_name = _re.sub(r'[^a-zA-Z0-9._-]', '_', basename)
-                if safe_name == basename or not safe_name.strip('_.'):
+                if not safe_name.strip('_.'):
                     safe_name = f"file_{int(_t.time())}.{ext}"
                 dest = _os.path.join(self.charts_dir, safe_name)
                 _sh.copy2(str(safe), dest)

@@ -676,12 +676,17 @@ async def serve_chart(filename: str):
                 "go": "text/x-go", "rs": "text/x-rust"}
     media_type = mime_map.get(ext, "application/octet-stream")
     # 非图片文件强制下载（HTML 除外，直接在浏览器打开）
+    from urllib.parse import quote
     headers = {"Cache-Control": "public, max-age=86400"}
     if ext not in ("png", "jpg", "jpeg", "gif", "webp", "svg"):
         if ext == "html":
             pass  # HTML 直接在浏览器渲染
         else:
-            headers["Content-Disposition"] = f'attachment; filename="{filename}"'
+            encoded = quote(filename, safe="")
+            headers["Content-Disposition"] = (
+                f'attachment; filename="{encoded}"; '
+                f"filename*=UTF-8''{encoded}"
+            )
     return FileResponse(filepath, media_type=media_type, headers=headers)
 
 

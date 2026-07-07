@@ -18,6 +18,14 @@ class OpenAIProvider(BaseProvider):
         self._config = config
         self._client = None
 
+    def _get_api_key(self) -> str:
+        """子类可重写以使用不同的 API key。"""
+        return self._config.openai_api_key
+
+    def _get_base_url(self) -> str:
+        """子类可重写以使用不同的 base URL。"""
+        return self._config.openai_base_url
+
     def _get_client(self):
         """懒加载 OpenAI 客户端。"""
         if self._client is not None:
@@ -25,8 +33,8 @@ class OpenAIProvider(BaseProvider):
         from openai import OpenAI
 
         self._client = OpenAI(
-            api_key=self._config.openai_api_key,
-            base_url=self._config.openai_base_url,
+            api_key=self._get_api_key(),
+            base_url=self._get_base_url(),
         )
         return self._client
 

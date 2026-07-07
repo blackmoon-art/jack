@@ -7,6 +7,7 @@ Usage:
 """
 
 import logging
+import os
 from .openai import OpenAIProvider
 from .base import ProviderRegistry
 
@@ -19,12 +20,12 @@ class ZhipuProvider(OpenAIProvider):
     """Zhipu AI provider — extends OpenAIProvider with Zhipu defaults."""
 
     def _get_api_key(self) -> str:
-        import os
-        return (self._config.openai_api_key or
-                os.getenv("ZHIPU_API_KEY", ""))
+        return (os.getenv("ZHIPU_API_KEY", "") or
+                self._config.openai_api_key)
 
     def _get_base_url(self) -> str:
-        return (self._config.openai_base_url or ZHIPU_BASE_URL)
+        return (ZHIPU_BASE_URL if os.getenv("ZHIPU_API_KEY") else
+                self._config.openai_base_url)
 
 
 ProviderRegistry.register("zhipu", ZhipuProvider)
