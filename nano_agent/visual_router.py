@@ -124,6 +124,7 @@ _EXACT_ROUTES: list[tuple[str, str, dict]] = [
     # 数字电路 → 纯 Python SVG (draw_logic)
     ("数字电路|逻辑门|门电路|digital.*circuit|logic.*gate|"
      "and gate|nand gate|nor gate|xor gate|半加器|全加器|触发器|"
+     "计数器|counter|分频器|"
      "flip.flop|dff|latch|寄存器|译码器|多路复用|encoder|decoder|mux|"
      "gray.*code|格雷码|同步器|synchronizer|两级同步|"
      "clock.*domain|counter|demux|三态|tristate|"
@@ -147,6 +148,9 @@ _EXACT_ROUTES: list[tuple[str, str, dict]] = [
      "功率放大|power.*amp|震荡器|oscillator.*circuit|晶体振荡|"
      "积分电路|微分电路|integrator|differentiator|"
      "比较器|comparator.*circuit|"
+     "施密特|schmitt|仪表放大|instrumentation|"
+     "wien.*桥|wien.*bridge|文氏桥|"
+     "cascode|共射共基|共源共栅|"
      "bjt|mosfet|jfet|整流|rectifier|稳压|regulator|"
      "跟随器|buffer|发射极跟随|源极跟随|电压跟随|"
      "LC谐振|并联谐振|串联谐振|偏置|biasing|分压|"
@@ -340,14 +344,14 @@ _CIRCUIT_TOOLS = frozenset({
 _DRAW_INTENT_RE = re.compile(
     r"画|绘制|画个|画张|画幅|画一下|diagram|schematic|"
     r"电路图|原理图|框图|接线图|电路设计|layout|plot|"
-    r"\bdraw\b|\brender\b|\bgenerate\b|\bvisualize\b|\bdesign\b|"
-    r"设计.*电路|仿真.*电路|模拟.*电路|做个.*电路|"
-    r"生成.*电路|画出|帮我画|"
+    r"\bdraw\b|\brender\b|\bgenerate\b|\bvisualize\b|"
+    r"设计|仿真|做个|生成|画出|帮我画|"
     # 电路类型名本身隐含绘制意图, 不需要额外画/设计前缀
     r"滤波器|放大器|整流|分压器|运放|低通|高通|带通|带阻|"
     r"RC滤波|LC滤波|RL滤波|RLC|Sallen|sallen|"
     r"反相放大|同相放大|差分放大|求和放大|"
     r"半波|全波|桥式|倍压|"
+    r"计数器|振荡器|施密特|仪表放大|cascode|"
     r"bode|bode.*plot|频率响应|幅频|相频",
     re.IGNORECASE,
 )
@@ -359,14 +363,14 @@ def _has_draw_intent(task: str) -> bool:
     纯知识问答（学习路线/教程/原理）不算绘制意图，
     即使包含电路关键词也不触发电路工具生成。
     """
-    # 学习/教育类 → 不画图
-    # 单独"介绍/是什么"开头但没有明确绘制动作 → 知识问答
-    if re.search(r"^(介绍|什么是|聊聊|说说)\S*", task.strip()):
-        # 除非也有明确的画图指令
+    # 知识问答/学习类 → 不画图
+    if re.search(r"^(介绍|什么是|聊聊|说说|问一下|请问)\S*", task.strip()):
         if not re.search(r"画|绘制|生成|设计|做个", task):
             return False
-    if re.search(r"学习路线|学习路径|教程|入门|怎么.*计算|"
+    if re.search(r"学习路线|学习路径|教程|入门|怎么.*计算|怎么.*选|"
+                 r"datasheet|参数.*选择|选型|"
                  r"知识点|总结|归纳|面试|题目|考试|复习|笔记|"
+                 r"区别|对比|vs|比较|优缺点|"
                  r"roadmap|tutorial|guide",
                  task, re.IGNORECASE):
         return False
@@ -416,6 +420,9 @@ def _exact_match(task_lower: str) -> tuple[str, dict] | None:
                             return "generate_chart", {"chart_type": "waveform"}
                     if is_circuit and not _has_draw_intent(task_lower):
                         continue  # 纯知识问答，跳过电路工具
+                    # 施密特触发器歧义：是模拟电路，不是数字触发器
+                    if kw == "触发器" and "施密特" in task_lower:
+                        continue
                     # 状态机歧义消解：硬件电路关键词 → 数字逻辑
                     if kw in ("状态机", "state machine", "状态转换", "状态转移",
                               "FSM", "fsm", "finite state machine"):
