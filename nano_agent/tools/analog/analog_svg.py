@@ -1591,6 +1591,8 @@ class AnalogSVG:
         except Exception as e:
             logger.exception(f"Analog SVG render failed: {e}")
             return f"Error rendering analog circuit: {e}"
+        if not svg or "<svg" not in svg:
+            return f"Error rendering analog circuit: schemdraw returned empty SVG"
 
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         fp = self.charts_dir / f"analog_{ts}.svg"
@@ -1901,7 +1903,7 @@ class AnalogSVG:
             if not components:
                 return "Error: no valid SPICE components found. " \
                        "Supported: R, C, L, D, V, X (op-amp subcircuit)."
-            svg = self._render_schemdraw_svg(spice_stripped, title) or _render_svg(components, title)
+            svg = self._render_schemdraw_svg(spice_stripped, title)
         except Exception as e:
             logger.exception(f"Analog SPICE render failed: {e}")
             return f"Error rendering SPICE circuit: {e}"
@@ -2022,7 +2024,7 @@ class AnalogSVG:
 
         # 4. Render final SVG
         try:
-            svg = self._render_schemdraw_svg(spice, circuit_name) or _render_svg(components, circuit_name)
+            svg = self._render_schemdraw_svg(spice, circuit_name)
         except Exception as e:
             return f"❌ **SVG rendering failed:** {e}"
 
@@ -2251,7 +2253,7 @@ class AnalogSVG:
                 spice, circuit_name,
                 stages=stage_names,
                 stage_components=all_components,
-            ) or _render_svg(all_components, circuit_name)
+            )
         except Exception as e:
             return f"❌ **SVG rendering failed:** {e}"
 

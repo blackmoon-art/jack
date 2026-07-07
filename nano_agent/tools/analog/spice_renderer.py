@@ -686,14 +686,13 @@ class SpiceRenderer:
         return svg
 
     def _fallback_render(self, spice: str, title: str = "") -> str:
-        """Fallback: use analog_svg's pure-Python renderer."""
-        from .analog_svg import _parse_spice, _render_svg
-
-        components = _parse_spice(spice)
-        if not components:
-            return "Error: no valid SPICE components found."
-
-        svg = _render_svg(components, title)
+        """Fallback: retry schemdraw with default params."""
+        try:
+            graph = _build_graph(spice)
+            layout = _layout(graph)
+            return self._render_schemdraw(graph, layout, title)
+        except Exception:
+            return f"Error rendering circuit: schemdraw failed"
 
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         fp = self.charts_dir / f"analog_{ts}.svg"
