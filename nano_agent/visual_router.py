@@ -85,7 +85,8 @@ _EXACT_ROUTES: list[tuple[str, str, dict]] = [
     ("饼图|占比图|pie|扇形图|比例图",
      "generate_chart", {"chart_type": "pie"}),
     # 折线（放后面，"线"字容易被其他词包含）
-    ("折线|折线图|line chart|line plot|走势图|趋势图",
+    ("折线|折线图|line chart|line plot|走势图|趋势图|坐标图|xy图|x-y图|"
+     "展示趋势|趋势分析|数据分析趋势",
      "generate_chart", {"chart_type": "line"}),
 
     # === mermaid_chart 子类型 ===
@@ -193,7 +194,7 @@ _INTENT_PATTERNS: list[tuple[str, str, str, dict]] = [
      "generate_chart", {"chart_type": "bar"}),
 
     (r"变化|趋势|走势|增长|下降|波动|涨",
-     r"温度|股价|数据|销量|指标|价格|人数|流量|收入",
+     r"温度|股价|数据|销量|指标|价格|人数|流量|收入|趋势|展示",
      "generate_chart", {"chart_type": "line"}),
 
     (r"分布|占比|比例|构成|份额|百分比",
