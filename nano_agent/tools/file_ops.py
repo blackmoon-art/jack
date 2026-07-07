@@ -20,7 +20,7 @@ class FileOps:
           "offset": {"type": "integer", "description": "Start line (0-indexed)"},
           "limit": {"type": "integer", "description": "Max lines to read"}},
          ["path"]),
-        ("write", "Write content to a file.", "write",
+        ("write", "Write content to a file — use this instead of bash echo/printf for creating files.", "write",
          {"path": {"type": "string", "description": "File path (relative to workspace)"},
           "content": {"type": "string", "description": "Content to write"}},
          ["path", "content"]),
