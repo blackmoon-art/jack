@@ -172,28 +172,37 @@ def _layout(graph: dict) -> dict:
     if not comps:
         return {"main_chain": [], "branches": [], "feedback": [], "terminals": {}}
 
-    # ── Find signal sources and starting nets ──
+    # ── Find signal sources (AC only, not DC power) ──
     start_nets = []
-    terminal_outputs = set()
+    signal_sources = []  # AC sources → placed in main chain
+    power_sources = []   # DC sources → placed as branches near op-amp
     if sources:
         for si in sources:
             src = comps[si]
-            # source pin0 (+) is the signal output net
-            if len(src["pins"]) >= 1:
-                net_name = src["pins"][0][0]
-                if net_name not in ground_nets:
-                    start_nets.append(net_name)
+            val = src.get("value", "").upper()
+            is_ac = "AC" in val
+            is_dc = "DC" in val and "AC" not in val
+            if is_ac:
+                signal_sources.append(si)
+                if len(src["pins"]) >= 1:
+                    net_name = src["pins"][0][0]
+                    if net_name not in ground_nets:
+                        start_nets.append(net_name)
+            elif is_dc:
+                power_sources.append(si)
+            else:
+                signal_sources.append(si)  # unknown: treat as signal
+
     if not start_nets:
-        # No AC source: pick any non-ground net
         for name in nets:
             if name not in ground_nets:
                 start_nets.append(name)
                 break
 
     # ── BFS to find main signal chain ──
-    visited_comps = set(sources)  # sources are already placed at col 0
+    visited_comps = set(signal_sources) | set(power_sources)
     visited_nets = set(ground_nets)
-    main_chain = list(sources)  # sources first
+    main_chain = list(signal_sources)  # signal sources first
 
     # BFS queue: (net_name, parent_col, direction)
     from collections import deque
@@ -215,6 +224,14 @@ def _layout(graph: dict) -> dict:
 
         for comp_idx, pin_idx in nets[net_name]["connections"]:
             if comp_idx in visited_comps:
+                # ── Feedback detection ──
+                # This net connects back to an already-placed component.
+                # This IS the feedback loop (e.g., op-amp output → Rf → input).
+                # Record it so the renderer can draw a visible feedback wire.
+                comp = comps[comp_idx]
+                # Only record if this is a meaningful feedback (not GND)
+                if net_name not in ground_nets:
+                    feedback.append((parent_col, comp_idx, net_name))
                 continue
 
             comp = comps[comp_idx]
@@ -249,6 +266,28 @@ def _layout(graph: dict) -> dict:
                     if pidx != pin_idx and pn not in visited_nets:
                         visited_nets.add(pn)
                         queue.append((pn, col_counter - 1))
+
+    # ── Place DC power sources as branches near op-amps ──
+    # Find op-amp columns in the main chain
+    opamp_cols = []
+    for col, ci in enumerate(main_chain):
+        if comps[ci]["type"] == "X":
+            opamp_cols.append(col)
+
+    for psi in power_sources:
+        psrc = comps[psi]
+        # Find which opamp this power source connects to
+        target_col = len(main_chain) - 1  # default: last
+        for pin_net, _ in psrc["pins"]:
+            if pin_net in nets:
+                for conn_ci, conn_pi in nets[pin_net]["connections"]:
+                    if conn_ci != psi and comps[conn_ci]["type"] == "X":
+                        # Found opamp this power source connects to
+                        for col, ci in enumerate(main_chain):
+                            if ci == conn_ci:
+                                target_col = col
+                                break
+        branches.append((target_col, psi, "up" if psi % 2 == 0 else "up"))
 
     # ── Add unvisited components as branches at the end ──
     for ci, comp in enumerate(comps):
