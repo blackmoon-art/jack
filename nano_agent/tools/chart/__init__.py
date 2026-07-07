@@ -38,9 +38,9 @@ class Chart:
              "Chart type (one of 20). Each with data format:\n"
              "line: y1,y2;y3,y4 labels='x;S1;S2' | "
              "curve: same as line, smoothed | "
-             "bar: v1,v2,v3 labels='CatA,CatB' | "
+             "bar: numbers_only labels='CatA,CatB' | "
              "scatter: x1,x2;y1,y2 labels='X;Y' | "
-             "pie: v1,v2,v3 labels='A,B,C' | "
+             "pie: numbers_only labels='A,B,C' | "
              "histogram: raw_values labels='bins' | "
              "area: same as line, filled | "
              "heatmap: r1c1,r1c2;r2c1,r2c2 labels='rA,rB;cX,cY' | "
@@ -59,7 +59,7 @@ class Chart:
              "cat: style labels='pose' e.g. data='simple'"
          )},
           "data": {"type": "string", "description": (
-              "Values: comma-sep within series, semicolon-sep between series. "
+              "Values: comma-sep within series, numeric only for bar/pie (labels in labels field), semicolon-sep between series. "
               "3D surface/wireframe: formula (X**2+Y**2) or shape name (sphere,torus,heart...). "
               "Waveform/spectrum: analog='sine,2,5;square,6,3' or digital='0,1,0;1,0,1'. "
               "Bode: 'lowpass,1000,10e-9' (filter_type,R,C). "
