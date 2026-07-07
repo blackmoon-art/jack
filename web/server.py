@@ -293,6 +293,7 @@ def get_or_create_session(session_id: Optional[str] = None) -> str:
             "agent": agent,
             "history": history,
             "last_access": _time.time(),
+            "cancel_event": threading.Event(),  # 用户可发送新消息打断当前任务
         }
         if history:
             logger.info(f"Restored session {new_id}: {len(history)} messages from DB")
@@ -346,9 +347,15 @@ def agent_stream(task: str, strategy: str, session_id: str,
     try:
         # 流式发送事件（带心跳，防止浏览器超时断开）
         last_heartbeat = _time.time()
+        cancel_event = sessions[session_id].get("cancel_event")
         while True:
+            # 用户发送新消息打断 → 取消事件被设置
+            if cancel_event and cancel_event.is_set():
+                cancelled["value"] = True
+                yield f"event: done\ndata: {json.dumps({'text': '⏹ 任务已被用户打断'}, ensure_ascii=False)}\n\n"
+                break
             try:
-                item = queue.get(timeout=3)
+                item = queue.get(timeout=1)
                 last_item = item
                 last_heartbeat = _time.time()
                 if item is None:
@@ -398,6 +405,14 @@ async def chat(request: Request):
 
     session_id = get_or_create_session(session_id)
 
+    # 打断正在执行的任务（用户发新消息 = 取消旧任务）
+    with _sessions_lock:
+        if session_id in sessions:
+            old_event = sessions[session_id].get("cancel_event")
+            if old_event and not old_event.is_set():
+                old_event.set()
+                logger.info(f"Cancelled running task in session {session_id}")
+
     # 每日限流：owner 藉免，外部用户按 IP 限制
     owner_code = os.getenv("WEB_ACCESS_CODE", "")
     is_owner = bool(owner_code and body.get("code", "") == owner_code)
@@ -406,6 +421,10 @@ async def chat(request: Request):
         limit_msg = check_daily_limit(client_ip)
         if limit_msg:
             return {"error": limit_msg}
+
+    with _sessions_lock:
+        if session_id in sessions:
+            sessions[session_id]["cancel_event"] = threading.Event()
 
     # 请求级模型覆盖（不修改 session 共享状态，线程安全）
     model = body.get("model", "")
