@@ -121,22 +121,10 @@
       <option value="reflexion">Reflexion</option>
       <option value="tree-of-thought">Tree-of-Thought</option>
     </select>
-    <span id="version-btn" style="cursor:pointer;font-size:12px;color:#7c3aed;white-space:nowrap;" title="Changelog">v0.3.0</span>
+    <span style="font-size:11px;color:#888;font-style:italic;white-space:nowrap;">结果AI生成，仅供参考<br>重要信息请仔细甄别</span>
     <span id="contact-btn" style="cursor:pointer;font-size:13px;color:#7c3aed;white-space:nowrap;margin-left:-6px;" title="Contact">📧 Contact</span>
   </div>
 </header>
-
-<div id="version-toast" style="display:none; position:fixed; top:60px; right:20px; background:#1a1a2e; border:1px solid #f5a623; border-radius:8px; padding:14px 18px; z-index:9997; font-size:12px; color:#e0e0e0; max-width:340px; max-height:400px; overflow-y:auto;">
-  <span id="version-close" style="float:right; cursor:pointer; color:#666; font-size:16px; line-height:1;">&times;</span>
-  <b style="color:#f5a623;">v0.3.0</b> — 2026-07-03<br><br>
-  <b>New:</b><br>
-  • Basic digital logic gate circuit generation<br>
-  • Basic ananlog logic gate circuit generation under debug<br>
-  • Zhipu GLM-5.2 support<br>
-  <b>Fixed:</b><br>
-  • State machine routing<br>
-  • world/ppt to PDF generation bugs<br><br>
-</div>
 
 <div id="messages"></div>
 
@@ -703,12 +691,6 @@ document.getElementById('contact-btn').addEventListener('click', () => {
 });
 document.getElementById('contact-close').addEventListener('click', () => {
   document.getElementById('contact-toast').style.display = 'none';
-});
-document.getElementById('version-btn').addEventListener('click', () => {
-  document.getElementById('version-toast').style.display = 'block';
-});
-document.getElementById('version-close').addEventListener('click', () => {
-  document.getElementById('version-toast').style.display = 'none';
 });
 (function(){
   const ov = document.getElementById('survey-overlay');
