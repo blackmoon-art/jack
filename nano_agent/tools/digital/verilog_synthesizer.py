@@ -201,6 +201,12 @@ def _yosys_netlist_to_logic_dsl(gate_netlist: str = "", cells: list | None = Non
         "$_MUX_": "MUX", "$_MUX16_": "MUX",
         "$_AOI3_": "AOI", "$_OAI3_": "OAI",
         "$_TBUF_": "BUF", "$_DLATCH_P_": "DFF",
+        "$_DLATCH_N_": "DFF", "$_DLATCH_PP0_": "DFF",
+        "$_DLATCH_PP1_": "DFF", "$_DLATCH_NN0_": "DFF",
+        "$_DLATCH_NN1_": "DFF", "$_DLATCHSR_PPP_": "DFF",
+        "$_DLATCHSR_NNN_": "DFF", "$_SR_PP_": "DFF",
+        "$_SR_NN_": "DFF", "$_DFF_PP_": "DFF",
+        "$_DFF_NN_": "DFF",
     }
 
     # Preferred: parse from JSON cells

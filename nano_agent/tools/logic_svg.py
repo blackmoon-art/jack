@@ -20,8 +20,8 @@ DSL 格式 (每行一个门):
   OR(g2, g3) = Cout
 
 示例 — 2级同步器:
-  BUF(async_in) = s1
-  BUF(s1, clk) = synced
+  DFF(async_in, clk) = s1
+  DFF(s1, clk) = synced
 
 示例 — D触发器:
   DFF(D, clk) = Q
@@ -47,8 +47,8 @@ class LogicSVG:
          "\n"
          "**Format:** `GATE(input1, input2, ...) = output`\n"
          "**Gates:** AND, OR, NOT, NAND, NOR, XOR, XNOR, BUF, DFF, MUX\n"
-         "NOT has 1 input. BUF can have 1 or 2 (with clk).\n"
-         "DFF(D, clk) = Q  — D flip-flop, clk input has triangle marker.\n"
+         "NOT has 1 input. DFF(D, clk) = Q — D flip-flop with clock.\n"
+         "For synchronizers: DFF(async_in, clk) = sync1; DFF(sync1, clk) = synced.\n"
          "MUX(A, B, sel) = Y  — 2:1 multiplexer.\n"
          "First use of a name = input port. Reuse = internal wire.\n"
          "\n"
@@ -59,7 +59,7 @@ class LogicSVG:
          "`XOR(A, B) = g1\nXOR(g1, Cin) = Sum\nAND(A, B) = g2\nAND(g1, Cin) = g3\nOR(g2, g3) = Cout`\n"
          "\n"
          "**Synchronizer:**\n"
-         "`BUF(async_in, clk) = s1\nBUF(s1, clk) = synced`\n"
+         "`DFF(async_in, clk) = s1\nDFF(s1, clk) = synced`\n"
          "\n"
          "**D flip-flop:**\n"
          "`DFF(D, clk) = Q`\n"
