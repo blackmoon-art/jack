@@ -220,7 +220,9 @@ class LogicSVG:
             sortings = ["barycenter", "median", "natural"]
             channels = [28, 40]
         elif n_gates <= 30:
-            spacings = [(240, 220), (300, 280), (360, 340)]
+            # Include wider col_gap for row-based multi-bit adders
+            # (only 3-4 columns need more horizontal room)
+            spacings = [(240, 220), (300, 280), (360, 340), (400, 120)]
             sortings = ["barycenter", "median", "natural"]
             channels = [40, 52, 64]
         else:
@@ -416,6 +418,25 @@ class LogicSVG:
             cluster_of[i] = cid
             cluster_of[dff_idx] = cid
 
+        # Pattern 2: HalfAdder — two gates sharing the same input set
+        # (e.g. XOR+AND sharing a,b; NAND+OR sharing a,b after synthesis)
+        for i in range(n):
+            for j in range(i + 1, n):
+                # Only cluster singletons (not already in CounterBit etc.)
+                if cluster_of[i] != i or cluster_of[j] != j:
+                    continue
+                # Check for identical input sets (order-independent)
+                inputs_i = frozenset(gates[i]["inputs"])
+                inputs_j = frozenset(gates[j]["inputs"])
+                if inputs_i == inputs_j and len(inputs_i) >= 2:
+                    # Valid HalfAdder cluster: merge the two gates
+                    cid = min(cluster_of[i], cluster_of[j])
+                    # Also propagate: update any gates previously clustered
+                    old_i, old_j = cluster_of[i], cluster_of[j]
+                    for k in range(n):
+                        if cluster_of[k] == old_i or cluster_of[k] == old_j:
+                            cluster_of[k] = cid
+
         # Compress cluster IDs to contiguous range
         id_map = {}
         next_id = 0
@@ -426,6 +447,168 @@ class LogicSVG:
                 next_id += 1
             result.append(id_map[c])
         return result
+
+    @staticmethod
+    def _detect_adder_stages(gates, cluster_of):
+        """Detect full-adder / ripple-adder structure and assign layout stages.
+
+        Single-bit: returns {gate_index: stage_number} (column-based).
+        Multi-bit:  returns ({gate_index: local_stage}, {gate_index: bit_index})
+                    for row-per-bit grid layout (bit=row, stage=column).
+        Returns {} if not an adder.
+        """
+        n = len(gates)
+        has_xor = any(g["type"] == "XOR" for g in gates)
+        if not has_xor or n < 5:
+            return {}
+
+        # Build adjacency
+        produced_by = {}
+        consumed_by = {}
+        for i, g in enumerate(gates):
+            produced_by[g["output"]] = i
+            for inp in g["inputs"]:
+                consumed_by.setdefault(inp, []).append(i)
+
+        # Primary inputs: wires not produced by any gate
+        all_outputs = set(produced_by.keys())
+        primary_inputs = set()
+        for g in gates:
+            for inp in g["inputs"]:
+                if inp not in all_outputs:
+                    primary_inputs.add(inp)
+
+        # ── Step 1: Find "first XORs" — XOR gates taking two primary inputs ──
+        # These are the per-bit anchors: XOR(a[i], b[i]). For a single-bit
+        # adder there's one; for ripple adders there's one per bit.
+        first_xors = []  # [(gate_idx, output_wire)]
+        for gi, g in enumerate(gates):
+            if g["type"] == "XOR" and all(inp in primary_inputs for inp in g["inputs"]):
+                first_xors.append((gi, g["output"]))
+
+        if not first_xors:
+            return {}
+
+        # ── Step 2: Assign gates to bits ──
+        # Build a dependency map: each gate → max bit index based on inputs.
+        # Primary inputs have bit indices (from name), otherwise propagate.
+
+        def _primary_bit(name):
+            """Extract bit index from a primary input name like a[2] or b[1]."""
+            m = re.search(r'\[(\d+)\]', name)
+            return int(m.group(1)) if m else None
+
+        # Map primary inputs to bit indices
+        primary_bit = {}
+        for inp in primary_inputs:
+            b = _primary_bit(inp)
+            if b is not None:
+                primary_bit[inp] = b
+
+        # Assign each gate to a bit
+        gate_bit = {}  # gate_idx → bit number
+        # Multiple passes to propagate bit assignments
+        changed = True
+        while changed:
+            changed = False
+            for gi, g in enumerate(gates):
+                if gi in gate_bit:
+                    continue
+                bit = None
+                for inp in g["inputs"]:
+                    if inp in primary_bit:
+                        b = primary_bit[inp]
+                        bit = max(bit, b) if bit is not None else b
+                    elif inp in produced_by:
+                        producer = produced_by[inp]
+                        if producer in gate_bit:
+                            b = gate_bit[producer]
+                            bit = max(bit, b) if bit is not None else b
+                if bit is not None:
+                    gate_bit[gi] = bit
+                    changed = True
+
+        # Default unassigned gates to bit 0
+        for gi in range(n):
+            if gi not in gate_bit:
+                gate_bit[gi] = 0
+
+        # Count bits
+        num_bits = max(gate_bit.values()) + 1 if gate_bit else 1
+        STAGES_PER_BIT = 4
+
+        # ── Step 4: Assign stages within each bit ──
+        stage = {}
+        bit_of = {}  # gate_idx → bit_idx (for multi-bit row layout)
+
+        for bit_idx in range(num_bits):
+            bit_gates = [gi for gi in range(n) if gate_bit.get(gi, 0) == bit_idx]
+            bit_first_xors = [(gi, out) for gi, out in first_xors
+                              if gate_bit.get(gi, 0) == bit_idx]
+
+            if not bit_first_xors:
+                for i, gi in enumerate(bit_gates):
+                    if gi not in stage:
+                        stage[gi] = (i % STAGES_PER_BIT) + 1
+                        bit_of[gi] = bit_idx
+                continue
+
+            first_xor_gi, first_xor_out = bit_first_xors[0]
+            first_xor_inputs = frozenset(gates[first_xor_gi]["inputs"])
+
+            # Stage 1: first XOR + gates sharing its inputs (HA1)
+            stage[first_xor_gi] = 1
+            bit_of[first_xor_gi] = bit_idx
+            for gi in bit_gates:
+                if gi == first_xor_gi:
+                    continue
+                if frozenset(gates[gi]["inputs"]) == first_xor_inputs:
+                    stage[gi] = 1
+                    bit_of[gi] = bit_idx
+
+            # Stage 2: AND gates consuming primary inputs (carry terms)
+            for gi in bit_gates:
+                if gi in stage:
+                    continue
+                g_inputs = set(gates[gi]["inputs"])
+                primary_hits = sum(1 for inp in g_inputs if inp in primary_inputs)
+                if gates[gi]["type"] in ("AND",) and primary_hits >= 1:
+                    stage[gi] = 2
+                    bit_of[gi] = bit_idx
+
+            # Stage 3: sum XOR + intermediate carry OR
+            for gi in bit_gates:
+                if gi in stage:
+                    continue
+                g_inputs = set(gates[gi]["inputs"])
+                if gates[gi]["type"] == "XOR" and first_xor_out in g_inputs:
+                    stage[gi] = 3
+                    bit_of[gi] = bit_idx
+                elif gates[gi]["type"] == "OR":
+                    depends_on_earlier = False
+                    for inp in g_inputs:
+                        if inp in produced_by:
+                            producer = produced_by[inp]
+                            if producer in stage and stage[producer] <= 2:
+                                depends_on_earlier = True
+                                break
+                    if depends_on_earlier:
+                        stage[gi] = 3
+                        bit_of[gi] = bit_idx
+
+            # Stage 4: remaining gates (final carry OR, etc.)
+            for gi in bit_gates:
+                if gi not in stage:
+                    stage[gi] = 4
+                    bit_of[gi] = bit_idx
+
+        # Validate
+        stages_used = set(stage.values())
+        if len(stages_used) >= 3 and len(stage) >= n * 0.8:
+            if num_bits > 1:
+                return (stage, bit_of)
+            return stage
+        return {}
 
     @staticmethod
     def validate_circuit(gates, inputs, outputs):
@@ -648,6 +831,52 @@ class LogicSVG:
             for i in range(len(gates)):
                 get_depth(i)
 
+        # ── Phase 1.4: Adder-aware depth remapping ──
+        # Detect full adder / ripple adder structure.
+        # Single-bit: stage → column (data flow left-to-right).
+        # Multi-bit:  stage → column, bit → row (row-per-bit grid layout).
+        adder_result = LogicSVG._detect_adder_stages(gates, cluster_of)
+        adder_bit_of = None  # {gate_idx: bit_index} for multi-bit
+        if adder_result:
+            if isinstance(adder_result, tuple):
+                adder_stage, adder_bit_of = adder_result
+            else:
+                adder_stage = adder_result
+            for gi, stage in adder_stage.items():
+                depth[gi] = stage
+
+        # ── Phase 1.5: CounterBit depth remapping ──
+        # Each CounterBit cluster (DFF+NOT) gets its own column for the
+        # classic ripple counter look. HalfAdder clusters (NDN+OR etc.)
+        # keep their original topological depths — they use Phase 2.0
+        # column merging + Phase 2.3 row adjacency instead.
+        counterbit_clusters = []
+        for ci, members in cluster_gates.items():
+            if len(members) <= 1:
+                continue
+            # Only remap clusters that contain a DFF (CounterBit pattern)
+            has_dff = any(gates[gi]["type"] == "DFF" for gi in members)
+            if has_dff:
+                counterbit_clusters.append((ci, members))
+
+        counterbit_clusters.sort(key=lambda x: min(depth.get(gi, 999) for gi in x[1]))
+
+        next_cb_depth = 1
+        for ci, members in counterbit_clusters:
+            for gi in members:
+                depth[gi] = next_cb_depth
+            next_cb_depth += 1
+
+        # Shift non-CounterBit gates past the CounterBit columns
+        if counterbit_clusters:
+            depth_offset = next_cb_depth - 1
+            cb_gate_set = set()
+            for _, members in counterbit_clusters:
+                cb_gate_set.update(members)
+            for gi in range(len(gates)):
+                if gi not in cb_gate_set:
+                    depth[gi] = depth.get(gi, 0) + depth_offset
+
         # Group gates by depth
         cols = {}
         for i, g in enumerate(gates):
@@ -665,9 +894,15 @@ class LogicSVG:
         col_of = {}  # gate_index → column index
         col_of_input = {}  # input_name → column (0 if inputs exist, else -1)
 
+        # Sort key: bus signals by bit index (a[0],b[0],a[1],b[1]...),
+        # non-bus signals (clk, cin) after. Keeps per-bit inputs adjacent.
+        def _input_sort(name):
+            m = re.search(r'\[(\d+)\]', name)
+            return (int(m.group(1)) if m else 9999, name)
+
         if inputs:
             input_col = 0
-            for ri, name in enumerate(sorted(inputs)):
+            for ri, name in enumerate(sorted(inputs, key=_input_sort)):
                 col_of_input[name] = input_col
         else:
             input_col = -1
@@ -702,7 +937,7 @@ class LogicSVG:
         def wire_pos(name):
             if name in col_of_input:
                 # Input port: row from sorted position
-                inames = sorted(inputs)
+                inames = sorted(inputs, key=_input_sort)
                 return (col_of_input[name], inames.index(name))
             if name in produced_by:
                 gi = produced_by[name]
@@ -857,6 +1092,43 @@ class LogicSVG:
             for gi in cols[d]:
                 col_of[gi] = col_idx
 
+        # ── Phase 2.3: Cluster row adjacency (CounterBit, AdderBit, etc.) ──
+        # Each cluster occupies its own column (from Phase 1.5). Within each
+        # column, stack cluster members vertically: DFF on top, NOT below.
+        _struct_order = {"DFF": 0, "HA": 0, "FA": 0, "XOR": 0,
+                         "NOT": 1, "AND": 1, "OR": 1, "NAND": 1,
+                         "NOR": 1, "XNOR": 1, "BUFFER": 1, "BUF": 1}
+        for ci, members in cluster_gates.items():
+            if len(members) <= 1:
+                continue
+            members_sorted = sorted(members,
+                key=lambda gi: _struct_order.get(gates[gi].get("type", ""), 2))
+            base_row = min(row_of.get(gi, 999) for gi in members_sorted)
+            for ri, gi in enumerate(members_sorted):
+                row_of[gi] = base_row + ri
+
+        # Renumber rows within each column to be contiguous
+        for d in cols:
+            cols[d].sort(key=lambda gi: row_of.get(gi, 0))
+        for d in cols:
+            for ri, gi in enumerate(cols[d]):
+                row_of[gi] = ri
+
+        # ── Phase 2.4: Adder row-per-bit ordering ──
+        # For multi-bit ripple adders, override row order so each bit
+        # occupies its own row. Bit 0 at top, Bit N at bottom.
+        # Within each column, gates are grouped by bit.
+        if adder_bit_of:
+            for gi, bit_idx in adder_bit_of.items():
+                if gi in row_of:
+                    row_of[gi] = bit_idx
+            # Re-renumber after bit-based row assignment
+            for d in cols:
+                cols[d].sort(key=lambda gi: row_of.get(gi, 0))
+            for d in cols:
+                for ri, gi in enumerate(cols[d]):
+                    row_of[gi] = ri
+
         # ── Phase 2.5: Compaction — tighten sparse adjacent columns ──
         # Build reverse map: column index → list of gate indices
         col_gates = {}
@@ -985,7 +1257,7 @@ class LogicSVG:
         # ── Draw input ports ──
         port_positions = {}
         input_col_x = 60
-        input_names = sorted(inputs)
+        input_names = sorted(inputs, key=_input_sort)
         for ri, name in enumerate(input_names):
             y = 50 + ri * ROW_SPACING + ROW_SPACING // 2
             port_positions[name] = (input_col_x, y, True)
@@ -1017,10 +1289,10 @@ class LogicSVG:
                 out_y = gy
                 port_positions[out_name] = (out_x, out_y, False)
 
-        # ── Phase 4.5: Output Alignment — ports at driving gate Y, tight gap ──
+        # ── Phase 4.5: Output Alignment — ports at driving gate Y, per-column ──
         output_col_x, output_y_map = self._place_output_ports(
             svg, outputs, produced_by, gate_positions, gate_y,
-            col_gap, ROW_SPACING, port_positions)
+            col_gap, ROW_SPACING, port_positions, col_of)
 
         # ── Draw wires with strict column-gap routing ──
         # Build sorted list of all safe vertical channels (gaps between gate columns)
@@ -1282,52 +1554,71 @@ class LogicSVG:
 
     def _place_output_ports(self, svg, outputs, produced_by,
                              gate_positions, gate_y, col_gap,
-                             ROW_SPACING, port_positions):
-        """Phase 4.5: Place output ports aligned to driving gates.
+                             ROW_SPACING, port_positions, col_of=None):
+        """Phase 4.5: Place output ports at their driver gate's column edge.
 
-        Each output port is placed at its driving gate's Y, at a tight
-        horizontal gap from the rightmost gate. Stub wires from gate
-        output pins to ports are drawn here.
+        Each output port is placed at its driver gate's center Y, at the right
+        edge of the gate's OWN column (not at the global right edge). This
+        makes ripple counters, adders, etc. visually associate each output with
+        its bit-slice column.
         """
         max_gate_x = max(gx for gx, _ in gate_positions.values()) if gate_positions else 400
-        output_col_x = max_gate_x + col_gap * 0.3  # tight gap
+        global_output_x = max_gate_x + col_gap * 0.3
 
-        gate_output_counts = {}
-        used_ys = {}
+        # Build column → x-position map from gate positions
+        col_x_map = {}
+        if col_of:
+            for gi, (gx, _) in gate_positions.items():
+                ci = col_of.get(gi)
+                if ci is not None:
+                    # Store the rightmost gate x in this column
+                    cur = col_x_map.get(ci, 0)
+                    col_x_map[ci] = max(cur, gx)
+
+        gate_output_count = {}
+        used_positions = {}  # (x, y) → gate_index
         output_y_map = {}
 
         for name in sorted(outputs):
             if name in produced_by:
                 gi = produced_by[name]
-                base_y = gate_y.get(gi, 50 + len(output_y_map) * ROW_SPACING + ROW_SPACING // 2)
-                count = gate_output_counts.get(gi, 0)
-                gate_output_counts[gi] = count + 1
-                y = base_y + count * (self.PORT_H + 2)
+                driver_gy = gate_y.get(gi, 0)
+                # Place port at driver's column right edge, or global right edge
+                ci = col_of.get(gi) if col_of else None
+                port_x = col_x_map.get(ci, global_output_x) + col_gap * 0.25 if ci is not None else global_output_x
+                count = gate_output_count.get(gi, 0)
+                gate_output_count[gi] = count + 1
+                y = driver_gy + count * (self.PORT_H + 2)
             else:
+                port_x = global_output_x
                 y = 50 + len(output_y_map) * ROW_SPACING + ROW_SPACING // 2
 
-            # Collision check per driving gate
-            y_int = round(y)
-            while y_int in used_ys and used_ys[y_int] != gi:
-                y += self.PORT_H + 2
-                y_int = round(y)
-            used_ys[y_int] = gi
+            # Collision check at same (x, y)
+            used_key = (round(port_x), round(y))
+            y_try = y
+            while used_key in used_positions and used_positions[used_key] != gi:
+                y_try += self.PORT_H + 2
+                used_key = (round(port_x), round(y_try))
+            used_positions[used_key] = gi
+            y = y_try
             output_y_map[name] = y
-            port_positions[name] = (output_col_x, y, False)
-            self._draw_port(svg, output_col_x, y, name, False)
+            port_positions[name] = (port_x, y, False)
+            self._draw_port(svg, port_x, y, name, False)
 
-            # Stub wire: short horizontal line from gate output pin to port
+            # Stub wire from gate output pin to port
             if name in produced_by:
                 gi = produced_by[name]
                 gx, gy = gate_positions[gi]
                 sx = gx + self.W // 2 + self.PIN
                 sy = gy
-                ex = output_col_x - self.PORT_W // 2
-                self._draw_wire_seg(svg, sx, sy, ex, sy)  # horizontal to port column
+                ex = port_x - self.PORT_W // 2
+                self._draw_wire_seg(svg, sx, sy, ex, sy)  # horizontal to port
                 if abs(sy - y) > 2:
                     self._draw_wire_seg(svg, ex, sy, ex, y)  # vertical to port Y
 
-        return output_col_x, output_y_map
+        # Return max output x for SVG width calculation
+        return max(global_output_x,
+                   max((x for x, _ in used_positions.keys()), default=global_output_x)), output_y_map
 
     # ── 端口 ────────────────────────────────────────
 
@@ -1526,9 +1817,13 @@ class LogicSVG:
         import math
 
         # 1. Cross+overlap score (0.60): cross weight 3, overlap weight 4
-        cross_ratio = result["crossings"] / n_gates
-        overlap_ratio = result["overlaps"] / n_gates
-        cross_sub = 10 * math.exp(-cross_ratio / 1.0)
+        # Scale crossings by sqrt(n_gates) so larger circuits aren't
+        # overly penalised (a 28-gate adder naturally has more crossings
+        # than an 8-gate counter).
+        complexity_norm = max(n_gates * math.sqrt(max(n_gates, 1)), 1.0)
+        cross_ratio = result["crossings"] / complexity_norm
+        overlap_ratio = result["overlaps"] / max(n_gates * 0.5, 1.0)
+        cross_sub = 10 * math.exp(-cross_ratio / 2.0)
         overlap_sub = 10 * math.exp(-overlap_ratio / 0.5)
         cross_score = (3 * cross_sub + 4 * overlap_sub) / 7
 

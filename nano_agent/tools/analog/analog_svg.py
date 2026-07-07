@@ -231,22 +231,44 @@ def _calc_sallen_key_lp(tmpl: dict, params: dict) -> dict:
     return {"R": _format_value(r), "C": _format_value(c)}
 
 
+def _clamp_gain(gain: float, min_gain: float, max_gain: float, amp_type: str) -> float:
+    """Clamp gain to practical limits with a warning."""
+    if gain < min_gain:
+        logger.warning(
+            f"{amp_type}: requested gain {gain:.3g} below minimum {min_gain:.3g}, "
+            f"clamping to {min_gain:.3g}")
+        return min_gain
+    if gain > max_gain:
+        logger.warning(
+            f"{amp_type}: requested gain {gain:.3g} exceeds practical maximum "
+            f"{max_gain:.3g} for single-stage, clamping to {max_gain:.3g}")
+        return max_gain
+    return gain
+
+
 def _calc_inverting_amp(tmpl: dict, params: dict) -> dict:
-    gain = abs(_parse_value(str(params.get("gain", "10"))))
+    gain = _clamp_gain(abs(_parse_value(str(params.get("gain", "10")))),
+                       0.01, 1000, "Inverting amp")
     r1 = _parse_value(str(params.get("R1", "1k")))
     rf = gain * r1
     return {"R1": _format_value(r1), "Rf": _format_value(rf)}
 
 
 def _calc_non_inverting_amp(tmpl: dict, params: dict) -> dict:
-    gain = _parse_value(str(params.get("gain", "11")))
+    gain = _clamp_gain(_parse_value(str(params.get("gain", "11"))),
+                       1.0, 1000, "Non-inverting amp")
     r1 = _parse_value(str(params.get("R1", "1k")))
-    rf = (gain - 1) * r1 if gain > 1 else r1
+    if gain > 1.001:
+        rf = (gain - 1) * r1
+    else:
+        # gain ≈ 1 → voltage follower: Rf ≈ 0 (tiny value approximates short)
+        rf = 0.1
     return {"R1": _format_value(r1), "Rf": _format_value(rf)}
 
 
 def _calc_differential_amp(tmpl: dict, params: dict) -> dict:
-    gain = _parse_value(str(params.get("gain", "10")))
+    gain = _clamp_gain(_parse_value(str(params.get("gain", "10"))),
+                       0.01, 1000, "Differential amp")
     r1 = _parse_value(str(params.get("R1", "1k")))
     rf = gain * r1
     return {"R1": _format_value(r1), "R2": _format_value(r1),
@@ -254,7 +276,8 @@ def _calc_differential_amp(tmpl: dict, params: dict) -> dict:
 
 
 def _calc_summing_amp(tmpl: dict, params: dict) -> dict:
-    gain = abs(_parse_value(str(params.get("gain", "1"))))
+    gain = _clamp_gain(abs(_parse_value(str(params.get("gain", "1")))),
+                       0.01, 100, "Summing amp")
     r1 = _parse_value(str(params.get("R1", "1k")))
     rf = gain * r1
     return {"R1": _format_value(r1), "R2": _format_value(r1),
@@ -426,11 +449,18 @@ def _calc_differentiator(tmpl: dict, params: dict) -> dict:
 def _calc_instrumentation_amp(tmpl: dict, params: dict) -> dict:
     """3-opamp instrumentation amplifier.
 
-    Gain = 1 + 2*R1/Rg. R1=R2=R3=10k matched. Rg sets gain.
+    Gain = 1 + 2*R1/Rg. R1=R2=R3=10k matched. Rg computed from gain.
+    User can override Rg directly; otherwise Rg = 2*R1 / (gain - 1).
     """
-    gain = _parse_value(str(params.get("gain", "100")))
-    Rg = _parse_value(str(params.get("Rg", "1k")))
+    gain = _clamp_gain(_parse_value(str(params.get("gain", "100"))),
+                       1.1, 1000, "Instrumentation amp")
     R_fixed = 10000  # 10k matched resistors
+    # If user explicitly provided Rg, use it; otherwise compute from gain
+    if "Rg" in params:
+        Rg = _parse_value(str(params["Rg"]))
+    else:
+        # Rg = 2*R1 / (gain - 1)
+        Rg = 2.0 * R_fixed / (gain - 1.0)
     return {"R1a": _format_value(R_fixed), "R1b": _format_value(R_fixed),
             "R2a": _format_value(R_fixed), "R2b": _format_value(R_fixed),
             "R3a": _format_value(R_fixed), "R3b": _format_value(R_fixed),
@@ -512,6 +542,53 @@ def _calc_cascode(tmpl: dict, params: dict) -> dict:
             "R1": _format_value(R1), "R2": _format_value(R2)}
 
 
+# ═══════════ Output / Power Amplifier Calculators ═══════════
+
+def _calc_class_ab_push_pull(tmpl: dict, params: dict) -> dict:
+    """Class AB complementary push-pull output stage calculator.
+
+    Design approach:
+      - D1/D2 bias provides ~1.4V spread between NPN and PNP bases → crossover elimination
+      - Re1 = Re2 = VTH / Iq → small emitter resistors for thermal stability
+      - Rbias sets diode bias current: Rbias = (Vcc - 1.4) / Idiode, Idiode ≈ 1mA
+      - Iq (quiescent current) ~20mA is typical for audio
+    """
+    Vcc = _parse_value(str(params.get("Vcc", "12")))
+    Iq = _parse_value(str(params.get("Iq", "20m")))
+    # Emitter resistors: small values for thermal stability — drop ~VTH at Iq
+    VTH = 0.026  # thermal voltage at room temp
+    Re_val = VTH / Iq
+    Re_val = max(0.1, min(Re_val, 10))  # clamp to 0.1Ω–10Ω range
+    # Bias resistor: sets diode current ~1mA
+    I_bias = 0.001
+    V_diode_drop = 1.4  # two diodes
+    Rbias = (Vcc - V_diode_drop) / I_bias
+    return {"Re1": _format_value(Re_val), "Re2": _format_value(Re_val),
+            "Rbias": _format_value(Rbias)}
+
+
+def _calc_class_a_output(tmpl: dict, params: dict) -> dict:
+    """Class A common-emitter output stage calculator.
+
+    Biased at Vcc/2 (Vc) for maximum symmetrical swing.
+    Re = Vcc*0.1 / Ic for DC stability. Ce bypasses Re for AC gain.
+    """
+    Vcc = _parse_value(str(params.get("Vcc", "12")))
+    Ic = _parse_value(str(params.get("Ic", "50m")))
+    # Bias collector at Vcc/2 for max swing
+    Vc = Vcc / 2.0
+    Rc = (Vcc - Vc) / Ic
+    # Emitter resistor: 10% of Vcc for stability
+    Ve = Vcc * 0.1
+    Re = Ve / Ic
+    Vb = Ve + VBE_ON
+    Idiv = Ic * 0.1
+    R2 = Vb / Idiv
+    R1 = (Vcc - Vb) / Idiv
+    return {"R1": _format_value(R1), "R2": _format_value(R2),
+            "Rc": _format_value(Rc), "Re": _format_value(Re)}
+
+
 # ═══════════ Oscillator Calculators ═══════════
 
 def _calc_wien_bridge_osc(tmpl: dict, params: dict) -> dict:
@@ -562,6 +639,8 @@ _CALCULATORS = {
     "cascode": _calc_cascode,
     "wien_bridge_osc": _calc_wien_bridge_osc,
     "rc_phase_shift": _calc_rc_phase_shift,
+    "class_ab_push_pull": _calc_class_ab_push_pull,
+    "class_a_output": _calc_class_a_output,
     "fixed": _calc_fixed,
 }
 
@@ -2721,7 +2800,11 @@ class AnalogSVG:
 
     @staticmethod
     def _match_template(desc: str):
-        """Match NL description to template + calculate values."""
+        """Match NL description to template + calculate values.
+
+        Scoring: longer keyword = more specific = higher weight.
+        Chinese keywords get base weight 5 + keyword length.
+        """
         desc_lower = desc.lower().strip()
 
         # Keyword matching
@@ -2731,16 +2814,18 @@ class AnalogSVG:
             name_lower = tmpl["name"].lower()
             # English keywords: sub name and category
             if sub.replace("_", " ") in desc_lower or sub in desc_lower:
-                score += 3
+                score += 3 + len(sub)  # longer sub id = more specific
             for word in name_lower.split():
-                if word in desc_lower or word.replace("-", " ") in desc_lower:
-                    score += 1
+                w = word.replace("-", " ")
+                # Skip single-letter words to avoid false positives
+                if len(w) >= 2 and (w in desc_lower):
+                    score += 1 + len(w)
             if cat in desc_lower:
-                score += 1
-            # Chinese keywords: high-weight match
+                score += 1 + len(cat)
+            # Chinese keywords: case-insensitive, weight by length (longer = more specific match)
             for kw in tmpl.get("keywords_cn", []):
-                if kw in desc_lower:
-                    score += 5
+                if kw.lower() in desc_lower:
+                    score += 5 + len(kw)
             if score > 0:
                 matches.append((score, cat, sub))
 
@@ -2753,7 +2838,13 @@ class AnalogSVG:
 
         if not matches:
             # Fallback: infer from Chinese category-indicating words
-            if any(w in desc_lower for w in ("放大", "运放")):
+            # Check more specific amplifier types first
+            if any(w in desc_lower for w in ("推挽", "互补", "功放", "功率", "音频", "输出放大",
+                                               "otl", "ocl", "btl", "push.pull", "class ab")):
+                cat, sub = "output", "class_ab_push_pull"
+            elif any(w in desc_lower for w in ("甲类", "class a")):
+                cat, sub = "output", "class_a_ce_output"
+            elif any(w in desc_lower for w in ("放大", "运放")):
                 cat, sub = "amplifier", "inverting"
             elif any(w in desc_lower for w in ("滤波",)):
                 cat, sub = "filter", "rc_lowpass"

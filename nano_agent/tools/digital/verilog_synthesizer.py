@@ -46,11 +46,12 @@ def synthesize(verilog: str, top_module: str = "") -> dict:
 
         v_path.write_text(verilog.strip())
 
-        # yosys synthesis: synth → simplemap (force gate-level) → write_json → stat
+        # yosys synthesis: synth -noabc preserves XOR/XNOR gates for cleaner
+        # adder layouts (otherwise abc decomposes them to NAND).
         yosys_script = f"""
 read_verilog {v_path}
 proc; flatten; opt
-synth -top {top_module}
+synth -top {top_module} -noabc
 simplemap
 write_json {json_path}
 write_verilog -noattr {verilog_path}
