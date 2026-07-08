@@ -31,6 +31,7 @@ from .analog import AnalogSVG
 from .analog import SpiceRenderer
 from .image_analyze import ImageAnalyzer
 from .document_parse import DocumentParser
+from .excel import Excel
 from .analog import SpiceSimulator
 from .digital import DigitalCircuit
 
@@ -62,6 +63,7 @@ class ToolRegistry:
         "_ppt": PPT,
         "_image_analyze": ImageAnalyzer,
         "_document_parse": DocumentParser,
+        "_excel": Excel,
         "_spice_simulator": SpiceSimulator,
         "_digital_circuit": DigitalCircuit,
     }
@@ -88,6 +90,7 @@ class ToolRegistry:
         self._weather = Weather()
         self._stock = StockUnified(work_dir, charts_dir=charts_dir)
         self._ppt = PPT(work_dir, charts_dir=charts_dir)
+        self._excel = Excel(work_dir, charts_dir=charts_dir)
         self._chart = Chart(work_dir, charts_dir=charts_dir)
         self._diagram = Diagram(work_dir, charts_dir=charts_dir)
         self._ai_image = AIImage(work_dir, charts_dir=charts_dir)
