@@ -1,12 +1,13 @@
-"""图表工具：mermaid_chart, drawio_diagram。
+"""图表工具：mermaid_chart (mermaid.ink + graphviz fallback), drawio_diagram。
 
-Mermaid: 通过 mermaid.ink API 生成 PNG，免费无需 Key。
+Mermaid: 通过 mermaid.ink API 生成 PNG。失败时自动 fallback 到 graphviz。
 Draw.io: 生成 XML 并提供 diagrams.net 编辑/查看链接。
 """
 
 import base64
 import json
 import logging
+import subprocess
 import urllib.parse
 import urllib.request
 import zlib
@@ -275,16 +276,103 @@ class Diagram:
             with urllib.request.urlopen(req, timeout=15) as resp:
                 filepath.write_bytes(resp.read())
         except urllib.error.URLError as e:
+            logger.warning(f"Mermaid.ink unavailable: {e.reason}, trying Graphviz fallback")
+            gv_result = self._render_graphviz(code, theme)
+            if gv_result:
+                return gv_result
             return f"Error: Mermaid render failed — {e.reason}"
         except Exception as e:
+            logger.warning(f"Mermaid render failed: {e}, trying Graphviz fallback")
+            gv_result = self._render_graphviz(code, theme)
+            if gv_result:
+                return gv_result
             return f"Error: {e}"
 
         img_url = f"/charts/{filename}"
-        # 转义 [ ] 防止破坏 markdown 图片语法
         alt = code[:50].replace(chr(10), ' ').replace('[', '(').replace(']', ')')
         return f"![Mermaid chart]({img_url})\n> `{alt}...`\n{img_url}"
 
-    # ── Draw.io ──────────────────────────────────────────
+    def _mermaid_to_dot(self, code: str) -> str:
+        """Convert Mermaid flowchart syntax to Graphviz DOT format."""
+        lines = code.strip().split("\n")
+        dot_lines = ["digraph G {"]
+        dot_lines.append('  rankdir=TB;')
+        dot_lines.append('  node [shape=box, style=filled, fillcolor="#2a2a4e", '
+                         'fontcolor="#e0e0e0", fontname="monospace", fontsize=10];')
+        dot_lines.append('  edge [color="#7c3aed", fontcolor="#e0e0e0", fontname="monospace", fontsize=9];')
+        dot_lines.append('  bgcolor="#1a1a2e";')
+
+        for line in lines:
+            line = line.strip()
+            if not line or line.startswith("%%") or line.startswith("graph ") or line.startswith("flowchart "):
+                continue
+            # Skip subgraph declarations
+            if line.startswith("subgraph "):
+                dot_lines.append(f'  // {line}')
+                continue
+            if line == "end":
+                continue
+            # A --> B or A -->|label| B
+            import re as _re_dot
+            m = _re_dot.match(r'(\S+)\s*-->\s*(?:\|([^|]+)\|)?\s*(\S+)', line)
+            if m:
+                src, label, dst = m.group(1), m.group(2), m.group(3)
+                # Clean node names
+                src = src.strip('[]()"\'')
+                dst = dst.strip('[]()"\'')
+                if label:
+                    dot_lines.append(f'  "{src}" -> "{dst}" [label="{label.strip()}"];')
+                else:
+                    dot_lines.append(f'  "{src}" -> "{dst}";')
+                continue
+            # A --> B (without pipe labels)
+            m2 = _re_dot.match(r'(\S+)\s*-->\s*(\S+)', line)
+            if m2:
+                src, dst = m2.group(1).strip('[]()"\''), m2.group(2).strip('[]()"\'')
+                dot_lines.append(f'  "{src}" -> "{dst}";')
+                continue
+            # Node declarations like A[Label]
+            m3 = _re_dot.match(r'(\S+)\[([^\]]+)\]', line)
+            if m3:
+                node_id = m3.group(1)
+                node_label = m3.group(2).strip('"\'')
+                dot_lines.append(f'  "{node_id}" [label="{node_label}"];')
+                continue
+            # Style lines (classDef, style, etc.) — skip
+            if any(line.startswith(kw) for kw in ("classDef", "style", "linkStyle", "click")):
+                continue
+
+        dot_lines.append("}")
+        return "\n".join(dot_lines)
+
+    def _render_graphviz(self, code: str, theme: str = "dark") -> str:
+        """Render using graphviz as fallback when mermaid.ink fails."""
+        import shutil
+        if not shutil.which("dot"):
+            return None  # graphviz not installed
+
+        dot_code = self._mermaid_to_dot(code)
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+        filename = f"graphviz_{ts}.svg"
+        filepath = self.charts_dir / filename
+
+        try:
+            result = subprocess.run(
+                ["dot", "-Tsvg", "-o", str(filepath)],
+                input=dot_code, text=True, capture_output=True, timeout=15,
+            )
+            if result.returncode != 0:
+                logger.warning(f"Graphviz render failed: {result.stderr[:200]}")
+                return None
+            img_url = f"/charts/{filename}"
+            alt = code[:50].replace(chr(10), ' ').replace('[', '(').replace(']', ')')
+            return (
+                f"> ⚠️ Mermaid.ink unavailable, rendered with Graphviz.\n\n"
+                f"![Graphviz chart]({img_url})\n{img_url}"
+            )
+        except Exception as e:
+            logger.warning(f"Graphviz fallback failed: {e}")
+            return None
 
     def drawio_diagram(self, description: str = "", diagram_type: str = "flowchart") -> str:
         """从描述生成 Draw.io 图表，返回 diagrams.net 查看/编辑链接。
