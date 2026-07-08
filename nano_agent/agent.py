@@ -638,15 +638,6 @@ class Agent:
 
         loop_start = _time.monotonic()
         for _ in range(self.config.max_iterations):
-            # ── 检查用户中途输入（web 端推入的消息）──
-            user_msgs = getattr(self._local, 'user_messages', None)
-            if user_msgs:
-                while user_msgs:
-                    msg = user_msgs.pop(0)
-                    messages.append({"role": "user", "content": msg})
-                    self._emit("text", {"text": f"📨 {msg}"})
-                    logger.info(f"[Agent] Received user message during execution: {msg[:80]}")
-
             # ── 全局超时检查 ──
             if _time.monotonic() - loop_start > self.config.agent_timeout:
                 logger.warning(
