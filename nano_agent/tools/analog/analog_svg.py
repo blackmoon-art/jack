@@ -307,13 +307,25 @@ def _calc_common_emitter(tmpl: dict, params: dict) -> dict:
       - Ve = Vcc/10 for stable DC operating point
       - Voltage divider bias: stiff divider (Idiv ≈ 0.1*Ic)
       - Ce bypass capacitor → gain ≈ -Rc*Ic/VTH (unilateral at mid-band)
+      - If gain param specified, Rc is set by gain target; Ic is fixed.
     """
+    gain_raw = params.get("gain", params.get("Gain", ""))
     Ic = _parse_value(str(params.get("Ic", "1m")))
     Vcc = _parse_value(str(params.get("Vcc", "12")))
     Ve = Vcc * 0.1
     Re = Ve / Ic
-    Vc = Vcc * 0.6  # Vce ≈ 0.5*Vcc, Ve ≈ 0.1*Vcc → Vc ≈ Vcc - 0.4*Vcc
-    Rc = (Vcc - Vc) / Ic
+    if gain_raw and gain_raw != "?":
+        # Rc set by gain target: |gain| = gm*Rc = Ic*Rc/VTH
+        target_gain = abs(_parse_value(str(gain_raw)))
+        Rc = target_gain * VTH / Ic
+        Vc = Vcc - Ic * Rc
+        # If Rc too large (saturation), clamp
+        if Vc < Ve + 0.5:
+            Vc = Ve + 0.5
+            Rc = (Vcc - Vc) / Ic
+    else:
+        Vc = Vcc * 0.6
+        Rc = (Vcc - Vc) / Ic
     Vb = Ve + VBE_ON
     Idiv = Ic * 0.1
     R2 = Vb / Idiv
@@ -426,7 +438,8 @@ def _calc_twin_t_notch(tmpl: dict, params: dict) -> dict:
     fn = _parse_value(str(params.get("fc", "100")))
     R = _parse_value(str(params.get("R", "10k")))
     C = 1.0 / (2 * math.pi * fn * R)
-    return {"R": _format_value(R), "C": _format_value(C)}
+    return {"R": _format_value(R), "C": _format_value(C),
+            "R3": _format_value(R / 2), "C3": _format_value(2 * C)}
 
 
 # ═══════════ Opamp Application Calculators ═══════════
@@ -528,11 +541,21 @@ def _calc_cascode(tmpl: dict, params: dict) -> dict:
     """BJT cascode amplifier (CE + CB).
 
     Q1 (CE) provides gm; Q2 (CB) provides isolation and bandwidth.
+    If gain param specified, Rc is set by gain target.
     """
+    gain_raw = params.get("gain", params.get("Gain", ""))
     Ic = _parse_value(str(params.get("Ic", "1m")))
     Vcc = _parse_value(str(params.get("Vcc", "15")))
-    Vc2 = Vcc * 0.7
-    Rc = (Vcc - Vc2) / Ic
+    if gain_raw and gain_raw != "?":
+        target_gain = abs(_parse_value(str(gain_raw)))
+        Rc = target_gain * VTH / Ic
+        Vc2 = Vcc - Ic * Rc
+        if Vc2 < Vcc * 0.15:
+            Vc2 = Vcc * 0.15
+            Rc = (Vcc - Vc2) / Ic
+    else:
+        Vc2 = Vcc * 0.7
+        Rc = (Vcc - Vc2) / Ic
     Ve1 = Vcc * 0.05
     Re = Ve1 / Ic
     Vb2 = Vcc * 0.4
@@ -1302,7 +1325,7 @@ def _spec_to_metric(calc_name: str) -> str:
             "sallen_key_hp": "fc", "mfb_bandpass": "fc",
             "twin_t_notch": "fc", "integrator": "fc",
             "differentiator": "fc", "wien_bridge_osc": "fc",
-            "rc_phase_shift_osc": "fc",
+            "rc_phase_shift": "fc",
             }
     return _MAP.get(calc_name, "")
 
@@ -1336,9 +1359,15 @@ def _adjust_params(values: dict, calc_name: str, metric: str,
             if k in new:
                 new[k] = _format_value(_parse_value(str(new[k])) * ratio)
         # Rg in instrumentation amp: lower Rg = higher gain (inverse)
-        for k in ("Rg",):
-            if k in new and calc_name == "instrumentation_amp":
-                new[k] = _format_value(_parse_value(str(new[k])) / ratio)
+        if calc_name == "instrumentation_amp":
+            for k in ("Rg",):
+                if k in new:
+                    new[k] = _format_value(_parse_value(str(new[k])) / ratio)
+        # Rg in differential amp: scale inversely with Rf to maintain balance
+        if calc_name == "differential_amp":
+            for k in ("Rg", "R1", "R2"):
+                if k in new:
+                    new[k] = _format_value(_parse_value(str(new[k])) / ratio)
 
     return new
 
@@ -2438,6 +2467,9 @@ class AnalogSVG:
                 cat, sub = "output", "class_ab_push_pull"
             elif any(w in desc_lower for w in ("甲类", "class a")):
                 cat, sub = "output", "class_a_ce_output"
+            elif any(w in desc_lower for w in ("两级放大", "多级放大", "射频放大", "rf放大",
+                                               "射频", "rf amplifier")):
+                cat, sub = "bjt", "cascode"  # closest multi-transistor topology
             elif any(w in desc_lower for w in ("放大", "运放")):
                 cat, sub = "amplifier", "inverting"
             elif any(w in desc_lower for w in ("滤波",)):
