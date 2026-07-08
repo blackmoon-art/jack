@@ -243,18 +243,16 @@ class BaseStrategy:
         """
         raise NotImplementedError
 
-    def _chat_json(self, messages: list[dict], max_retries: int = 2,
-                   fallback: dict | None = None) -> dict:
+    def _chat_json(self, messages: list[dict], max_retries: int = 2) -> Any | None:
         """调用 LLM 并解析 JSON 响应，失败自动重试。
 
         委托给 LLM.chat_json_with_retry（单一实现），加 emit 通知。
-        Never returns None — returns fallback dict on failure.
+        Returns parsed data or None on failure — callers must check.
         """
         result = self.llm.chat_json_with_retry(
             messages=messages, max_retries=max_retries,
             system="", model=self._model_override,
         )
-        if isinstance(result, dict):
-            return result
-        self.emit("text", {"text": "LLM returned unparseable JSON, using fallback."})
-        return fallback or {}
+        if result is None:
+            self.emit("text", {"text": "LLM returned unparseable JSON, using fallback."})
+        return result
