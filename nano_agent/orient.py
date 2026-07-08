@@ -160,6 +160,8 @@ class Orient:
 
         先尝试直接解析，失败后用 chat_json_with_retry 重试（传入完整上下文）。
         """
+        if not isinstance(text, str):
+            text = str(text)
         text = text.strip()
         if text.startswith("```"):
             text = text.split("\n", 1)[-1]

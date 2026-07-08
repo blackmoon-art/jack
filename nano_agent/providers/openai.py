@@ -57,6 +57,9 @@ class OpenAIProvider(BaseProvider):
 
         msg = response.choices[0].message
         text = msg.content or ""
+        # Guard: content may be a list of content blocks (multimodal API format)
+        if not isinstance(text, str):
+            text = str(text) if text else ""
 
         # DeepSeek reasoner: 保留 reasoning_content
         reasoning = getattr(msg, "reasoning_content", None) or ""
