@@ -423,8 +423,8 @@ class AdvancedCharts:
             X, Y, Z = AdvancedCharts._generate_shape_mesh(raw)
             try:
                 ax.plot_wireframe(X, Y, Z, color="#7c3aed", linewidth=0.5, alpha=0.8)
-            except Exception:
-                # fallback: draw as scatter wire
+            except Exception as e:
+                logger.debug(f"plot_wireframe failed, falling back to scatter wire: {e}")
                 for i in range(0, X.shape[0], 4):
                     ax.plot(X[i, :], Y[i, :], Z[i, :], color="#7c3aed",
                             linewidth=0.5, alpha=0.7)
@@ -473,7 +473,8 @@ class AdvancedCharts:
 
         try:
             ax.set_box_aspect([1, 1, 1])
-        except Exception:
+        except Exception as e:
+            logger.debug(f"matplotlib rendering fallback: {e}")
             pass
 
         ax.tick_params(colors=fg, labelsize=9)
@@ -484,7 +485,8 @@ class AdvancedCharts:
 
         try:
             ax.set_proj_type('ortho')
-        except Exception:
+        except Exception as e:
+            logger.debug(f"matplotlib rendering fallback: {e}")
             pass
 
     # ── 3D 曲面渲染 ─────────────────────────────────────
@@ -553,7 +555,8 @@ class AdvancedCharts:
 
         try:
             ax.set_box_aspect([1, 1, 1])
-        except Exception:
+        except Exception as e:
+            logger.debug(f"matplotlib rendering fallback: {e}")
             pass
 
         ax.tick_params(colors=fg, labelsize=9)
@@ -563,7 +566,8 @@ class AdvancedCharts:
 
         try:
             ax.set_proj_type('ortho')
-        except Exception:
+        except Exception as e:
+            logger.debug(f"matplotlib rendering fallback: {e}")
             pass
 
     @staticmethod

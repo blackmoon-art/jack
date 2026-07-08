@@ -481,8 +481,11 @@ class Agent:
             if verify_obs.success and verify_text and "Error" not in verify_text:
                 v = verify_text.strip()[:300]
                 return f"\n[Chart Verify] {v}"
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(
+                f"[Chart Verify] Image verification skipped for {tool_name}: "
+                f"{type(e).__name__}: {e}"
+            )
         return ""
 
     # ── 核心循环 (O-O-D-A) ─────────────────────────────

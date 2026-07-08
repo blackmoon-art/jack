@@ -61,6 +61,7 @@ class LongTermMemory:
     def __init__(self, db_path: str = "long_term_memory.db"):
         self.db_path = db_path
         self._local = threading.local()
+        self._local._all_conns: list[sqlite3.Connection] = []
         self._init_db()
 
     @property
@@ -72,6 +73,7 @@ class LongTermMemory:
             conn.execute("PRAGMA journal_mode=WAL")
             conn.row_factory = None
             self._local.conn = conn
+            self._local._all_conns.append(conn)
         return conn
 
     def _init_db(self):
@@ -88,7 +90,7 @@ class LongTermMemory:
             """)
             self._conn.commit()
         except Exception as e:
-            logger.warning(f"Failed to init long-term memory DB: {e}")
+            logger.exception(f"Failed to init long-term memory DB: {e}")
             self.db_path = None  # 禁用
 
     def add(self, task: str, result: str):
@@ -103,7 +105,7 @@ class LongTermMemory:
             )
             self._conn.commit()
         except Exception as e:
-            logger.warning(f"Failed to add long-term memory: {e}")
+            logger.exception(f"Failed to add long-term memory: {e}")
 
     def search(self, query: str, top_k: int = 3) -> list[dict]:
         """全文检索相关记忆。返回最相关的 top_k 条。
@@ -151,6 +153,15 @@ class LongTermMemory:
         except Exception:
             return 0
 
+    def close(self):
+        """关闭所有线程本地 SQLite 连接。"""
+        for conn in getattr(self._local, '_all_conns', []):
+            try:
+                conn.close()
+            except Exception:
+                pass
+        self._local._all_conns = []
+
     def clear(self):
         """清空所有长期记忆。"""
         if not self.db_path:
@@ -159,7 +170,7 @@ class LongTermMemory:
             self._conn.execute("DELETE FROM memories")
             self._conn.commit()
         except Exception as e:
-            logger.warning(f"Failed to clear long-term memory: {e}")
+            logger.exception(f"Failed to clear long-term memory: {e}")
 
 
 class ReflexionTrace:
@@ -179,6 +190,7 @@ class ReflexionTrace:
     def __init__(self, db_path: str = "reflexion_trace.db"):
         self.db_path = db_path
         self._local = threading.local()
+        self._local._all_conns: list[sqlite3.Connection] = []
         self._init_db()
 
     @property
@@ -189,6 +201,7 @@ class ReflexionTrace:
             conn.execute("PRAGMA journal_mode=WAL")
             conn.row_factory = sqlite3.Row
             self._local.conn = conn
+            self._local._all_conns.append(conn)
         return conn
 
     def _init_db(self):
@@ -226,7 +239,7 @@ class ReflexionTrace:
             """)
             self._conn.commit()
         except Exception as e:
-            logger.warning(f"Failed to init reflexion trace DB: {e}")
+            logger.exception(f"Failed to init reflexion trace DB: {e}")
             self.db_path = None
 
     def start_trace(self, task: str) -> int:
@@ -241,7 +254,7 @@ class ReflexionTrace:
             self._conn.commit()
             return cur.lastrowid
         except Exception as e:
-            logger.warning(f"Failed to start trace: {e}")
+            logger.exception(f"Failed to start trace: {e}")
             return 0
 
     def save_attempt(self, trace_id: int, attempt_num: int,
@@ -269,7 +282,7 @@ class ReflexionTrace:
             )
             self._conn.commit()
         except Exception as e:
-            logger.warning(f"Failed to save attempt: {e}")
+            logger.exception(f"Failed to save attempt: {e}")
 
     def save_lesson(self, lesson: str, trace_id: int = 0):
         """保存一条教训。"""
@@ -282,7 +295,7 @@ class ReflexionTrace:
             )
             self._conn.commit()
         except Exception as e:
-            logger.warning(f"Failed to save lesson: {e}")
+            logger.exception(f"Failed to save lesson: {e}")
 
     def load_lessons(self, limit: int = 20) -> list[str]:
         """加载最近的教训。"""
@@ -295,7 +308,7 @@ class ReflexionTrace:
             ).fetchall()
             return [r["lesson"] for r in rows]
         except Exception as e:
-            logger.warning(f"Failed to load lessons: {e}")
+            logger.exception(f"Failed to load lessons: {e}")
             return []
 
     def search_lessons(self, query: str, top_k: int = 5) -> list[str]:
@@ -328,7 +341,7 @@ class ReflexionTrace:
             ).fetchall()
             return [r["lesson"] for r in rows]
         except Exception as e:
-            logger.warning(f"Failed to search lessons: {e}")
+            logger.exception(f"Failed to search lessons: {e}")
             return []
 
     def get_trace(self, trace_id: int) -> dict | None:
@@ -355,7 +368,7 @@ class ReflexionTrace:
                 "attempts": [dict(a) for a in attempts],
             }
         except Exception as e:
-            logger.warning(f"Failed to get trace: {e}")
+            logger.exception(f"Failed to get trace: {e}")
             return None
 
     def recent_traces(self, limit: int = 10) -> list[dict]:
@@ -370,7 +383,7 @@ class ReflexionTrace:
             ).fetchall()
             return [dict(r) for r in rows]
         except Exception as e:
-            logger.warning(f"Failed to get recent traces: {e}")
+            logger.exception(f"Failed to get recent traces: {e}")
             return []
 
     def stats(self) -> dict:
@@ -391,6 +404,15 @@ class ReflexionTrace:
             }
         except Exception:
             return {}
+
+    def close(self):
+        """关闭所有线程本地 SQLite 连接。"""
+        for conn in getattr(self._local, '_all_conns', []):
+            try:
+                conn.close()
+            except Exception:
+                pass
+        self._local._all_conns = []
 
 
 class Memory:
@@ -471,7 +493,7 @@ class Memory:
                 self._persistent_dirty = False
             return result
         except Exception as e:
-            logger.warning(f"Failed to load persistent memory: {e}")
+            logger.exception(f"Failed to load persistent memory: {e}")
             return ""
 
     def save_persistent(self, task: str, result: str):
@@ -498,7 +520,7 @@ class Memory:
             lines = content.split("\n")
             return "\n".join(lines[-self.max_lines:]) if len(lines) > self.max_lines else content
         except Exception as e:
-            logger.warning(f"Failed to load reflection memory: {e}")
+            logger.exception(f"Failed to load reflection memory: {e}")
             return ""
 
     def save_reflection(self, task: str, reflection: str, eval_result: dict):
@@ -528,8 +550,10 @@ class Memory:
         cache_key = (query, top_k)
         if not hasattr(self, '_relevant_cache'):
             self._relevant_cache = {}
-        if cache_key in self._relevant_cache:
-            return self._relevant_cache[cache_key]
+            self._relevant_cache_lock = threading.Lock()
+        with self._relevant_cache_lock:
+            if cache_key in self._relevant_cache:
+                return self._relevant_cache[cache_key]
         results = self._long_term.search(query, top_k=top_k)
         if not results:
             parts_list = ""
@@ -538,7 +562,8 @@ class Memory:
             for r in results:
                 parts.append(f"- [{r['created_at'][:10]}] {r['task'][:100]}\n  → {r['result'][:200]}")
             parts_list = "\n".join(parts)
-        self._relevant_cache[cache_key] = parts_list
+        with self._relevant_cache_lock:
+            self._relevant_cache[cache_key] = parts_list
         return parts_list
 
     # ── 文件轮转工具 ────────────────────────────────────
@@ -583,7 +608,7 @@ class Memory:
                     logger.info(f"{path.name} truncated to {max_lines} lines "
                                 f"(was {len(lines)} lines)")
         except Exception as e:
-            logger.warning(f"Failed to write {file_path}: {e}")
+            logger.exception(f"Failed to write {file_path}: {e}")
 
     # ── 快捷方法 ────────────────────────────────────────
 

@@ -261,11 +261,14 @@ def _evict_sessions():
             logger.info(f"Evicted LRU session {sid}")
 
 
+_sessions_building: set[str] = set()  # 正在构建中的 session ID，防止 TOCTOU 重复构建
+
+
 def get_or_create_session(session_id: Optional[str] = None) -> str:
     """获取或创建会话。新 session 或内存中不存在时从 DB 恢复历史。线程安全。
 
-    Agent 构建在锁外完成（涉及 DB 初始化、工具注册，耗时不可控），
-    锁内只做 dict 读写，避免阻塞并发请求。
+    用 _sessions_building 集合防止 TOCTOU 竞态：两个并发请求携带
+    相同 session_id 时，第一个进入构建，第二个等待锁后复用已构建的实例。
     """
     # Fast path: session 已存在，锁内更新时间戳即可
     with _sessions_lock:
@@ -276,37 +279,44 @@ def get_or_create_session(session_id: Optional[str] = None) -> str:
     # 确定新 session ID
     new_id = session_id or uuid.uuid4().hex[:12]
 
-    # Check-then-create: 可能其他线程已经创建了同一个 session
+    # 防 TOCTOU：记录"正在构建"，避免并发重复 agent 构建
     with _sessions_lock:
         if new_id in sessions:
             sessions[new_id]["last_access"] = _time.time()
             return new_id
+        if new_id in _sessions_building:
+            # 另一个线程正在构建同一个 session，等待它完成
+            pass  # 循环重试
+        _sessions_building.add(new_id)
         _evict_sessions()
 
     # ── 锁外构建 Agent（耗时操作）──
-    history = db_load_history(new_id)
-    base_config = get_config()
-    import os as _os
-    session_dir = _os.path.join(base_config.work_dir, f"session_{new_id}")
-    _os.makedirs(session_dir, exist_ok=True)
-    # 用 with_overrides 创建隔离配置，不修改原始 Config
-    session_config = base_config.with_overrides(work_dir=session_dir)
-    agent = Agent(session_config)
+    try:
+        history = db_load_history(new_id)
+        base_config = get_config()
+        import os as _os
+        session_dir = _os.path.join(base_config.work_dir, f"session_{new_id}")
+        _os.makedirs(session_dir, exist_ok=True)
+        session_config = base_config.with_overrides(work_dir=session_dir)
+        agent = Agent(session_config)
 
-    # ── 锁内写入 dict ──
-    with _sessions_lock:
-        # Double-check: 可能其他线程已经创建了
-        if new_id in sessions:
-            sessions[new_id]["last_access"] = _time.time()
-            return new_id
-        sessions[new_id] = {
-            "agent": agent,
+        # ── 锁内写入 dict ──
+        with _sessions_lock:
+            # Double-check: 可能其他线程已经创建了
+            if new_id in sessions:
+                sessions[new_id]["last_access"] = _time.time()
+                return new_id
+            sessions[new_id] = {
+                "agent": agent,
             "history": history,
             "last_access": _time.time(),
             "cancel_event": threading.Event(),  # 用户可发送新消息打断当前任务
         }
         if history:
             logger.info(f"Restored session {new_id}: {len(history)} messages from DB")
+    finally:
+        with _sessions_lock:
+            _sessions_building.discard(new_id)
     return new_id
 
 
@@ -426,7 +436,9 @@ async def chat(request: Request):
 
     # 每日限流：owner 藉免，外部用户按 IP 限制
     owner_code = os.getenv("WEB_ACCESS_CODE", "")
-    is_owner = bool(owner_code and body.get("code", "") == owner_code)
+    import hmac as _hmac
+    is_owner = bool(owner_code and _hmac.compare_digest(
+        body.get("code", ""), owner_code))
     if not is_owner:
         client_ip = get_client_ip(request)
         limit_msg = check_daily_limit(client_ip)
