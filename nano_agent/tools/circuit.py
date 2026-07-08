@@ -382,58 +382,93 @@ class Circuit:
     # ── Block SVG 渲染 (纯 Python, 无外部依赖) ────────────
 
     def _draw_block_svg(self, description: str, title: str) -> str:
-        """Simple SVG block diagram: left-to-right grid, one chain per row."""
+        """纯 SVG 结构框图：共享组件、动态尺寸、纵向连线、层次嵌套。
+
+        改进:
+          - 同名组件跨链共享（不会重复绘制）
+          - 盒子尺寸根据标签自适应
+          - 支持 up/down 方向实现纵向连线
+          - parent(child1, child2) 语法绘制嵌套子模块
+        """
         import xml.etree.ElementTree as ET
 
-        # Parse description into chains
         chains = Circuit._split_chains(description)
         if not chains:
             return "Error: no components in circuit description"
 
-        # Parse each chain into labelled boxes
-        all_boxes = []  # [[(label, x, y, w, h), ...], ...]
-        max_boxes = 0
-        for chain in chains:
-            boxes = []
-            # Pre-process: replace 'comp as NAME' with just 'NAME'
+        # ── 第一遍：收集所有唯一的组件，记录第一次出现的位置 ──
+        # name → (row, col, label, has_children, children)
+        components: dict[str, dict] = {}
+        rows_data: list[list[str]] = []  # per-row ordered list of component names
+
+        for row_i, chain in enumerate(chains):
+            row_names = []
             chain_clean = re.sub(r'\b\w+\s+as\s+(\w+)', r'\1', chain)
-            # Remove arrows, split by -> or whitespace
-            tokens = [t.strip() for t in chain_clean.replace("->", " ").replace("[", " [").split()]
+            tokens = [t.strip().rstrip(",") for t in
+                      chain_clean.replace("->", " ").replace("[", " [").split()]
             for tok in tokens:
-                tok = tok.strip(",")
                 if not tok or tok in ("up", "down", "left", "right", "[", "]", ";"):
                     continue
-                # Skip connect() syntax — no box, just a wire
                 if tok.startswith("connect("):
                     continue
-                # Extract label: port(name) → name; comp(val) → comp
-                label = tok
-                if "(" in tok and ")" in tok:
-                    inner = tok[tok.index("(")+1:tok.rindex(")")]
-                    base = tok.split("(")[0]
-                    if base in ("port", "terminal"):
-                        label = inner.split(".")[0]  # port(RF_in) → RF_in
-                    else:
-                        label = base + "\n" + inner if len(base) < 6 else base
-                # Clean up
-                label = label.strip()
-                if len(label) > 15:
-                    label = label[:13] + ".."
-                boxes.append(label)
-            all_boxes.append(boxes)
-            max_boxes = max(max_boxes, len(boxes))
+                label, children = self._parse_block_token(tok)
+                name = label.split("\n")[0].strip()  # canonical name = first line
+                if name not in components:
+                    components[name] = {
+                        "row": row_i, "col": len(row_names),
+                        "label": label, "children": children,
+                    }
+                row_names.append(name)
+            if row_names:
+                rows_data.append(row_names)
 
-        if max_boxes == 0:
+        if not components:
             return "Error: no blocks found in description"
 
-        # Layout params
-        BOX_W, BOX_H = 100, 50
-        GAP_X, GAP_Y = 60, 40
+        # ── 动态布局：每个组件之间用固定间距 ──
+        MIN_W, MIN_H = 80, 46
+        CHAR_W = 8   # monospace 9px ≈ 8px per ASCII char
+        CJK_W = 17   # CJK char ≈ 17px
+        GAP_X, GAP_Y = 50, 40
         MARGIN = 40
-        n_rows = len(all_boxes)
-        n_cols = max_boxes
-        svg_w = MARGIN * 2 + n_cols * (BOX_W + GAP_X)
-        svg_h = MARGIN * 2 + n_rows * (BOX_H + GAP_Y) + (n_rows - 1) * 20
+        TITLE_H = 30
+        FONT_SIZE = 10
+
+        def _calc_box_size(text: str) -> tuple[int, int]:
+            """计算盒子尺寸。多行取最宽行，+padding。"""
+            lines = text.split("\n")
+            max_w = MIN_W
+            for line in lines:
+                w = sum(CJK_W if '一' <= c <= '鿿' else CHAR_W for c in line)
+                max_w = max(max_w, int(w))
+            w = min(max_w + 24, 280)  # +padding, max width
+            h = max(MIN_H, len(lines) * 14 + 20)
+            return w, h
+
+        # 计算每列最大宽度和每行最大高度
+        col_widths: dict[int, int] = {}
+        row_heights: dict[int, int] = {}
+        for name, comp in components.items():
+            w, h = _calc_box_size(comp["label"])
+            comp["w"], comp["h"] = w, h
+            col_widths[comp["col"]] = max(col_widths.get(comp["col"], 0), w)
+            row_heights[comp["row"]] = max(row_heights.get(comp["row"], 0), h)
+
+        # 计算每个组件的实际坐标
+        def _col_x(col: int) -> int:
+            x = MARGIN
+            for c in range(col):
+                x += col_widths.get(c, MIN_W) + GAP_X
+            return x
+
+        def _row_y(row: int) -> int:
+            y = MARGIN + TITLE_H
+            for r in range(row):
+                y += row_heights.get(r, MIN_H) + GAP_Y
+            return y
+
+        svg_w = _col_x(max(col_widths.keys() or [0]) + 1) + col_widths.get(max(col_widths.keys() or [0]), MIN_W) + MARGIN
+        svg_h = _row_y(max(row_heights.keys() or [0]) + 1) + row_heights.get(max(row_heights.keys() or [0]), MIN_H) + MARGIN
 
         svg = ET.Element("svg", {
             "xmlns": "http://www.w3.org/2000/svg",
@@ -441,51 +476,112 @@ class Circuit:
             "width": str(svg_w), "height": str(svg_h),
         })
         ET.SubElement(svg, "rect", {
-            "width": str(svg_w), "height": str(svg_h),
-            "fill": "#1a1a2e",
+            "width": str(svg_w), "height": str(svg_h), "fill": "#1a1a2e",
         })
         if title:
             ET.SubElement(svg, "text", {
-                "x": str(svg_w // 2), "y": "22", "text-anchor": "middle",
+                "x": str(svg_w // 2), "y": "20", "text-anchor": "middle",
                 "fill": "#e0e0e0", "font-family": "monospace",
                 "font-size": "13", "font-weight": "bold",
             }).text = title
 
-        # Draw boxes and arrows
+        # ── 绘制盒子 ──
         arrow_color = "#7c3aed"
-        for row_i, boxes in enumerate(all_boxes):
-            for col_i, label in enumerate(boxes):
-                x = MARGIN + col_i * (BOX_W + GAP_X)
-                y = MARGIN + row_i * (BOX_H + GAP_Y + 20)
-                # Box
+        for name, comp in components.items():
+            x = _col_x(comp["col"])
+            y = _row_y(comp["row"])
+            w, h = comp["w"], comp["h"]
+            label = comp["label"]
+
+            # Draw children as nested boxes if present
+            if comp["children"]:
+                # Parent box (larger)
+                pw = max(w, sum(_calc_box_size(c)[0] for c in comp["children"]) + (len(comp["children"]) - 1) * 10 + 20)
+                pw = min(pw, 400)
                 ET.SubElement(svg, "rect", {
-                    "x": str(x), "y": str(y), "width": str(BOX_W), "height": str(BOX_H),
+                    "x": str(x), "y": str(y), "width": str(pw), "height": str(h),
+                    "rx": "6", "fill": "#1a1a3e", "stroke": "#7c3aed", "stroke-width": "1.5",
+                    "stroke-dasharray": "4,2",
+                })
+                # Parent label at top
+                ET.SubElement(svg, "text", {
+                    "x": str(x + pw // 2), "y": str(int(y + 13)), "text-anchor": "middle",
+                    "fill": "#7c3aed", "font-family": "monospace", "font-size": "10",
+                    "font-weight": "bold",
+                }).text = label.split("\n")[0]
+                # Child boxes inside
+                cx = x + 8
+                cy = y + 20
+                for child in comp["children"]:
+                    cw, ch = _calc_box_size(child)
+                    cw = min(cw, (pw - 16) // len(comp["children"]) - 4)
+                    ET.SubElement(svg, "rect", {
+                        "x": str(cx), "y": str(cy), "width": str(cw), "height": str(ch),
+                        "rx": "4", "fill": "#2a2a4e",
+                        "stroke": "#8b5cf6", "stroke-width": "1",
+                    })
+                    c_lines = child.split("\n")
+                    for li, cl in enumerate(c_lines):
+                        cly = int(cy + ch // 2 + (li - (len(c_lines) - 1) / 2) * 11 + 4)
+                        ET.SubElement(svg, "text", {
+                            "x": str(cx + cw // 2), "y": str(int(cly)),
+                            "text-anchor": "middle", "fill": "#ccc",
+                            "font-family": "monospace", "font-size": "8",
+                        }).text = cl
+                    cx += cw + 6
+                w = pw  # use parent width for arrows
+            else:
+                ET.SubElement(svg, "rect", {
+                    "x": str(x), "y": str(y), "width": str(w), "height": str(h),
                     "rx": "6", "fill": "#2a2a4e",
                     "stroke": "#7c3aed", "stroke-width": "1.5",
                 })
-                # Label (split multiline)
                 lines = label.split("\n")
                 for li, line in enumerate(lines):
-                    ly = int(y + BOX_H // 2 + (li - (len(lines) - 1) / 2) * 12 + 4)
+                    ly = int(y + h // 2 + (li - (len(lines) - 1) / 2) * 12 + 4)
                     ET.SubElement(svg, "text", {
-                        "x": str(x + BOX_W // 2), "y": str(int(ly)),
+                        "x": str(x + w // 2), "y": str(int(ly)),
                         "text-anchor": "middle", "fill": "#e0e0e0",
-                        "font-family": "monospace", "font-size": "9",
+                        "font-family": "monospace", "font-size": str(FONT_SIZE),
                     }).text = line
-                # Arrow to next box
-                if col_i < len(boxes) - 1:
-                    ax1 = x + BOX_W
-                    ay = y + BOX_H // 2
-                    ax2 = x + BOX_W + GAP_X
+
+        # ── 绘制连线 ──
+        for row_names in rows_data:
+            for i in range(len(row_names) - 1):
+                n1, n2 = row_names[i], row_names[i + 1]
+                c1, c2 = components.get(n1), components.get(n2)
+                if not c1 or not c2:
+                    continue
+                x1, y1, w1, h1 = _col_x(c1["col"]), _row_y(c1["row"]), c1["w"], c1["h"]
+                x2, y2, w2, h2 = _col_x(c2["col"]), _row_y(c2["row"]), c2["w"], c2["h"]
+
+                # Determine if horizontal or vertical connection
+                if c1["row"] == c2["row"]:
+                    # Horizontal: from right of c1 to left of c2
+                    ax1, ay = x1 + w1, y1 + h1 // 2
+                    ax2 = x2
                     ET.SubElement(svg, "line", {
                         "x1": str(ax1), "y1": str(ay),
                         "x2": str(ax2), "y2": str(ay),
                         "stroke": arrow_color, "stroke-width": "1.5",
                     })
-                    # Arrowhead
                     ET.SubElement(svg, "polygon", {
                         "points": f"{ax2-6},{ay-3} {ax2},{ay} {ax2-6},{ay+3}",
                         "fill": arrow_color,
+                    })
+                else:
+                    # Vertical: from bottom of c1 to top of c2 or vice versa
+                    if c1["row"] < c2["row"]:
+                        sx, sy = x1 + w1 // 2, y1 + h1  # bottom of c1
+                        ex, ey = x2 + w2 // 2, y2        # top of c2
+                    else:
+                        sx, sy = x1 + w1 // 2, y1         # top of c1
+                        ex, ey = x2 + w2 // 2, y2 + h2    # bottom of c2
+                    ET.SubElement(svg, "line", {
+                        "x1": str(sx), "y1": str(sy),
+                        "x2": str(ex), "y2": str(ey),
+                        "stroke": arrow_color, "stroke-width": "1.5",
+                        "marker-end": f"url(#arrow_{n1}_{n2})",
                     })
 
         ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
@@ -495,6 +591,35 @@ class Circuit:
 
         img_url = f"/charts/{filename}"
         return f"![{title or 'Block Diagram'}]({img_url})\n{img_url}"
+
+    def _parse_block_token(self, tok: str) -> tuple[str, list]:
+        """解析 block token: name(val)→label; parent(child1, child2)→nested."""
+        children = []
+        label = tok.strip()
+        # Extract 'as NAME'
+        m = re.search(r'\s+as\s+(\w+)$', label)
+        if m:
+            label = m.group(1)
+        # Extract function(val)
+        if "(" in label and ")" in label:
+            base = label[:label.index("(")]
+            inner = label[label.index("(")+1:label.rindex(")")]
+            inner_parts = [p.strip() for p in inner.split(",") if p.strip()]
+            if base in ("port", "terminal"):
+                label = inner_parts[0].split(".")[0] if inner_parts else "port"
+            elif len(inner_parts) >= 2:
+                # parent with children: CPU(ALU, CU, Reg)
+                children = inner_parts
+                if len(base) < 15:
+                    label = base
+                else:
+                    label = base[:13] + ".."
+            else:
+                # comp(val) — show val below comp name
+                label = base + "\n" + inner if len(base) < 8 else base
+        if len(label) > 25:
+            label = label[:22] + ".."
+        return label, children
 
     def _draw_logic_svg(self, description: str, title: str, allowed: set) -> str:
         """纯 SVG 逻辑门图渲染，不依赖 schemdraw。
