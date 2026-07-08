@@ -220,7 +220,7 @@ class BaseStrategy:
                 f"[{results[i]['name']}] {results[i]['result'][:500]}"
                 for i in sorted(results.keys())
             )
-            enriched = self._orient_fn(combined)
+            enriched = str(self._orient_fn(combined) or "")
             if enriched and enriched != combined:
                 orient_part = enriched[len(combined):].strip() if enriched.startswith(combined) else enriched
                 if orient_part and messages:
@@ -243,15 +243,18 @@ class BaseStrategy:
         """
         raise NotImplementedError
 
-    def _chat_json(self, messages: list[dict], max_retries: int = 2) -> Any | None:
+    def _chat_json(self, messages: list[dict], max_retries: int = 2,
+                   fallback: dict | None = None) -> dict:
         """调用 LLM 并解析 JSON 响应，失败自动重试。
 
         委托给 LLM.chat_json_with_retry（单一实现），加 emit 通知。
+        Never returns None — returns fallback dict on failure.
         """
         result = self.llm.chat_json_with_retry(
             messages=messages, max_retries=max_retries,
             system="", model=self._model_override,
         )
-        if result is None:
-            self.emit("text", {"text": "LLM returned unparseable JSON, using fallback."})
-        return result
+        if isinstance(result, dict):
+            return result
+        self.emit("text", {"text": "LLM returned unparseable JSON, using fallback."})
+        return fallback or {}

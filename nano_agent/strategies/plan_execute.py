@@ -150,8 +150,10 @@ class PlanExecuteStrategy(BaseStrategy):
             return result
 
         # Phase 2: Execute with context passing
+        MAX_REVISIONS = 5
         results: list[str] = []
         step_idx = 0
+        revisions = 0
 
         while step_idx < len(steps):
             step = steps[step_idx]
@@ -189,6 +191,10 @@ class PlanExecuteStrategy(BaseStrategy):
                     logger.info(f"[Evaluate] {status}: {reason}")
 
                     if status == "failed":
+                        if revisions >= MAX_REVISIONS:
+                            logger.warning("[Revise] Max revisions reached, stopping.")
+                            break
+                        revisions += 1
                         remaining = steps[step_idx + 1:]
                         logger.info(f"[Revise] Replanning {len(remaining)} remaining steps...")
                         revised = self.revise_plan(task, remaining, reason)

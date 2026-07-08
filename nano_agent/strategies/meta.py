@@ -559,8 +559,8 @@ class MetaStrategy(BaseStrategy):
             text = resp["text"].strip()
             if "LESSON:" in text:
                 return text
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"Failed to extract lesson: {e}")
         return ""
 
     # ── 主流水线 ──────────────────────────────────────────
@@ -722,8 +722,8 @@ class MetaStrategy(BaseStrategy):
             try:
                 self.memory.save_reflection(task, lesson, last_eval)
                 logger.info(f"[Meta Lesson] {lesson[:200]}")
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(f"Failed to save reflection: {e}")
 
         logger.info(f"[Meta] Complete: {analysis['complexity']}/10 → {current_strategy} "
                     f"→ score {best_score}/10")
