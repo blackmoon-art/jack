@@ -888,14 +888,14 @@ templates:
   - type: D
     name: D3
     nodes:
-    - ac1
     - dc-
+    - ac1
     value: ''
   - type: D
     name: D4
     nodes:
-    - '0'
     - dc-
+    - '0'
     value: ''
   - type: C
     name: Cf

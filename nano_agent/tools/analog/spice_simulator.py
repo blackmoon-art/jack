@@ -88,8 +88,15 @@ def _prep_netlist(spice_text: str, analysis: str = "") -> tuple[str, str]:
 
     # Auto-inject BJT/MOSFET models — detect which models are actually used
     models_needed = set()
-    for m in re.finditer(r'(?:^|\s)[QM]\d\w*\s+(?:.*\s)?(\S+)\s*$', text, re.MULTILINE):
-        models_needed.add(m.group(1).upper())
+    for m in re.finditer(r'(?:^|\s)([QM]\d\w*)\s+(.+)', text, re.MULTILINE):
+        rest = m.group(2).split()
+        ctype = m.group(1)[0].upper()
+        if ctype == "M" and len(rest) >= 5:
+            models_needed.add(rest[4].upper())   # M d g s b model
+        elif ctype == "Q" and len(rest) >= 4:
+            models_needed.add(rest[3].upper())   # Q c b e model
+            if len(rest) >= 5:
+                models_needed.add(rest[4].upper())  # Q c b e s model
     from .spice_common import NPN_MODEL, PNP_MODEL, NMOS_MODEL, PMOS_MODEL
     _MODEL_MAP = {"NPN": NPN_MODEL, "PNP": PNP_MODEL,
                   "NMOS": NMOS_MODEL, "PMOS": PMOS_MODEL}
@@ -506,24 +513,45 @@ def _compute_ac_metrics(ac_data: dict) -> dict:
         if metrics.get("filter_type") == "unknown" and gbw < 100:
             metrics["warnings"].append(f"GBW very low ({gbw:.1f} Hz) — amplifier bandwidth may be insufficient")
 
-    # ── P1: Phase margin estimate ──
-    phase_at_cut = metrics.get("phase_at_cutoff")
-    if phase_at_cut is not None:
-        # For closed-loop AC: phase margin ≈ 180° + phase_at_cutoff
-        # (valid for dominant-pole compensated amps where cutoff ≈ unity-gain)
-        phase_margin = 180.0 + phase_at_cut
-        # Normalize to [0, 180]
-        while phase_margin > 180:
-            phase_margin -= 360
-        while phase_margin < 0:
-            phase_margin += 360
-        metrics["phase_margin_deg"] = round(phase_margin, 1)
-        if phase_margin < 30:
-            metrics["warnings"].append(
-                f"Phase margin only {phase_margin:.0f}° — may ring or oscillate")
-        elif phase_margin < 45:
-            metrics["warnings"].append(
-                f"Phase margin {phase_margin:.0f}° (<45°) — marginal stability")
+    # ── P1: Phase margin (at unity-gain crossover, not -3dB cutoff) ──
+    # Phase margin = 180° + phase(f_unity_gain) where gain(f_unity_gain) ≈ 0dB
+    phase_cols = [c for c in metrics.get("phase_cols", [])]
+    if phase_cols and freqs and db_data:
+        phase_data = metrics.get("phase_data", {})
+        best_col = phase_cols[0]
+        best_phase = phase_data.get(best_col, [])
+        if best_phase and len(best_phase) == len(freqs):
+            # Find unity-gain crossover: gain crosses 0dB (from above to below)
+            unity_idx = None
+            for i in range(len(db_data) - 1):
+                if db_data[i] >= 0 and db_data[i + 1] < 0:
+                    # Linear interpolation for more accurate crossing
+                    frac = (0 - db_data[i]) / (db_data[i + 1] - db_data[i]) if db_data[i + 1] != db_data[i] else 0
+                    unity_phase = best_phase[i] + frac * (best_phase[i + 1] - best_phase[i])
+                    phase_margin = 180.0 + unity_phase
+                    # Normalize to [0, 180]
+                    while phase_margin > 180:
+                        phase_margin -= 360
+                    while phase_margin < 0:
+                        phase_margin += 360
+                    metrics["phase_margin_deg"] = round(phase_margin, 1)
+                    if phase_margin < 30:
+                        metrics["warnings"].append(
+                            f"Phase margin only {phase_margin:.0f}° — may ring or oscillate")
+                    elif phase_margin < 45:
+                        metrics["warnings"].append(
+                            f"Phase margin {phase_margin:.0f}° (<45°) — marginal stability")
+                    break
+            # Fallback: if gain never reaches 0dB (e.g. passive filter), use -3dB point
+            if "phase_margin_deg" not in metrics:
+                phase_at_cut = metrics.get("phase_at_cutoff")
+                if phase_at_cut is not None:
+                    phase_margin = 180.0 + phase_at_cut
+                    while phase_margin > 180:
+                        phase_margin -= 360
+                    while phase_margin < 0:
+                        phase_margin += 360
+                    metrics["phase_margin_deg"] = round(phase_margin, 1)
 
     return metrics
 

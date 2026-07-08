@@ -185,8 +185,8 @@ _CIRCUIT_TEMPLATES = {
             {"type": "V", "name": "Vin", "nodes": ["ac1", "0"], "value": "AC 1"},
             {"type": "D", "name": "D1", "nodes": ["ac1", "dc+"], "value": ""},
             {"type": "D", "name": "D2", "nodes": ["0", "dc+"], "value": ""},
-            {"type": "D", "name": "D3", "nodes": ["ac1", "dc-"], "value": ""},
-            {"type": "D", "name": "D4", "nodes": ["0", "dc-"], "value": ""},
+            {"type": "D", "name": "D3", "nodes": ["dc-", "ac1"], "value": ""},
+            {"type": "D", "name": "D4", "nodes": ["dc-", "0"], "value": ""},
             {"type": "C", "name": "Cf", "nodes": ["dc+", "dc-"], "value": "100u"},
             {"type": "R", "name": "Rload", "nodes": ["dc+", "dc-"], "value": "1k"},
         ],
@@ -760,11 +760,16 @@ def _parse_spice(spice_text: str) -> list[dict]:
             model = ""
 
         elif ctype == "Q":
-            # BJT: Qname C B E [S] model
+            # BJT: Qname C B E [S] model [params...]
             if len(tokens) < 5:
                 continue
-            raw_nodes = tokens[1:4]  # C, B, E
-            model = tokens[4]
+            # Detect optional substrate node: if ≥6 tokens, substrate at [4], model at [5]
+            if len(tokens) >= 6 and tokens[4].lower() == "s":
+                raw_nodes = tokens[1:5]  # C, B, E, S
+                model = tokens[5]
+            else:
+                raw_nodes = tokens[1:4]  # C, B, E
+                model = tokens[4]
             value = ""
 
         elif ctype == "M":
@@ -1663,10 +1668,20 @@ class AnalogSVG:
                 # Auto-inject device models
                 from .spice_common import NPN_MODEL, PNP_MODEL, NMOS_MODEL, PMOS_MODEL
                 _MM = {"NPN": NPN_MODEL, "PNP": PNP_MODEL, "NMOS": NMOS_MODEL, "PMOS": PMOS_MODEL}
-                for m in re.finditer(r'(?:^|\s)[QM]\d\w*\s+(?:.*\s)?(\S+)\s*$', sim_spice, re.MULTILINE):
-                    mn = m.group(1).upper()
-                    if mn in _MM:
-                        f.write(_MM[mn])
+                for m in re.finditer(r'(?:^|\s)([QM]\d\w*)\s+(.+)', sim_spice, re.MULTILINE):
+                    rest = m.group(2).split()
+                    ctype = m.group(1)[0].upper()
+                    candidates = []
+                    if ctype == "M" and len(rest) >= 5:
+                        candidates.append(rest[4])   # M d g s b model
+                    elif ctype == "Q" and len(rest) >= 4:
+                        candidates.append(rest[3])   # Q c b e model
+                        if len(rest) >= 5:
+                            candidates.append(rest[4])  # Q c b e s model
+                    for mn in candidates:
+                        mn = mn.upper()
+                        if mn in _MM:
+                            f.write(_MM[mn])
                 f.write(sim_spice + "\n")
                 if ".op" not in sim_spice.lower() and ".ac" not in sim_spice.lower() \
                    and ".tran" not in sim_spice.lower():
