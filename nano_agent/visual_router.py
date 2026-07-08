@@ -112,8 +112,9 @@ _EXACT_ROUTES: list[tuple[str, str, dict]] = [
 
     # === mermaid_chart 子类型 ===
     # 时序图/交互时序（OCC 控制时序等）
-    ("时序图|交互时序|sequence diagram|timing diagram|sequenceDiagram|"
-     "时序流程|消息交互|组件交互",
+    ("时序图|画.*时序|draw.*timing|draw.*sequence|时序.*交互|时序.*流程|"
+     "交互时序|sequence.*diagram|timing.*diagram|sequenceDiagram|"
+     "timingDiagram|消息交互|组件交互|timing.*chart|时序.*信号",
      "mermaid_chart", {}),
     # 状态机 — 软件图优先，硬件电路走 draw_logic (在 _exact_match 中检测)
     ("状态机|FSM|fsm|finite state machine|state machine|stateDiagram|状态转换|状态转移",
@@ -185,8 +186,8 @@ _EXACT_ROUTES: list[tuple[str, str, dict]] = [
      "pll|dll|时钟树|clock.*tree|"
      "power.*manage|电源管理|pmu|ldo.*ctrl|复位.*电路|reset.*circuit",
      "draw_block", {}),
-    # 框图 / 系统框图 / 信号链 → draw_block
-    ("框图|系统框图|block.*diagram|信号链|signal.*chain|rf.*chain|"
+    # 框图 / 系统框图 / 框架图 / 模块图 → draw_block
+    ("框图|系统框图|框架图|模块图|block.*diagram|信号链|signal.*chain|rf.*chain|"
      "rf.*front|混频器|mixer|低噪放|lna|中频|if.*signal|"
      "fmcw|radar.*if|雷达.*中频|rf.*receiver|发射机|transmitter|"
      "接收机|receiver.*chain",
@@ -299,8 +300,8 @@ def classify_circuit_type(task: str, llm) -> str:
         re.IGNORECASE,
     )
     _BLOCK_KW = re.compile(
-        r"框图|block.diagram|系统图|架构图|信号链|signal.chain|"
-        r"soc|mixed.signal|top.level|system.level|模块图",
+        r"框图|框架图|模块图|block.diagram|系统图|架构图|信号链|signal.chain|"
+        r"soc|mixed.signal|top.level|system.level",
         re.IGNORECASE,
     )
 
@@ -415,7 +416,8 @@ _CIRCUIT_TOOLS = frozenset({
 # 绘制意图词：只有包含这些词，电路工具才会被触发
 _DRAW_INTENT_RE = re.compile(
     r"画|绘制|画个|画张|画幅|画一下|diagram|schematic|"
-    r"电路图|原理图|框图|接线图|电路设计|layout|plot|"
+    r"电路图|原理图|框图|接线图|框架图|模块图|架构图|示意图|"
+    r"电路设计|layout|plot|"
     r"\bdraw\b|\brender\b|\bgenerate\b|\bvisualize\b|"
     r"设计|仿真|做个|生成|画出|帮我画|"
     # 电路类型名本身隐含绘制意图, 不需要额外画/设计前缀
