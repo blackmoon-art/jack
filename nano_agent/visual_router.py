@@ -314,23 +314,18 @@ def classify_circuit_type(task: str, llm) -> str:
         logger.debug(f"[CircuitClassify] Layer1 block: '{task[:40]}'")
         return "draw_block"
 
-    # ── 模糊请求检测：无电路特征关键词 → 不确定类型，让 LLM 问用户 ──
-    # 只有"电路图"或"occ电路图"这种无具体电路类型的输入，不强制分类
-    _CIRCUIT_FEATURE_KW = re.compile(
-        r"运放|放大器|滤波|低通|高通|带通|带阻|振荡|整流|稳压|偏置|分压|"
-        r"共射|共集|共基|共源|共栅|cascode|电流镜|差分|"
-        r"逻辑门|门电路|半加器|全加器|触发器|计数器|锁存器|寄存器|译码器|"
-        r"多路复用|alu|verilog|flip.flop|mux|decoder|encoder|fsm|"
-        r"occ|dft|scan.chain|synchronizer|fifo|clock|时钟|分频|移位|"
-        r"op.?amp|opamp|spice|bode|频率|增益|sallen|butterworth|"
-        r"ldo|buck|boost|transistor|bjt|mosfet|"
-        r"框图|block.diagram|系统图|架构图|信号链|signal.chain",
-        re.IGNORECASE,
-    )
-    if not _CIRCUIT_FEATURE_KW.search(task_lower):
-        logger.info(f"[CircuitClassify] Ambiguous: '{task[:60]}' — no circuit features, "
+    # ── 模糊请求检测：无电路特征 + 有无效前缀 → 让 LLM 问用户 ──
+    # 只有"asdf电路图"这种乱码前缀才拦截，正常"电路图"走 LLM 分类
+    # 移除电路关键词后的剩余部分如果全是非中文非字母 → 无意义输入
+    _circuit_terms = r"电路|circuit|schematic|原理图|schematic|接线图|布线|pcb|layout|电子"
+    _stripped = re.sub(_circuit_terms, "", task_lower, flags=re.IGNORECASE).strip()
+    # 去掉"画个|画一张|帮我画|绘制|draw|a|an|the|请|帮我"等前缀
+    _stripped = re.sub(r"^(draw|a|an|the|please|画|绘制|生成|创建|制作|帮我|请|一个|一张|个|张)\s*", "", _stripped, flags=re.IGNORECASE)
+    if _stripped and not re.search(r"[一-鿿]|[a-zA-Z]{3,}", _stripped):
+        logger.info(f"[CircuitClassify] Ambiguous: '{task[:60]}' — "
+                     f"no meaningful content after stripping circuit terms, "
                      f"returning None to let LLM ask user for clarification")
-        return None  # 模糊请求，让 LLM 向用户确认
+        return None  # 无意义输入，让 LLM 向用户确认
 
     # ── Layer 2: LLM 分类 ──
     prompt = _CIRCUIT_CLASSIFY_PROMPT.format(task=task)
