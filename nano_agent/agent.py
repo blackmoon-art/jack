@@ -195,7 +195,9 @@ class Agent:
             "- react: needs step-by-step visible reasoning, debugging, audit trail\n"
             "- plan-execute: complex multi-step task, project, report, analysis\n"
             "- reflexion: quality-critical, needs self-review, error-prone task\n"
-            "- tree-of-thought: multiple valid approaches, creative brainstorming, optimization\n\n"
+            "- tree-of-thought: multiple valid approaches, creative brainstorming, optimization\n"
+            "- meta: ambiguous or high-stakes task where the best strategy is unclear; "
+            "the system will auto-analyze, select a strategy, and retry with upgrades on failure\n\n"
             f"Task: {task}\n\nStrategy:"
         )
         try:

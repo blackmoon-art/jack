@@ -14,6 +14,7 @@ Strategies:
     plan / pe     Plan-Execute: 分解 → 逐步执行 → 评估 → 必要时重规划
     reflexion     Reflexion: 自我反思 + 失败重试 + 教训学习
     tot           Tree-of-Thought: 多路径探索 → 评估 → 回溯
+    meta          Meta: 自动分析→选策略→评估→重试升级（全自动流水线）
 
 Supports:
   - Anthropic (Claude)
@@ -64,7 +65,7 @@ def interactive(agent: Agent):
     print("  '记忆' / 'mem'        — 查看记忆状态")
     print("  '策略 <name>'          — 切换推理策略")
     print()
-    print("可用策略: default, react, plan-execute, reflexion, tree-of-thought")
+    print("可用策略: default, react, plan-execute, reflexion, tree-of-thought, meta")
     print()
 
     current_strategy = "default"

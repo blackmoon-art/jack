@@ -25,8 +25,8 @@ class MetaStrategy(BaseStrategy):
 
     uses_orient = True
     default_params = {"max_retries": 6, "auto_upgrade": True}
-    auto_keywords = ()  # 不参与关键词匹配，由 LLM 分类显式选择
-    auto_priority = 0
+    auto_keywords = ("全自动", "高要求", "质量优先", "autopilot", "确保正确", "关键任务")
+    auto_priority = 4  # 最高优先：复杂/高要求任务首选
 
     def __init__(self, *args, max_retries: int = None, auto_upgrade: bool = True,
                  **kwargs):
