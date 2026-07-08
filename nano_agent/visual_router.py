@@ -137,7 +137,7 @@ _EXACT_ROUTES: list[tuple[str, str, dict]] = [
     # 架构图 / 结构图 → mermaid flowchart 自动布局比手写网格好
     ("架构图|系统架构|architecture diagram|组件图|系统设计图|"
      "结构图|结构框图|系统结构|功能结构|层次结构|拓扑图|组织架构|"
-     "系统框图|框架图|模块图|系统框架|功能框架|技术架构|业务架构",
+     "系统框图|系统框架|功能框架|技术架构|业务架构",
      "mermaid_chart", {}),
 
     # === 其他画图工具 ===
@@ -302,7 +302,7 @@ def classify_circuit_type(task: str, llm) -> str:
         re.IGNORECASE,
     )
     _BLOCK_KW = re.compile(
-        r"框图|框架图|模块图|block.diagram|系统图|架构图|信号链|signal.chain|"
+        r"框图|block.diagram|系统图|架构图|信号链|signal.chain|"
         r"soc|mixed.signal|top.level|system.level",
         re.IGNORECASE,
     )
@@ -418,7 +418,7 @@ _CIRCUIT_TOOLS = frozenset({
 # 绘制意图词：只有包含这些词，电路工具才会被触发
 _DRAW_INTENT_RE = re.compile(
     r"画|绘制|画个|画张|画幅|画一下|diagram|schematic|"
-    r"电路图|原理图|框图|接线图|框架图|模块图|架构图|示意图|"
+    r"电路图|原理图|框图|接线图|架构图|示意图|"
     r"电路设计|layout|plot|"
     r"\bdraw\b|\brender\b|\bgenerate\b|\bvisualize\b|"
     r"设计|仿真|做个|生成|画出|帮我画|"
@@ -426,7 +426,7 @@ _DRAW_INTENT_RE = re.compile(
     r"滤波器|放大器|整流|分压器|运放|低通|高通|带通|带阻|"
     r"RC滤波|LC滤波|RL滤波|RLC|Sallen|sallen|"
     r"混频器|低噪放|LNA|mixer|PLL|DLL|FMCW|发射机|接收机|雷达|信号链|"
-    r"框图|系统框图|结构框图|框架图|模块图|"
+    r"框图|系统框图|结构框图|"
     r"反相放大|同相放大|差分放大|求和放大|"
     r"半波|全波|桥式|倍压|"
     r"计数器|振荡器|施密特|仪表放大|cascode|"
