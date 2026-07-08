@@ -141,8 +141,6 @@ class ToolRegistry:
                         continue
                     if name == "draw_analog" and not self._enable_analog:
                         continue
-                    if name == "draw_block" and not self._enable_analog:
-                        continue
                 # enable_analog_circuit 也控制新的模拟电路工具
                 if not self._enable_analog:
                     if attr_name in ("_analog_svg", "_spice_renderer",

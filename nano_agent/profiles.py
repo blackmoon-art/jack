@@ -29,7 +29,7 @@ AGENT_PROFILES: dict[str, AgentProfile] = {
             "write", "edit",
             # 无电路工具
             "draw_circuit", "draw_logic", "draw_analog_svg",
-            "draw_analog_spice", "draw_block", "draw_digital",
+            "draw_analog_spice", "draw_digital",
             "draw_analog", "design_circuit",
             "design_digital", "simulate_verilog", "synthesize_gates",
             "simulate_spice",
@@ -46,7 +46,7 @@ AGENT_PROFILES: dict[str, AgentProfile] = {
         excluded_tools={
             # 无电路仿真
             "draw_analog_svg", "draw_analog_spice",
-            "draw_logic", "draw_block", "draw_digital", "draw_analog",
+            "draw_logic", "draw_digital", "draw_analog",
             "design_circuit", "design_digital",
             "simulate_verilog", "synthesize_gates", "simulate_spice",
         },

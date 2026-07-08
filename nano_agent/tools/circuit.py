@@ -176,9 +176,6 @@ class Circuit:
         """绘制模拟电路。"""
         return self._draw(description, title, "analog")
 
-    def draw_block(self, description: str, title: str = "") -> str:
-        """绘制系统框图。"""
-        return self._draw(description, title, "block")
 
     # ── 元件名解析 ──────────────────────────────────────
 
