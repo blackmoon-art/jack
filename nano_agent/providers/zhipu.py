@@ -13,7 +13,7 @@ from .base import ProviderRegistry
 
 logger = logging.getLogger("nano_agent.providers.zhipu")
 
-ZHIPU_BASE_URL = "https://z.ai/api/paas/v4/"
+ZHIPU_BASE_URL = "https://api.z.ai/api/coding/paas/v4/"
 
 
 class ZhipuProvider(OpenAIProvider):
