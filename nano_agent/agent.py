@@ -533,6 +533,11 @@ class Agent:
                      if m.get("role") == "user"), ""
                 )
             tool_name = classify_circuit_type(task, self.llm)
+            if tool_name is None:
+                # 模糊请求（如"occ电路图"）→ 不注入 visual hint，
+                # 让 LLM 自然向用户确认电路类型
+                logger.info(f"[Visual Router] Circuit type ambiguous, letting LLM ask user")
+                return schemas
             tool_params = {}
             logger.info(f"[Visual Router] Circuit classified as: {tool_name}")
 

@@ -314,6 +314,24 @@ def classify_circuit_type(task: str, llm) -> str:
         logger.debug(f"[CircuitClassify] Layer1 block: '{task[:40]}'")
         return "draw_block"
 
+    # ── 模糊请求检测：无电路特征关键词 → 不确定类型，让 LLM 问用户 ──
+    # 只有"电路图"或"occ电路图"这种无具体电路类型的输入，不强制分类
+    _CIRCUIT_FEATURE_KW = re.compile(
+        r"运放|放大器|滤波|低通|高通|带通|带阻|振荡|整流|稳压|偏置|分压|"
+        r"共射|共集|共基|共源|共栅|cascode|电流镜|差分|"
+        r"逻辑门|门电路|半加器|全加器|触发器|计数器|锁存器|寄存器|译码器|"
+        r"多路复用|alu|verilog|flip.flop|mux|decoder|encoder|fsm|"
+        r"occ|dft|scan.chain|synchronizer|fifo|clock|时钟|分频|移位|"
+        r"op.?amp|opamp|spice|bode|频率|增益|sallen|butterworth|"
+        r"ldo|buck|boost|transistor|bjt|mosfet|"
+        r"框图|block.diagram|系统图|架构图|信号链|signal.chain",
+        re.IGNORECASE,
+    )
+    if not _CIRCUIT_FEATURE_KW.search(task_lower):
+        logger.info(f"[CircuitClassify] Ambiguous: '{task[:60]}' — no circuit features, "
+                     f"returning None to let LLM ask user for clarification")
+        return None  # 模糊请求，让 LLM 向用户确认
+
     # ── Layer 2: LLM 分类 ──
     prompt = _CIRCUIT_CLASSIFY_PROMPT.format(task=task)
     try:
