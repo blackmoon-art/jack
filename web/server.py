@@ -237,7 +237,10 @@ def _evict_sessions():
         if now - s.get("last_access", 0) > _SESSION_TTL_SECONDS
     ]
     for sid in expired:
-        _cleanup_session_files(sid, sessions[sid]["agent"].config.work_dir)
+        try:
+            _cleanup_session_files(sid, sessions[sid]["agent"].config.work_dir)
+        except Exception as e:
+            logger.warning(f"Failed to clean up expired session {sid}: {e}")
         del sessions[sid]
         logger.info(f"Evicted expired session {sid}")
     # 2. 如果还超量，按 LRU 淘汰
@@ -246,7 +249,10 @@ def _evict_sessions():
             sessions.items(), key=lambda x: x[1].get("last_access", 0)
         )
         for sid, _ in sorted_sessions[:len(sessions) - _MAX_SESSIONS]:
-            _cleanup_session_files(sid, sessions[sid]["agent"].config.work_dir)
+            try:
+                _cleanup_session_files(sid, sessions[sid]["agent"].config.work_dir)
+            except Exception as e:
+                logger.warning(f"Failed to clean up LRU session {sid}: {e}")
             del sessions[sid]
             logger.info(f"Evicted LRU session {sid}")
 
@@ -305,13 +311,14 @@ def get_or_create_session(session_id: Optional[str] = None) -> str:
 def agent_stream(task: str, strategy: str, session_id: str,
                  model_override: str | None = None):
     """Generator that yields SSE events as the agent runs."""
-    # 在锁内安全获取 agent 引用
+    # 在锁内安全获取 agent 引用和 cancel_event（避免锁外访问 sessions dict 的 race condition）
     with _sessions_lock:
         if session_id not in sessions:
             yield f"event: error\ndata: {json.dumps({'text': 'Session not found'})}\n\n"
             return
         agent = sessions[session_id]["agent"]
         sessions[session_id]["last_access"] = _time.time()
+        cancel_event = sessions[session_id].get("cancel_event")  # 锁内获取引用
 
     # 用队列收集 agent 事件
     queue: Queue = Queue()
@@ -346,8 +353,8 @@ def agent_stream(task: str, strategy: str, session_id: str,
 
     try:
         # 流式发送事件（带心跳，防止浏览器超时断开）
+        # cancel_event 已在锁内获取，此处直接使用
         last_heartbeat = _time.time()
-        cancel_event = sessions[session_id].get("cancel_event")
         while True:
             # 用户发送新消息打断 → 取消事件被设置
             if cancel_event and cancel_event.is_set():

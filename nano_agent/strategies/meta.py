@@ -14,6 +14,7 @@ Meta 策略 — 统一推理流水线：分析→选择→执行→反馈→调�
 
 import json
 import logging
+from types import MappingProxyType
 
 from .base import BaseStrategy
 
@@ -24,7 +25,7 @@ class MetaStrategy(BaseStrategy):
     """统一推理流水线策略 — 分析→选择→执行→反馈→调整。"""
 
     uses_orient = True
-    default_params = {"max_retries": 6, "auto_upgrade": True}
+    default_params = MappingProxyType({"max_retries": 6, "auto_upgrade": True})
     auto_keywords = ("全自动", "autopilot", "auto pilot",
                      "电路设计", "design circuit", "circuit design", "芯片设计")
     auto_priority = 1  # 低于专属策略，仅在用户明确要求全自动或 LLM 分类时触发

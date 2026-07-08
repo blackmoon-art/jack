@@ -373,6 +373,7 @@ def _compute_ac_metrics(ac_data: dict) -> dict:
     # Find the dB column with the most attenuation (skip flat 0dB source outputs)
     db_cols = [c for c in ac_data.get("data", {}) if c.startswith("vdb(")]
     phase_cols = [c for c in ac_data.get("data", {}) if c.startswith("vp(")]
+    metrics["phase_cols"] = phase_cols  # store for downstream phase margin calc
 
     if not db_cols:
         metrics["warnings"].append("No dB data found")
@@ -408,6 +409,8 @@ def _compute_ac_metrics(ac_data: dict) -> dict:
     node_num = best_db_col.replace("vdb(", "").rstrip(")")
     matching_phase = f"vp({node_num})"
     phase_data = ac_data["data"].get(matching_phase, []) if phase_cols else []
+    # Store all phase columns as dict for downstream phase margin computation (line ~520)
+    metrics["phase_data"] = {col: ac_data["data"].get(col, []) for col in phase_cols}
 
     if not db_data:
         return metrics
@@ -1031,10 +1034,19 @@ class SpiceSimulator:
             csv_url, output)
 
     def _cleanup(self, cir_path: Path):
-        """Cleanup temp simulation files."""
-        for pat in ("_simulate.cir", "_simulate.out", "_simulate.raw",
-                     "_simulate.log"):
-            p = cir_path.parent / pat if cir_path.name != pat else cir_path
+        """Cleanup temp simulation files. ngspice creates output files named
+        after the input .cir file (e.g. tmpXXXXX.raw, tmpXXXXX.log)."""
+        # Always unlink the input .cir file
+        if cir_path.exists():
+            try:
+                cir_path.unlink(missing_ok=True)
+            except Exception:
+                pass
+        # Unlink ngspice output files derived from the same stem
+        stem = cir_path.stem
+        parent = cir_path.parent
+        for ext in (".raw", ".log", ".out"):
+            p = parent / (stem + ext)
             if p.exists():
                 try:
                     p.unlink(missing_ok=True)

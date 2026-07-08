@@ -880,9 +880,10 @@ def score_analog_layout(svg_content: str) -> dict:
 
     try:
         root = ET.fromstring(svg_content)
-    except Exception:
-        result["score"] = 10.0
-        result["issues"].append("Could not parse SVG for layout analysis")
+    except Exception as e:
+        logger.warning(f"SVG parse failed for layout analysis: {e}")
+        result["score"] = 5.0  # neutral: cannot assess layout quality
+        result["issues"].append(f"Could not parse SVG for layout analysis: {e}")
         return result
 
     ns = "http://www.w3.org/2000/svg"
@@ -1549,37 +1550,41 @@ class AnalogSVG:
     def _load_templates() -> None:
         """Load circuit templates from YAML (primary) or hardcoded fallback.
 
+        Reads circuits.yaml first (built-in), then custom_circuits.yaml (user-added).
         Only replaces the hardcoded fallback when YAML loads successfully.
         If YAML fails, the module-level hardcoded templates remain intact.
         """
         global _CIRCUIT_TEMPLATES
-        yaml_path = Path(__file__).parent / "templates" / "circuits.yaml"
         try:
             import yaml as _yaml
         except ImportError:
             logger.debug("PyYAML not installed, using hardcoded templates")
             return
 
-        if not yaml_path.exists():
-            logger.debug(f"YAML template file not found: {yaml_path}")
-            return
-
         new_templates = {}
-        try:
-            with open(yaml_path) as f:
-                data = _yaml.safe_load(f)
-            for t in data.get("templates", []):
-                new_templates[(t["category"], t["id"])] = {
-                    "name": t["name"],
-                    "keywords_cn": t.get("keywords_cn", []),
-                    "guide": t.get("guide", ""),
-                    "components": t.get("components", []),
-                    "params": t.get("params", {}),
-                    "calculate": t.get("calculate", "fixed"),
+
+        # Load built-in + custom YAML files
+        templates_dir = Path(__file__).parent / "templates"
+        for yaml_name in ("circuits.yaml", "custom_circuits.yaml"):
+            yaml_path = templates_dir / yaml_name
+            if not yaml_path.exists():
+                continue
+            try:
+                with open(yaml_path) as f:
+                    data = _yaml.safe_load(f)
+                if data:
+                    for t in data.get("templates", []):
+                        new_templates[(t["category"], t["id"])] = {
+                            "name": t["name"],
+                            "keywords_cn": t.get("keywords_cn", []),
+                            "guide": t.get("guide", ""),
+                            "components": t.get("components", []),
+                            "params": t.get("params", {}),
+                            "calculate": t.get("calculate", "fixed"),
                 }
-        except Exception as e:
-            logger.warning(f"YAML parse failed ({e}), using hardcoded templates")
-            return
+            except Exception as e:
+                logger.warning(f"YAML parse failed for {yaml_name} ({e}), skipping")
+                continue
 
         if not new_templates:
             logger.warning("YAML loaded but no templates found, using hardcoded templates")
@@ -1698,6 +1703,7 @@ class AnalogSVG:
         if has_opamp and not subckt_ok:
             sim_spice = _replace_opamp_with_e_source(sim_spice, gain=100000)
 
+        cir_path = None  # for finally/except cleanup
         try:
             with tempfile.NamedTemporaryFile(
                 mode="w", suffix=".cir", delete=False
@@ -1747,9 +1753,13 @@ class AnalogSVG:
                 return False, output[:1500]
             return True, output[:500]
         except subprocess.TimeoutExpired:
+            if cir_path is not None:
+                Path(cir_path).unlink(missing_ok=True)
             return False, "Simulation timed out (>15s)"
         except Exception as e:
             logger.warning(f"Sim check failed: {e}")
+            if cir_path is not None:
+                Path(cir_path).unlink(missing_ok=True)
             return True, ""
 
     @staticmethod
@@ -1816,6 +1826,7 @@ class AnalogSVG:
         if not ac_spice.strip().endswith(".end"):
             ac_spice += "\n.end"
 
+        cir_path = None  # for cleanup on exception
         try:
             with tempfile.NamedTemporaryFile(
                 mode="w", suffix=".cir", delete=False
@@ -1837,6 +1848,8 @@ class AnalogSVG:
                 return True, ""  # don't block on AC failure
         except Exception as e:
             logger.warning(f"AC validation sim failed: {e}")
+            if cir_path is not None:
+                Path(cir_path).unlink(missing_ok=True)
             return True, ""
 
         # Parse AC output: extract vm(out) values
@@ -2126,6 +2139,7 @@ class AnalogSVG:
             ac_spice += "\n.ac dec 20 1 1e6"
         prepared, _, = _prep_netlist(ac_spice)
 
+        cir_path = None  # for cleanup on exception
         try:
             import tempfile
             with tempfile.NamedTemporaryFile(
@@ -2143,6 +2157,8 @@ class AnalogSVG:
             output = (result.stderr + result.stdout).replace("\f", "\n")
         except Exception as e:
             logger.warning(f"Metric measurement sim failed: {e}")
+            if cir_path is not None:
+                Path(cir_path).unlink(missing_ok=True)
             return None
 
         parsed = _parse_ac_output(output)

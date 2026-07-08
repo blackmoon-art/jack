@@ -39,6 +39,7 @@ def compile_verilog(verilog: str, testbench: str = "") -> dict:
     v_path = tmpdir / "dut.v"
     tb_path = tmpdir / "tb.v"
     out_path = tmpdir / "sim.vvp"
+    _keep_tmpdir = False  # only True on successful compilation (caller needs vvp_path)
 
     try:
         v_path.write_text(verilog.strip())
@@ -62,7 +63,6 @@ def compile_verilog(verilog: str, testbench: str = "") -> dict:
             line = line.strip()
             if not line:
                 continue
-            # Typical iverilog format: "file.v:5: error: ..." or "file.v:5: warning: ..."
             if ": error:" in line.lower():
                 errors.append(line[:300])
             elif ": warning:" in line.lower():
@@ -76,6 +76,7 @@ def compile_verilog(verilog: str, testbench: str = "") -> dict:
             return {"success": False, "vvp_path": None,
                     "errors": errors, "warnings": warnings}
 
+        _keep_tmpdir = True  # success: caller needs vvp_path from this dir
         return {"success": True, "vvp_path": str(out_path),
                 "errors": errors, "warnings": warnings}
 
@@ -86,6 +87,10 @@ def compile_verilog(verilog: str, testbench: str = "") -> dict:
         logger.warning(f"iverilog failed: {e}")
         return {"success": False, "vvp_path": None,
                 "errors": [str(e)], "warnings": []}
+    finally:
+        if not _keep_tmpdir:
+            import shutil
+            shutil.rmtree(str(tmpdir), ignore_errors=True)
 
 
 def run_simulation(vvp_path: str) -> dict:
