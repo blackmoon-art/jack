@@ -148,7 +148,7 @@ def has_opamp(spice: str) -> bool:
 
 def has_diode(spice: str) -> bool:
     """Check if SPICE netlist contains diode (D component) instances."""
-    return bool(re.search(r'(?:^|\s)D\w+\s', spice, re.MULTILINE))
+    return bool(re.search(r'(?:^|\s)D(?!C\s)\w+\s', spice, re.MULTILINE))
 
 
 def replace_opamp_with_e_source(spice: str, gain: int = 100000) -> str:

@@ -1731,7 +1731,7 @@ class AnalogSVG:
                 f.write("* Circuit simulation\n")
                 if has_opamp and subckt_ok:
                     f.write(_OPAMP_SUBCKT_MODEL)
-                if re.search(r'(?:^|\s)D\w+\s', sim_spice, re.MULTILINE):
+                if re.search(r'(?:^|\s)D(?!C\s)\w+\s', sim_spice, re.MULTILINE):
                     f.write(".model DEFAULT_D D (IS=1e-14 RS=1 N=1)\n")
                 # Auto-inject device models
                 from .spice_common import NPN_MODEL, PNP_MODEL, NMOS_MODEL, PMOS_MODEL

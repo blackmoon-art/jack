@@ -41,10 +41,11 @@ class TestShellWhitelist(unittest.TestCase):
         self.assertFalse(result.success)
         self.assertIn("Access denied", str(result))
 
-    def test_python_code_execution_allowed(self):
-        """python3 -c 允许执行 — 路径沙箱已防越界写入。"""
+    def test_python_code_execution_blocked(self):
+        """python3 -c 被内部命令黑名单拦截（防止网络外泄/资源耗尽）。"""
         result = self.shell.bash('python3 -c "print(1)"')
-        self.assertTrue(result.success)
+        self.assertFalse(result.success)
+        self.assertIn("Blocked", str(result))
 
     def test_blocked_pip_install(self):
         """pip install 被内部模式拦截。"""
@@ -59,10 +60,10 @@ class TestShellWhitelist(unittest.TestCase):
         self.assertIn("not allowed", str(result))
 
     def test_python_inner_sandboxed(self):
-        """python3 -c 允许执行 — 路径沙箱防止越界写入。"""
+        """python3 -c 被内部命令黑名单拦截（路径沙箱仅防文件逃逸，不防网络/资源攻击）。"""
         result = self.shell.bash('python3 -c "print(42)"')
-        self.assertTrue(result.success)
-        self.assertIn("42", str(result))
+        self.assertFalse(result.success)
+        self.assertIn("Blocked", str(result))
 
     def test_blocked_whitespace_bypass_inner(self):
         """空白字符绕过 pip install 被标准化后拦截。"""
