@@ -193,7 +193,7 @@ _EXACT_ROUTES: list[tuple[str, str, dict]] = [
      "rf.*front|混频器|mixer|低噪放|lna|中频|if.*signal|"
      "fmcw|radar.*if|雷达.*中频|rf.*receiver|发射机|transmitter|"
      "接收机|receiver.*chain",
-     "draw_digital", {}),
+     "mermaid_chart", {}),
     # 通用电路 (兜底) → LLM 轻量分类 (digital / analog / block)
     ("电路|原理图|schematic|circuit|电路图|接线图|电路设计|"
      "电子电路|pcb|布线",
@@ -362,7 +362,7 @@ _REGEX_META = frozenset('\\*+?[](){}|^$.|')
 # 电路工具集合 — 这些工具只在用户有"绘制意图"时才触发
 _CIRCUIT_TOOLS = frozenset({
     "draw_analog_svg", "draw_analog_spice", "draw_logic",
-    "draw_digital", "draw_block", "__classify_circuit__",
+    "draw_digital", "__classify_circuit__",
 })
 
 # 绘制意图词：只有包含这些词，电路工具才会被触发

@@ -1,9 +1,9 @@
 """电路图工具 — 基于 schemdraw 渲染专业电路图。
 
-三个独立工具:
+两个独立工具:
   draw_digital — 数字逻辑电路 (门电路、触发器、同步器、FIFO 等)
   draw_analog  — 模拟电路 (滤波器、放大器、运放电路等)
-  draw_block   — 系统框图 (RF 信号链、混合信号架构等)
+  框图/架构图 → mermaid_chart (自动布局，无外部依赖)
 
 支持语法:
   - 串联: A -> B -> C
@@ -64,31 +64,11 @@ _ANALOG_COMPS = (
     "port", "terminal", "open",
 ) + _COMMON_COMPS
 
-_BLOCK_COMPS = (
-    # RF / 信号链 (核心框图元件)
-    "mixer", "lna", "amp", "amplifier",
-    "adc", "dac", "oscillator", "lo",
-    "filter_box", "filter",
-    "combiner", "splitter", "rf",
-    # 通用
-    "block", "port", "terminal",
-    # 数字框图常用
-    "ram", "fifo", "dpram", "mux", "comparator",
-    "counter", "register", "sync", "ctrl", "fsm",
-    # 基础元件 (信号链中常用)
-    "resistor", "r", "capacitor", "c", "inductor", "l",
-    "opamp", "ground", "gnd", "ac", "v", "battery",
-    "diode", "led", "npn", "pnp",
-    "antenna", "switch", "spst",
-) + _COMMON_COMPS
-
-
 def _names_str(comps):
     return ", ".join(sorted(set(comps)))
 
 _DIGITAL_NAMES_STR = _names_str(_DIGITAL_COMPS)
 _ANALOG_NAMES_STR = _names_str(_ANALOG_COMPS)
-_BLOCK_NAMES_STR = _names_str(_BLOCK_COMPS)
 
 # ── 共享常量 ──────────────────────────────────────────
 _DIRECTIONS = {"up", "down", "left", "right"}
@@ -176,34 +156,6 @@ class Circuit:
           "title": {"type": "string", "description": "Circuit title"}},
          ["description"]),
 
-        ("draw_block",
-         "Draw system block diagrams and signal-processing chain diagrams. "
-         "For: RF signal chains, mixed-signal architectures, communication systems, "
-         "radar IF processing, audio processing pipelines.\n"
-         "\n"
-         "**Valid components:** " + _BLOCK_NAMES_STR + "\n"
-         "Block elements (LNA, mixer, ADC, etc.) render as labeled boxes.\n"
-         "Also includes all basic analog and digital components.\n"
-         "\n"
-         "**Syntax:** Series `A->B->C`, Multi-chain `;`, Directions `up/down`.\n"
-         "\n"
-         "**FMCW radar IF chain:**\n"
-         "`rf(RF_in) -> lna(LNA) -> mixer as m1 ; lo(f0) -> m1 ; "
-         "m1 -> amp(IF_Amp) -> filter_box(LPF) -> adc(ADC) -> port(DSP)`\n"
-         "\n"
-         "**Async FIFO:**\n"
-         "`port(wr_clk) -> counter(WrPtr) -> gray_code as WrGray ; "
-         "port(rd_clk) -> counter(RdPtr) -> gray_code as RdGray ; "
-         "port(wr_data) -> ram(DPRAM) ; "
-         "WrGray -> dff(Sync1) -> dff(Sync2) as synced ; "
-         "synced -> comparator(CMP) -> port(empty)`",
-         "draw_block",
-         {"description": {"type": "string",
-                          "description":
-                          "Block diagram. Valid names: " + _BLOCK_NAMES_STR + ". "
-                          "RF chain: 'rf(In)->lna->mixer as m1 ; lo(f0)->m1 ; m1->filter_box->adc->port(Out)'"},
-          "title": {"type": "string", "description": "Diagram title"}},
-         ["description"]),
     ]
 
     def __init__(self, work_dir: str, charts_dir: str = ""):
@@ -268,12 +220,9 @@ class Circuit:
         if comp_set == "digital":
             allowed = set(_DIGITAL_COMPS)
             valid_names_str = _DIGITAL_NAMES_STR
-        elif comp_set == "analog":
+        else:
             allowed = set(_ANALOG_COMPS)
             valid_names_str = _ANALOG_NAMES_STR
-        else:
-            allowed = set(_BLOCK_COMPS)
-            valid_names_str = _BLOCK_NAMES_STR
 
         try:
             d = Drawing(show=False)

@@ -368,12 +368,12 @@ class Agent:
 
     # ── 图表视觉验证 ────────────────────────────────────
     _CHART_TOOLS = {"generate_chart", "draw_circuit", "draw_digital",
-                    "draw_analog", "draw_block", "mermaid_chart",
+                    "draw_analog", "mermaid_chart",
                     "stock_chart", "ai_image"}
 
     # ── 电路文本验证 (LLM 审查 DSL/SPICE 是否匹配用户意图) ──
     _CIRCUIT_TOOLS = {"draw_logic", "draw_analog_svg", "draw_analog_spice",
-                      "draw_block", "draw_digital", "draw_analog"}
+                      "draw_digital", "draw_analog"}
 
     _CIRCUIT_VERIFY_PROMPT = (
         "Check if this circuit diagram code matches the user's request. "
