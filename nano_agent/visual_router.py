@@ -185,8 +185,8 @@ _EXACT_ROUTES: list[tuple[str, str, dict]] = [
      "pll|dll|时钟树|clock.*tree|"
      "power.*manage|电源管理|pmu|ldo.*ctrl|复位.*电路|reset.*circuit",
      "draw_block", {}),
-    # 系统框图 / 信号链 → draw_block
-    ("系统框图|block.*diagram|信号链|signal.*chain|rf.*chain|"
+    # 框图 / 系统框图 / 信号链 → draw_block
+    ("框图|系统框图|block.*diagram|信号链|signal.*chain|rf.*chain|"
      "rf.*front|混频器|mixer|低噪放|lna|中频|if.*signal|"
      "fmcw|radar.*if|雷达.*中频|rf.*receiver|发射机|transmitter|"
      "接收机|receiver.*chain",
