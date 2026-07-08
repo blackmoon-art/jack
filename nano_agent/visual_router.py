@@ -378,6 +378,28 @@ _DRAW_INTENT_RE = re.compile(
 )
 
 
+# 知识/学习类查询正则（供 _has_draw_intent 和 agent 层复用）
+_KNOWLEDGE_QUERY_RE = re.compile(
+    r"学习路线|学习路径|教程|入门|怎么.*计算|怎么.*选|"
+    r"datasheet|参数.*选择|选型|"
+    r"知识点|总结|归纳|面试|题目|考试|复习|笔记|"
+    r"区别|对比|vs|比较|优缺点|"
+    r"roadmap|tutorial|guide|"
+    r"^(介绍|什么是|聊聊|说说|问一下|请问)\S*",
+    re.IGNORECASE,
+)
+
+
+def is_knowledge_query(task: str) -> bool:
+    """检查任务是否为纯知识/学习类查询（不应主动画图）。"""
+    task_stripped = task.strip()
+    # 以介绍/什么是等开头，且不包含画/设计/生成意图
+    if re.search(r"^(介绍|什么是|聊聊|说说|问一下|请问)\S*", task_stripped):
+        if not re.search(r"画|绘制|生成|设计|做个", task_stripped):
+            return True
+    return bool(_KNOWLEDGE_QUERY_RE.search(task_stripped))
+
+
 def _has_draw_intent(task: str) -> bool:
     """检查任务是否有绘制/可视化意图。
 
@@ -388,12 +410,7 @@ def _has_draw_intent(task: str) -> bool:
     if re.search(r"^(介绍|什么是|聊聊|说说|问一下|请问)\S*", task.strip()):
         if not re.search(r"画|绘制|生成|设计|做个", task):
             return False
-    if re.search(r"学习路线|学习路径|教程|入门|怎么.*计算|怎么.*选|"
-                 r"datasheet|参数.*选择|选型|"
-                 r"知识点|总结|归纳|面试|题目|考试|复习|笔记|"
-                 r"区别|对比|vs|比较|优缺点|"
-                 r"roadmap|tutorial|guide",
-                 task, re.IGNORECASE):
+    if _KNOWLEDGE_QUERY_RE.search(task):
         return False
     return bool(_DRAW_INTENT_RE.search(task))
 

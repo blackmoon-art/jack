@@ -418,7 +418,7 @@ class Agent:
 
         扫描 messages 找到最后的 user 消息内容，用 route_visual 匹配。
         """
-        from .visual_router import route_visual
+        from .visual_router import route_visual, is_knowledge_query
         # 找最后一个非 hint 的 user 消息
         for msg in reversed(messages):
             if msg.get("role") == "user":
@@ -451,6 +451,18 @@ class Agent:
 
         route = self._try_visual_route(messages)
         if not route:
+            # 学习/知识类任务：LLM 不应主动画图，去掉视觉工具
+            from .visual_router import is_knowledge_query
+            task_text = next(
+                (m.get("content", "") for m in reversed(messages)
+                 if m.get("role") == "user"), ""
+            )
+            if task_text and is_knowledge_query(task_text):
+                _VISUAL_TOOLS = {"generate_chart", "mermaid_chart", "draw_circuit",
+                                 "draw_logic", "draw_analog_svg", "draw_analog_spice",
+                                 "draw_block", "draw_digital", "draw_analog",
+                                 "create_ppt", "ai_image", "stock_chart"}
+                schemas = [s for s in schemas if s["function"]["name"] not in _VISUAL_TOOLS]
             return schemas
 
         tool_name, tool_params = route
