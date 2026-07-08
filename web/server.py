@@ -359,10 +359,10 @@ def agent_stream(task: str, strategy: str, session_id: str,
     thread = Thread(target=run, daemon=True)
     thread.start()
 
-    # 将 user_messages 列表绑定到 agent 的线程本地存储
-    # streaming 线程写入，agent 线程在 _agent_loop 中读取
+    # user_messages 跨线程共享（streaming 线程写入，agent 线程读取）
+    # 不能用 threading.local — local 数据跨线程不可见
     user_messages: list[str] = []
-    agent._local.user_messages = user_messages
+    agent._user_messages = user_messages
 
     try:
         # 流式发送事件（带心跳，防止浏览器超时断开）
@@ -404,7 +404,7 @@ def agent_stream(task: str, strategy: str, session_id: str,
         logger.info(f"Client disconnected from session {session_id}")
     finally:
         # 标记 session 不再运行，清理 user_messages 引用
-        agent._local.user_messages = None
+        agent._user_messages = None
         with _sessions_lock:
             if session_id in sessions:
                 sessions[session_id]["running"] = False

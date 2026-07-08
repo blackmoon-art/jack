@@ -639,7 +639,8 @@ class Agent:
         loop_start = _time.monotonic()
         for _ in range(self.config.max_iterations):
             # ── 检查用户中途输入（web 端推入的消息）──
-            user_msgs = getattr(self._local, 'user_messages', None)
+            # 用 _user_messages 而非 _local — threading.local 跨线程不可见
+            user_msgs = getattr(self, '_user_messages', None)
             if user_msgs:
                 while user_msgs:
                     msg = user_msgs.pop(0)
