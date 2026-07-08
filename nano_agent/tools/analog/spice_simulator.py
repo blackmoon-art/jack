@@ -47,8 +47,8 @@ def _prep_netlist(spice_text: str, analysis: str = "") -> tuple[str, str]:
     text = spice_text.strip()
 
     # SPICE convention: first line is always a title. If it looks like a component
-    # (starts with R/C/L/D/V/X), prepend a title line to prevent it being swallowed.
-    if text and text.split("\n")[0].strip()[0].upper() in "RCLDVX":
+    # (starts with R/C/L/D/V/X/M/Q), prepend a title line to prevent it being swallowed.
+    if text and text.split("\n")[0].strip()[0].upper() in "RCLDVXMQ":
         text = "Simulation\n" + text
 
     # Detect analysis type
@@ -174,7 +174,7 @@ def _parse_op_output(output: str) -> dict:
                     continue
             elif stripped and not stripped.startswith("---"):
                 # Non-data line in current section → end of section
-                if not re.match(r'[\d\.\+\-e\s]+', stripped):
+                if not re.fullmatch(r'[\d\.\+\-e\s]+', stripped):
                     in_current_section = False
 
     # Health checks
@@ -415,7 +415,7 @@ def _compute_ac_metrics(ac_data: dict) -> dict:
     metrics["max_gain_freq"] = freqs[max_idx]
 
     # -3dB cutoff: find where gain drops 3dB below the reference (use max gain as ref)
-    ref_gain = db_data[0]  # use DC gain as reference
+    ref_gain = db_data[max_idx]  # use max gain as reference
     cutoff_idx = None
     for i, db in enumerate(db_data):
         if db < ref_gain - 3.0:

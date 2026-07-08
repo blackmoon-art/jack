@@ -173,7 +173,7 @@ class Shell:
         # Redirect-only commands: use shell=True so >, >>, << work.
         # Only allowed for simple commands without pipes/separators/subshells.
         _has_redirect = any(tok in command for tok in (">", ">>", "2>", "2>>", "<<"))
-        _has_dangerous_shell = any(tok in command for tok in ("|", ";", "&&", "||", "`", "$(", "${"))
+        _has_dangerous_shell = any(tok in command for tok in ("|", ";", "&&", "||", "`", "$(", "${", "\n"))
         use_shell = _has_redirect and not _has_dangerous_shell
 
         try:

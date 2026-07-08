@@ -340,7 +340,7 @@ class MetaStrategy(BaseStrategy):
         """Compute 0-10 technical score purely from simulation data.
 
         Scoring logic (additive, capped at 10):
-          - sim_passed=True:       +4  (foundation)
+          - sim_passed=True:       +3  (foundation)
           - sim_passed=False:      +0  (automatic fail)
           - electrical_ok=True:    +2
           - spec_compliant=True:   +2  (met target fc/gain)
@@ -671,12 +671,15 @@ class MetaStrategy(BaseStrategy):
             # 成功 → 结束
             # 有 spec 时要求 ≥9 分（仿真+电气+spec 三者俱佳）
             # 无 spec 时降到 7 分（仿真+电气通过即可），避免无效重试
+            # 非电路任务降到 7 分（LLM 主观评分即可）
             threshold = 9
             if circuit_verdict and circuit_verdict.get("spec_compliant") is None \
                     and circuit_verdict.get("sim_passed"):
                 # No spec was given — lower the bar
                 if not circuit_verdict.get("metrics"):
                     threshold = 7  # purely qualitative, sim+elec ok is enough
+            elif not circuit_verdict:
+                threshold = 7  # non-circuit task: LLM subjective score suffices
             if evaluation["status"] == "success" and score >= threshold:
                 logger.info(f"[Meta] Success on attempt {attempt+1} (threshold={threshold})")
                 break
@@ -686,10 +689,12 @@ class MetaStrategy(BaseStrategy):
                 old = current_strategy
                 current_strategy = self._upgrade_strategy(current_strategy, score)
                 if current_strategy != old:
-                    _, current_params = self.select_strategy({
-                        "complexity": score, "quality_critical": True,
-                        "estimated_steps": 3,
-                    })
+                    # 使用目标策略类的 default_params，而非调用 select_strategy
+                    # （select_strategy 可能返回不同策略的 params，导致错配）
+                    from . import STRATEGY_REGISTRY
+                    sub_cls = STRATEGY_REGISTRY.get(current_strategy)
+                    if sub_cls:
+                        current_params = dict(sub_cls.default_params)
                     logger.info(f"[Meta] Upgraded: {old} → {current_strategy}")
                     self.emit("text", {"text": f"🔄 升级策略: {old} → {current_strategy}"})
 
@@ -733,7 +738,7 @@ class MetaStrategy(BaseStrategy):
         )
         kwargs = dict(sub_cls.default_params)
         kwargs.update(params)
-        kwargs["memory"] = self.memory
+        kwargs.setdefault("memory", self.memory)
         sub = sub_cls(ctx.config, ctx.llm, ctx.tools, context=ctx, **kwargs)
         return sub.run(task, agent_loop_fn)
 

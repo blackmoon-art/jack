@@ -107,34 +107,36 @@ class Agent:
 
         self._emit("text", {"text": f"Task: {task}\nStrategy: {strategy}"})
 
-        # auto 模式：LLM 根据用户意图自动选策略
-        if strategy == "auto":
-            strategy = self._auto_select_strategy(task)
-            self._emit("text", {"text": f"🤖 Auto-selected strategy: {strategy}"})
+        try:
+            # auto 模式：LLM 根据用户意图自动选策略
+            if strategy == "auto":
+                strategy = self._auto_select_strategy(task)
+                self._emit("text", {"text": f"🤖 Auto-selected strategy: {strategy}"})
 
-        strategy_cls = STRATEGY_REGISTRY.get(strategy)
-        if not strategy_cls:
-            raise ValueError(f"Unknown strategy: '{strategy}'. Available: {list(STRATEGY_REGISTRY.keys())}")
+            strategy_cls = STRATEGY_REGISTRY.get(strategy)
+            if not strategy_cls:
+                raise ValueError(f"Unknown strategy: '{strategy}'. Available: {list(STRATEGY_REGISTRY.keys())}")
 
-        # Orient: 从策略类元数据读取，不再硬编码策略名
-        self._local.current_orient_fn = (
-            (lambda obs: self._orient(obs, task=task)) if strategy_cls.uses_orient else None
-        )
+            # Orient: 从策略类元数据读取，不再硬编码策略名
+            self._local.current_orient_fn = (
+                (lambda obs: self._orient(obs, task=task)) if strategy_cls.uses_orient else None
+            )
 
-        # 所有策略统一走 _run_strategy → StrategyContext → strategy.run()。
-        # 详见 README "决策 7：策略执行路径统一 vs 热路径特化"。
-        defaults = self._strategy_defaults(strategy_cls)
-        defaults.update(strategy_kwargs)
-        final = self._run_strategy(strategy_cls, task, **defaults)
+            # 所有策略统一走 _run_strategy → StrategyContext → strategy.run()。
+            # 详见 README "决策 7：策略执行路径统一 vs 热路径特化"。
+            defaults = self._strategy_defaults(strategy_cls)
+            defaults.update(strategy_kwargs)
+            final = self._run_strategy(strategy_cls, task, **defaults)
 
-        self._emit("done", {"text": final})
-        self.memory.save_context(task, final)
-        self.memory.save_persistent(task, final)
-        logger.info(f"Request done: strategy={strategy}, "
-                     f"result_len={len(final)}")
-        self._local.on_event = None
-        self._local.current_orient_fn = None
-        return final
+            self._emit("done", {"text": final})
+            self.memory.save_context(task, final)
+            self.memory.save_persistent(task, final)
+            logger.info(f"Request done: strategy={strategy}, "
+                         f"result_len={len(final)}")
+            return final
+        finally:
+            self._local.on_event = None
+            self._local.current_orient_fn = None
 
     def _emit(self, event_type: str, data: dict):
         """发送事件给回调。线程安全。"""
@@ -508,11 +510,6 @@ class Agent:
         _ESSENTIAL = {"bash", "read", "write", "edit",
                       "search_and_fetch", "web_search", "fetch_url",
                       "calculate"}
-        _ALL_VISUAL = {"generate_chart", "mermaid_chart", "draw_circuit",
-                       "draw_logic", "draw_analog_svg", "draw_analog_spice",
-                       "draw_block", "draw_digital", "draw_analog",
-                       "create_ppt", "ai_image", "image_analyze",
-                       "mermaid_chart", "drawio_diagram"}
         keep = _ESSENTIAL | {tool_name}
         schemas = [s for s in schemas if s["function"]["name"] in keep]
         if messages and messages[-1].get("role") == "user":

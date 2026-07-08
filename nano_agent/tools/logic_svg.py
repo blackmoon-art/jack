@@ -135,7 +135,6 @@ class LogicSVG:
             for w in warnings[:8]:
                 result_parts.append(f"- {w}")
         return "\n".join(result_parts)
-        return f"![{title or 'Logic'}]({url})\n{url}"
 
     # ── DSL 解析 ───────────────────────────────────
 

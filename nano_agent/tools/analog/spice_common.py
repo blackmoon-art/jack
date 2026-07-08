@@ -114,6 +114,7 @@ def check_subckt_support() -> bool:
     ngspice-46 Homebrew on Apple Silicon has a broken subcircuit parser.
     """
     test = ".subckt t 1 2\nR1 1 2 1k\n.ends\nX1 3 4 t\n.op\n.end\n"
+    f = None
     try:
         with tempfile.NamedTemporaryFile(
             mode="w", suffix=".cir", delete=False
@@ -131,10 +132,11 @@ def check_subckt_support() -> bool:
     except Exception:
         return False
     finally:
-        try:
-            Path(f.name).unlink(missing_ok=True)
-        except Exception:
-            pass
+        if f is not None:
+            try:
+                Path(f.name).unlink(missing_ok=True)
+            except Exception:
+                pass
 
 # ═══════════ Opamp handling ═══════════
 
@@ -192,6 +194,9 @@ def extract_nodes(spice: str) -> list[str]:
         ctype = tokens[0][0].upper()
         if ctype in ("R", "C", "L", "D"):
             nodes.update(tokens[1:3])
+        elif ctype in ("M", "Q"):
+            # MOSFET/BJT: 4 terminals (d g s b / c b e s)
+            nodes.update(tokens[1:5])
         elif ctype == "V":
             nodes.update(tokens[1:3])
         elif ctype == "X":

@@ -108,7 +108,10 @@ class ToolRegistry:
             self._spice_simulator = None
         self._image_analyze = ImageAnalyzer(work_dir)
         self._document_parse = DocumentParser(work_dir)
-        self._digital_circuit = DigitalCircuit(work_dir, charts_dir=charts_dir)
+        if self._enable_digital:
+            self._digital_circuit = DigitalCircuit(work_dir, charts_dir=charts_dir)
+        else:
+            self._digital_circuit = None
 
         # 自动注册工具
         self._tools: dict[str, dict[str, Any]] = {}
@@ -144,6 +147,10 @@ class ToolRegistry:
                 if not self._enable_analog:
                     if attr_name in ("_analog_svg", "_spice_renderer",
                                      "_spice_simulator"):
+                        continue
+                # enable_digital_circuit 控制数字电路工具
+                if not self._enable_digital:
+                    if attr_name == "_digital_circuit":
                         continue
                 func = getattr(instance, method_name)
                 self._register(name, desc, func, properties, required=required)
