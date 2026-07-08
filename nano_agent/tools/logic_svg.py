@@ -47,7 +47,8 @@ class LogicSVG:
          "\n"
          "**Format:** `GATE(input1, input2, ...) = output`\n"
          "**Gates:** AND, OR, NOT, NAND, NOR, XOR, XNOR, BUF, DFF, MUX\n"
-         "NOT has 1 input. DFF(D, clk) = Q — D flip-flop with clock.\n"
+         "NOT has 1 input. BUF(in) = out — combinational buffer only, NEVER for sequential/clocked circuits.\n"
+         "DFF(D, clk) = Q — D flip-flop with clock. Use DFF for synchronizers, registers, counters.\n"
          "For synchronizers: DFF(async_in, clk) = sync1; DFF(sync1, clk) = synced.\n"
          "MUX(A, B, sel) = Y  — 2:1 multiplexer.\n"
          "First use of a name = input port. Reuse = internal wire.\n"
@@ -72,7 +73,8 @@ class LogicSVG:
                           "Logic gate netlist. One gate per line. "
                           "GATE(input1, input2) = output. "
                           "Gates: AND,OR,NOT,NAND,NOR,XOR,XNOR,BUF,DFF,MUX. "
-                          "DFF(D, clk)=Q for D flip-flop. "
+                          "BUF(in)=out is combinational buffer only. "
+                          "DFF(D,clk)=Q for D flip-flop (use for sequential). "
                           "MUX(A,B,sel)=Y for 2:1 multiplexer. "
                           "Example: 'XOR(A,B)=Sum\\nAND(A,B)=Carry' for half-adder"},
           "title": {"type": "string", "description": "Diagram title"}},
