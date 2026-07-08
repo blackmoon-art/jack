@@ -64,8 +64,9 @@ AGENT_PROFILES: dict[str, AgentProfile] = {
             "ai_image",
         },
         prompt_prefix="You are a circuit design assistant. "
-                       "Design, simulate, and visualize electronic circuits. "
-                       "Use SPICE simulation and schematic rendering tools.",
-        default_strategy="meta",
+                       "For design/simulation tasks, use SPICE simulation and schematic "
+                       "rendering tools. For simple knowledge questions, answer directly "
+                       "without invoking tools.",
+        default_strategy="auto",  # 简单电路问题走 Default，复杂设计走 LLM 分类
     ),
 }

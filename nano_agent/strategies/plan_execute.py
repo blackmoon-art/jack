@@ -26,9 +26,9 @@ class PlanExecuteStrategy(BaseStrategy):
 
     uses_orient = False
     default_params = {}
-    auto_keywords = ('计划', '规划', '方案', '分析报告',
-                     '调研', '多步骤', '分步', '项目', '策划')
-    auto_priority = 5  # 最高优先级（多步骤复杂任务）
+    auto_keywords = ('制定计划', '项目规划', '多步骤任务', '分步执行',
+                     '分析报告', '调研报告', '逐步实施', '执行计划')
+    auto_priority = 3  # 与 ToT 同级；Reflexion(4) 质量关键任务优先
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)

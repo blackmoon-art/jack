@@ -25,7 +25,8 @@ class MetaStrategy(BaseStrategy):
 
     uses_orient = True
     default_params = {"max_retries": 6, "auto_upgrade": True}
-    auto_keywords = ("全自动", "autopilot")
+    auto_keywords = ("全自动", "autopilot", "auto pilot",
+                     "电路设计", "design circuit", "circuit design", "芯片设计")
     auto_priority = 1  # 低于专属策略，仅在用户明确要求全自动或 LLM 分类时触发
 
     def __init__(self, *args, max_retries: int = None, auto_upgrade: bool = True,
@@ -63,19 +64,52 @@ class MetaStrategy(BaseStrategy):
     # ── ③ 选择推理深度 ────────────────────────────────────
 
     def select_strategy(self, analysis: dict) -> tuple[str, dict]:
-        """根据复杂度评分选择策略和参数。"""
+        """根据复杂度评分选择策略和参数。
+
+        策略选择逻辑（按优先级）:
+          1. quality_critical 或 complexity >= 7 → reflexion (质量优先)
+          2. domain=creative → tree-of-thought (多路径探索)
+             必须在 steps/score 之前检查，否则 creative+高复杂度被 plan-execute 拦截
+          3. steps >= 3 或 complexity >= 5:
+              domain=code → react (需要可审计的推理过程)
+              其他 → plan-execute (结构化分步执行)
+          4. 其他 → default (简单直接)
+        """
         score = analysis.get("complexity", 5)
         quality = analysis.get("quality_critical", False)
         steps = analysis.get("estimated_steps", 1)
 
         if quality or score >= 7:
             return "reflexion", {"max_retries": min(self.max_retries, 6)}
-        elif steps >= 3 or score >= 5:
-            return "plan-execute", {}
         elif analysis.get("domain") in ("creative",):
+            # Creative 优先于 complexity 检查 — 多方案探索不应被 plan-execute 拦截
             return "tree-of-thought", {"num_candidates": 3}
+        elif steps >= 3 or score >= 5:
+            # 代码调试 / 需要可见推理 → ReAct 比 PlanExecute 更合适
+            if analysis.get("domain") in ("code",):
+                return "react", {"max_steps": self.config.react_max_steps}
+            return "plan-execute", {}
         else:
             return "default", {}
+
+    # ── Config override helper（上限约束，分析结果可设更低值）──
+
+    def _apply_config_overrides(self, params: dict) -> dict:
+        """将 Config 作为上限应用到策略参数，保留分析驱动的更低值。
+
+        select_strategy 可能基于 task 分析返回动态 cap（如 max_retries≤6）。
+        Config 环境变量作为绝对上限：分析值不能超过 Config，但可以设得更低。
+        """
+        _overrides = {
+            "max_steps": self.config.react_max_steps,
+            "max_retries": self.config.reflexion_max_retries,
+            "num_candidates": self.config.tot_num_candidates,
+            "score_threshold": self.config.tot_score_threshold,
+        }
+        for key, config_max in _overrides.items():
+            if key in params:
+                params[key] = min(params[key], config_max)
+        return params
 
     # ── ⑤ 反馈评估 ────────────────────────────────────────
 
@@ -579,15 +613,7 @@ class MetaStrategy(BaseStrategy):
 
         # ── ③ 选择推理深度 ──
         strategy_name, strategy_params = self.select_strategy(analysis)
-        # Apply Config overrides (mirrors Agent._strategy_defaults)
-        if "max_steps" in strategy_params:
-            strategy_params["max_steps"] = self.config.react_max_steps
-        if "max_retries" in strategy_params:
-            strategy_params["max_retries"] = self.config.reflexion_max_retries
-        if "num_candidates" in strategy_params:
-            strategy_params["num_candidates"] = self.config.tot_num_candidates
-        if "score_threshold" in strategy_params:
-            strategy_params["score_threshold"] = self.config.tot_score_threshold
+        self._apply_config_overrides(strategy_params)
         logger.info(f"[Meta] Selected: {strategy_name} {strategy_params}")
         self.emit("text", {"text": f"📊 复杂度: {analysis['complexity']}/10 → 策略: {strategy_name}"})
 
@@ -704,15 +730,7 @@ class MetaStrategy(BaseStrategy):
                     sub_cls = STRATEGY_REGISTRY.get(current_strategy)
                     if sub_cls:
                         current_params = dict(sub_cls.default_params)
-                        # Apply Config overrides (mirrors Agent._strategy_defaults)
-                        if "max_steps" in current_params:
-                            current_params["max_steps"] = self.config.react_max_steps
-                        if "max_retries" in current_params:
-                            current_params["max_retries"] = self.config.reflexion_max_retries
-                        if "num_candidates" in current_params:
-                            current_params["num_candidates"] = self.config.tot_num_candidates
-                        if "score_threshold" in current_params:
-                            current_params["score_threshold"] = self.config.tot_score_threshold
+                        self._apply_config_overrides(current_params)
                     logger.info(f"[Meta] Upgraded: {old} → {current_strategy}")
                     self.emit("text", {"text": f"🔄 升级策略: {old} → {current_strategy}"})
 
@@ -755,34 +773,40 @@ class MetaStrategy(BaseStrategy):
             system_prompt_fn=self._system_prompt_fn,
         )
         kwargs = dict(sub_cls.default_params)
-        # Apply Config overrides (mirrors Agent._strategy_defaults)
-        if "max_steps" in kwargs:
-            kwargs["max_steps"] = self.config.react_max_steps
-        if "max_retries" in kwargs:
-            kwargs["max_retries"] = self.config.reflexion_max_retries
-        if "num_candidates" in kwargs:
-            kwargs["num_candidates"] = self.config.tot_num_candidates
-        if "score_threshold" in kwargs:
-            kwargs["score_threshold"] = self.config.tot_score_threshold
+        self._apply_config_overrides(kwargs)
         kwargs.update(params)
         # Note: memory is already set from shared_ctx, not kwargs
         sub = sub_cls(ctx.config, ctx.llm, ctx.tools, context=ctx, **kwargs)
         return sub.run(task, agent_loop_fn)
 
+    # 策略升级链：严格单向，永不回退。末端策略失败后留在原地
+    # （通过累积教训 + max_retries 上限来收敛）。
+    _UPGRADE_CHAIN = ["default", "react", "plan-execute", "tree-of-thought", "reflexion"]
+
     @staticmethod
     def _upgrade_strategy(current: str, score: int) -> str:
-        """根据失败分数升级策略。"""
+        """根据失败分数升级策略。严格单向链，避免死循环。
+
+        升级路径:
+          score < 3  → 直接跳到 reflexion（严重失败需要深度反思）
+          score < 5  → 沿链前进一步：default→react→plan-execute→tot→reflexion
+          score >= 5 → 不变（当前策略仍有希望）
+        reflexion 失败后留在 reflexion（通过累积教训改进），不再回退到 plan-execute。
+        """
         if score < 3:
-            return "reflexion"  # 严重失败 → 反思重试
+            return "reflexion"  # 严重失败 → 直接跳到最强反思策略
         if score < 5:
-            if current == "default":
-                return "react"
-            if current == "react":
-                return "plan-execute"
-            if current == "plan-execute":
-                return "reflexion"   # 计划执行失败 → 反思
-            if current == "tree-of-thought":
-                return "reflexion"   # 探索失败 → 反思
-            if current == "reflexion":
-                return "plan-execute"  # 反思失败 → 换角度重规划
-        return current  # 不变
+            chain = MetaStrategy._UPGRADE_CHAIN
+            try:
+                idx = chain.index(current)
+                if idx < len(chain) - 1:
+                    return chain[idx + 1]  # 前进一步
+            except ValueError:
+                logger.warning(
+                    f"[Meta] Strategy '{current}' not in upgrade chain "
+                    f"(chain={chain}). Falling back to reflexion. "
+                    f"Update _UPGRADE_CHAIN if a new strategy was added."
+                )
+                pass
+            return "reflexion"  # 未知策略 → 兜底到最强
+        return current  # score >= 5: 不变

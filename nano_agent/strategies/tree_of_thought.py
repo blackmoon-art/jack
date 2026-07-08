@@ -35,7 +35,7 @@ class TreeOfThoughtStrategy(BaseStrategy):
     default_params = {"num_candidates": 3, "score_threshold": 6}
     auto_keywords = ('头脑风暴', 'brainstorm', '创意', '多种方案', '最优',
                      '探索', '所有可能', '穷举', '候选')
-    auto_priority = 3
+    auto_priority = 2  # 低于 PlanExecute(3)，避免同优先级依赖 dict 插入顺序
 
     def __init__(self, *args, num_candidates: int = None,
                  score_threshold: int = None, **kwargs):

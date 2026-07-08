@@ -132,7 +132,7 @@ class Agent:
             if strategy == "auto":
                 strategy = profile.default_strategy if profile.default_strategy != "auto" else strategy
             if strategy == "auto":
-                strategy = self._auto_select_strategy(task)
+                strategy = self._auto_select_strategy(task, intent=intent)
                 self._emit("text", {"text": f"🤖 Auto-selected strategy: {strategy}"})
 
             strategy_cls = STRATEGY_REGISTRY.get(strategy)
@@ -189,37 +189,80 @@ class Agent:
         self._local.strategy_instance = s
         return s.run(task, self._agent_loop)
 
-    def _auto_select_strategy(self, task: str) -> str:
+    # ── Auto-select 缓存 ──────────────────────────────────
+    # STRATEGY_REGISTRY 运行时不变，排序结果缓存避免每请求重复排序
+    _sorted_strategies_cache: list | None = None
+
+    # LLM 分类时的领域→策略推荐提示。新增领域时在此添加即可。
+    _INTENT_HINTS: dict[str, str] = {
+        "circuit": (
+            "Circuit design/simulation tasks benefit from 'meta' (full pipeline with "
+            "simulation verification) or 'plan-execute' (multi-step design). "
+            "Simple circuit knowledge questions should use 'default'. "
+        ),
+        "code": (
+            "Code debugging benefits from 'react' (visible reasoning). "
+            "Complex multi-file changes benefit from 'plan-execute'. "
+            "Simple snippets or questions should use 'default'. "
+        ),
+    }
+
+    # 长任务 Default 跳过守卫的 QA 模式。合并了 BaseStrategy._SIMPLE_TASK_PATTERNS +
+    # DefaultStrategy.auto_keywords 中的 QA 关键词，避免多份列表独立维护导致漂移。
+    _QA_GUARD_PATTERNS: tuple[str, ...] = (
+        "是什么", "什么是", "为什么", "如何", "怎么",
+        "解释", "介绍", "说明", "总结", "对比", "比较",
+        "what is", "how to", "why", "explain", "describe",
+        "difference", "example", "define", "prove", "calculate",
+    )
+
+    @classmethod
+    def _get_sorted_strategies(cls) -> list:
+        """返回按 auto_priority 降序排列的策略列表（缓存，运行时不变）。"""
+        if cls._sorted_strategies_cache is None:
+            cls._sorted_strategies_cache = sorted(
+                STRATEGY_REGISTRY.items(),
+                key=lambda item: item[1].auto_priority,
+                reverse=True,
+            )
+        return cls._sorted_strategies_cache
+
+    def _auto_select_strategy(self, task: str, intent: str = "") -> str:
         """根据用户意图自动选择策略。
 
         按 auto_priority 降序遍历所有策略，用各策略类的 auto_keywords 匹配。
         新增策略只需在类上设 auto_keywords + auto_priority，无需改 Agent。
         无关键词匹配时走 LLM 分类。
+        intent 参数提供领域上下文，帮助 LLM 做更精准的策略选择。
         """
         task_lower = task.lower().strip()
 
-        # 按优先级降序遍历所有策略，关键词匹配
-        sorted_strategies = sorted(
-            STRATEGY_REGISTRY.items(),
-            key=lambda item: item[1].auto_priority,
-            reverse=True,
-        )
-        for name, cls in sorted_strategies:
+        for name, cls in self._get_sorted_strategies():
             if cls.auto_keywords and any(kw in task_lower for kw in cls.auto_keywords):
-                # default 策略额外检查：短任务才匹配，避免长任务误判
-                if name == "default" and len(task_lower) >= 80:
-                    continue
+                # default 策略额外检查：极长任务（≥150字）跳过，避免复杂多步骤任务误判为简单QA
+                # 但包含强QA模式的长任务（如详细解释类）仍然允许匹配
+                if name == "default" and len(task_lower) >= 150:
+                    if not any(p in task_lower for p in self._QA_GUARD_PATTERNS):
+                        continue
                 return name
 
         # 无关键词匹配 → LLM 分类
+        intent_hint = ""
+        if intent:
+            hint_text = self._INTENT_HINTS.get(intent, "")
+            intent_hint = f"This is a '{intent}' domain task. {hint_text}"
+
         prompt = (
             "Classify this task into exactly one strategy. Reply with ONLY the strategy name.\n\n"
+            f"{intent_hint}\n"
             "Strategies:\n"
             "- default: simple Q&A, knowledge, calculation, chat\n"
             "- react: needs step-by-step visible reasoning, debugging, audit trail\n"
             "- plan-execute: complex multi-step task, project, report, analysis\n"
             "- reflexion: quality-critical, needs self-review, error-prone task\n"
-            "- tree-of-thought: multiple valid approaches, creative brainstorming, optimization\n\n"
+            "- tree-of-thought: multiple valid approaches, creative brainstorming, optimization\n"
+            "- meta: fully automatic pipeline with analysis, strategy selection, and self-improvement; "
+            "best for complex open-ended tasks that need multi-strategy orchestration\n\n"
             f"Task: {task}\n\nStrategy:"
         )
         try:
@@ -228,11 +271,14 @@ class Agent:
                 tools=[], system="Reply with only one word.",
                 model=getattr(self._local, "model_override", None),
             )
-            name = resp["text"].strip().lower()
+            name = str(resp.get("text", "")).strip().lower()
             if name in STRATEGY_REGISTRY:
                 return name
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(
+                f"[AutoSelect] LLM classify failed: {type(e).__name__}: {e}. "
+                f"Falling back to default strategy."
+            )
         return "default"
 
     def _strategy_defaults(self, strategy_cls) -> dict:
