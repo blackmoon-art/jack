@@ -217,8 +217,10 @@ class Circuit:
     # ── 三个公开入口 ──────────────────────────────────
 
     def draw_digital(self, description: str, title: str = "") -> str:
-        """绘制数字逻辑电路。"""
-        return self._draw(description, title, "digital")
+        """绘制数字逻辑电路 — 委托给 logic_svg（更专业的门级渲染）。"""
+        from .logic_svg import LogicSVG
+        lsv = LogicSVG(str(self.charts_dir.parent.parent), str(self.charts_dir))
+        return lsv.draw_logic(description, title)
 
     def draw_analog(self, description: str, title: str = "") -> str:
         """绘制模拟电路。"""
