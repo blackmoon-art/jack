@@ -112,9 +112,8 @@ _EXACT_ROUTES: list[tuple[str, str, dict]] = [
 
     # === mermaid_chart 子类型 ===
     # 时序图/交互时序（OCC 控制时序等）
-    ("时序图|画.*时序|draw.*timing|draw.*sequence|时序.*交互|时序.*流程|"
-     "交互时序|sequence.*diagram|timing.*diagram|sequenceDiagram|"
-     "timingDiagram|消息交互|组件交互|timing.*chart|时序.*信号",
+    ("时序图|交互时序|sequence diagram|timing diagram|sequenceDiagram|"
+     "时序流程|消息交互|组件交互",
      "mermaid_chart", {}),
     # 状态机 — 软件图优先，硬件电路走 draw_logic (在 _exact_match 中检测)
     ("状态机|FSM|fsm|finite state machine|state machine|stateDiagram|状态转换|状态转移",
@@ -134,10 +133,8 @@ _EXACT_ROUTES: list[tuple[str, str, dict]] = [
     # 流程图（放后面，"流程"较宽泛）
     ("流程图|flowchart|流程|工作流|workflow|泳道",
      "mermaid_chart", {}),
-    # 架构图 / 结构图 → mermaid flowchart 自动布局比手写网格好
-    ("架构图|系统架构|architecture diagram|组件图|系统设计图|"
-     "结构图|结构框图|系统结构|功能结构|层次结构|拓扑图|组织架构|"
-     "系统框图|系统框架|功能框架|技术架构|业务架构",
+    # 架构图
+    ("架构图|系统架构|architecture diagram|组件图|系统设计图",
      "mermaid_chart", {}),
 
     # === 其他画图工具 ===
@@ -188,8 +185,8 @@ _EXACT_ROUTES: list[tuple[str, str, dict]] = [
      "pll|dll|时钟树|clock.*tree|"
      "power.*manage|电源管理|pmu|ldo.*ctrl|复位.*电路|reset.*circuit",
      "draw_block", {}),
-    # 简单框图 / RF信号链 → draw_block（结构图已走 mermaid）
-    ("框图|block.*diagram|信号链|signal.*chain|rf.*chain|"
+    # 系统框图 / 信号链 → draw_block
+    ("系统框图|block.*diagram|信号链|signal.*chain|rf.*chain|"
      "rf.*front|混频器|mixer|低噪放|lna|中频|if.*signal|"
      "fmcw|radar.*if|雷达.*中频|rf.*receiver|发射机|transmitter|"
      "接收机|receiver.*chain",
@@ -278,59 +275,10 @@ _CIRCUIT_CLASSIFY_PROMPT = (
 
 
 def classify_circuit_type(task: str, llm) -> str:
-    """用关键词预检 + LLM 兜底判断电路类型，返回正确的工具名。
+    """用一次轻量 LLM 调用判断电路类型，返回正确的工具名。
 
-    Layer 1: 关键词规则匹配（0 LLM，覆盖常见数字/模拟/框图术语）
-    Layer 2: LLM 分类（仅关键词不命中时调用，~200 tokens）
+    仅在关键词全不命中时调用（~200 tokens）。
     """
-    task_lower = task.lower().strip()
-
-    # ── Layer 1: 关键词预检，避免 LLM 误判 ──
-    _DIGITAL_KW = re.compile(
-        r"occ|dft|scan.chain|state.machine|synchronizer|fifo|"
-        r"逻辑门|门电路|半加器|全加器|触发器|计数器|锁存器|寄存器|译码器|"
-        r"多路复用|alu|verilog|数字电路|digital|flip.flop|mux|decoder|encoder|"
-        r"fsm|finite.state|clock.controller|时钟控制|分频器|移位寄存器|三态",
-        re.IGNORECASE,
-    )
-    _ANALOG_KW = re.compile(
-        r"运放|放大器|滤波|低通|高通|带通|带阻|振荡器|整流|稳压|偏置|分压|"
-        r"共射|共集|共基|共源|共栅|cascode|电流镜|差分对|"
-        r"sallen|butterworth|chebyshev|bessel|"
-        r"spice|op.?amp|opamp|analog|模拟电路|bode|频率响应|幅频|相频|"
-        r"ldo|buck|boost|switching|regulator|transistor|bjt|mosfet",
-        re.IGNORECASE,
-    )
-    _BLOCK_KW = re.compile(
-        r"框图|block.diagram|系统图|架构图|信号链|signal.chain|"
-        r"soc|mixed.signal|top.level|system.level",
-        re.IGNORECASE,
-    )
-
-    if _DIGITAL_KW.search(task_lower):
-        logger.debug(f"[CircuitClassify] Layer1 digital: '{task[:40]}'")
-        return "draw_logic"
-    if _ANALOG_KW.search(task_lower):
-        logger.debug(f"[CircuitClassify] Layer1 analog: '{task[:40]}'")
-        return "draw_analog_svg"
-    if _BLOCK_KW.search(task_lower):
-        logger.debug(f"[CircuitClassify] Layer1 block: '{task[:40]}'")
-        return "draw_block"
-
-    # ── 模糊请求检测：无电路特征 + 有无效前缀 → 让 LLM 问用户 ──
-    # 只有"asdf电路图"这种乱码前缀才拦截，正常"电路图"走 LLM 分类
-    # 移除电路关键词后的剩余部分如果全是非中文非字母 → 无意义输入
-    _circuit_terms = r"电路|circuit|schematic|原理图|接线图|布线|pcb|layout|电子"
-    _stripped = re.sub(_circuit_terms, "", task_lower, flags=re.IGNORECASE).strip()
-    # 去掉"画个|画一张|帮我画|绘制|draw|a|an|the|请|帮我"等前缀
-    _stripped = re.sub(r"^(draw|a|an|the|please|画|绘制|生成|创建|制作|帮我|请|一个|一张|个|张)\s*", "", _stripped, flags=re.IGNORECASE)
-    if _stripped and not re.search(r"[一-鿿]|[a-zA-Z]{2,}", _stripped):
-        logger.info(f"[CircuitClassify] Ambiguous: '{task[:60]}' — "
-                     f"no meaningful content after stripping circuit terms, "
-                     f"returning None to let LLM ask user for clarification")
-        return None  # 无意义输入，让 LLM 向用户确认
-
-    # ── Layer 2: LLM 分类 ──
     prompt = _CIRCUIT_CLASSIFY_PROMPT.format(task=task)
     try:
         resp = llm.chat(
@@ -338,17 +286,16 @@ def classify_circuit_type(task: str, llm) -> str:
             tools=[],
             system="Reply with exactly one word: digital, analog, or block.",
         )
-        text = str(resp.get("text", "")).strip().lower()
+        text = resp.get("text", "").strip().lower()
     except Exception:
-        logger.warning("[CircuitClassify] LLM unavailable, defaulting to analog")
-        return "draw_analog_svg"
+        return "draw_analog_svg"  # LLM 不可用时的安全兜底
 
     if "block" in text:
         return "draw_block"
     elif "analog" in text:
         return "draw_analog_svg"
     else:
-        return "draw_logic"  # 默认数字电路
+        return "draw_logic"  # 数字电路默认（新领域术语更可能是数字）
 
 
 # ── 公共接口 ──────────────────────────────────────────
@@ -418,15 +365,12 @@ _CIRCUIT_TOOLS = frozenset({
 # 绘制意图词：只有包含这些词，电路工具才会被触发
 _DRAW_INTENT_RE = re.compile(
     r"画|绘制|画个|画张|画幅|画一下|diagram|schematic|"
-    r"电路图|原理图|框图|接线图|架构图|示意图|"
-    r"电路设计|layout|plot|"
+    r"电路图|原理图|框图|接线图|电路设计|layout|plot|"
     r"\bdraw\b|\brender\b|\bgenerate\b|\bvisualize\b|"
     r"设计|仿真|做个|生成|画出|帮我画|"
     # 电路类型名本身隐含绘制意图, 不需要额外画/设计前缀
     r"滤波器|放大器|整流|分压器|运放|低通|高通|带通|带阻|"
     r"RC滤波|LC滤波|RL滤波|RLC|Sallen|sallen|"
-    r"混频器|低噪放|LNA|mixer|PLL|DLL|FMCW|发射机|接收机|雷达|信号链|"
-    r"框图|系统框图|结构框图|"
     r"反相放大|同相放大|差分放大|求和放大|"
     r"半波|全波|桥式|倍压|"
     r"计数器|振荡器|施密特|仪表放大|cascode|"
