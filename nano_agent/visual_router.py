@@ -288,7 +288,7 @@ def classify_circuit_type(task: str, llm) -> str:
         )
         text = resp.get("text", "").strip().lower()
     except Exception:
-        return "draw_analog_svg"  # LLM 不可用时的安全兜底
+        return "draw_digital"  # LLM 不可用时的安全兜底
 
     if "block" in text:
         return "draw_digital"
