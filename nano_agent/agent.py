@@ -585,6 +585,7 @@ class Agent:
         _CIRCUIT_COMPANIONS = {
             "draw_analog_svg": {"simulate_spice", "draw_analog_spice"},
             "draw_logic": {"design_digital", "simulate_verilog", "synthesize_gates"},
+            "draw_digital": {"design_digital", "simulate_verilog", "synthesize_gates"},
         }
         keep = _ESSENTIAL | {tool_name}
         keep.update(_CIRCUIT_COMPANIONS.get(tool_name, set()))

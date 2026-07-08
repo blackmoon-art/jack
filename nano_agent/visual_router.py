@@ -317,11 +317,11 @@ def classify_circuit_type(task: str, llm) -> str:
     # ── 模糊请求检测：无电路特征 + 有无效前缀 → 让 LLM 问用户 ──
     # 只有"asdf电路图"这种乱码前缀才拦截，正常"电路图"走 LLM 分类
     # 移除电路关键词后的剩余部分如果全是非中文非字母 → 无意义输入
-    _circuit_terms = r"电路|circuit|schematic|原理图|schematic|接线图|布线|pcb|layout|电子"
+    _circuit_terms = r"电路|circuit|schematic|原理图|接线图|布线|pcb|layout|电子"
     _stripped = re.sub(_circuit_terms, "", task_lower, flags=re.IGNORECASE).strip()
     # 去掉"画个|画一张|帮我画|绘制|draw|a|an|the|请|帮我"等前缀
     _stripped = re.sub(r"^(draw|a|an|the|please|画|绘制|生成|创建|制作|帮我|请|一个|一张|个|张)\s*", "", _stripped, flags=re.IGNORECASE)
-    if _stripped and not re.search(r"[一-鿿]|[a-zA-Z]{3,}", _stripped):
+    if _stripped and not re.search(r"[一-鿿]|[a-zA-Z]{2,}", _stripped):
         logger.info(f"[CircuitClassify] Ambiguous: '{task[:60]}' — "
                      f"no meaningful content after stripping circuit terms, "
                      f"returning None to let LLM ask user for clarification")
