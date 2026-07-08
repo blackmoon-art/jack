@@ -124,6 +124,12 @@ Final Answer: The current directory contains 2 files: agent.py and README.md."""
             logger.info(f"💭 Thought: {thought[:300]}")
             self.emit("text", {"text": f"💭 {thought}"})
 
+            # 强制终止：超过 max_steps 时返回当前内容
+            if step_num >= self.max_steps:
+                logger.warning(f"[ReAct] Max steps ({self.max_steps}) reached, forcing stop")
+                prefix = "Max steps reached without final answer. "
+                return prefix + (text or "")
+
             final = self._extract_final_answer(text)
             if final:
                 logger.info(f"✅ Final Answer: {final[:300]}")

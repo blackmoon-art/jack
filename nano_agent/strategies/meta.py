@@ -579,6 +579,15 @@ class MetaStrategy(BaseStrategy):
 
         # ── ③ 选择推理深度 ──
         strategy_name, strategy_params = self.select_strategy(analysis)
+        # Apply Config overrides (mirrors Agent._strategy_defaults)
+        if "max_steps" in strategy_params:
+            strategy_params["max_steps"] = self.config.react_max_steps
+        if "max_retries" in strategy_params:
+            strategy_params["max_retries"] = self.config.reflexion_max_retries
+        if "num_candidates" in strategy_params:
+            strategy_params["num_candidates"] = self.config.tot_num_candidates
+        if "score_threshold" in strategy_params:
+            strategy_params["score_threshold"] = self.config.tot_score_threshold
         logger.info(f"[Meta] Selected: {strategy_name} {strategy_params}")
         self.emit("text", {"text": f"📊 复杂度: {analysis['complexity']}/10 → 策略: {strategy_name}"})
 
@@ -695,6 +704,15 @@ class MetaStrategy(BaseStrategy):
                     sub_cls = STRATEGY_REGISTRY.get(current_strategy)
                     if sub_cls:
                         current_params = dict(sub_cls.default_params)
+                        # Apply Config overrides (mirrors Agent._strategy_defaults)
+                        if "max_steps" in current_params:
+                            current_params["max_steps"] = self.config.react_max_steps
+                        if "max_retries" in current_params:
+                            current_params["max_retries"] = self.config.reflexion_max_retries
+                        if "num_candidates" in current_params:
+                            current_params["num_candidates"] = self.config.tot_num_candidates
+                        if "score_threshold" in current_params:
+                            current_params["score_threshold"] = self.config.tot_score_threshold
                     logger.info(f"[Meta] Upgraded: {old} → {current_strategy}")
                     self.emit("text", {"text": f"🔄 升级策略: {old} → {current_strategy}"})
 
@@ -737,8 +755,17 @@ class MetaStrategy(BaseStrategy):
             system_prompt_fn=self._system_prompt_fn,
         )
         kwargs = dict(sub_cls.default_params)
+        # Apply Config overrides (mirrors Agent._strategy_defaults)
+        if "max_steps" in kwargs:
+            kwargs["max_steps"] = self.config.react_max_steps
+        if "max_retries" in kwargs:
+            kwargs["max_retries"] = self.config.reflexion_max_retries
+        if "num_candidates" in kwargs:
+            kwargs["num_candidates"] = self.config.tot_num_candidates
+        if "score_threshold" in kwargs:
+            kwargs["score_threshold"] = self.config.tot_score_threshold
         kwargs.update(params)
-        kwargs.setdefault("memory", self.memory)
+        # Note: memory is already set from shared_ctx, not kwargs
         sub = sub_cls(ctx.config, ctx.llm, ctx.tools, context=ctx, **kwargs)
         return sub.run(task, agent_loop_fn)
 
@@ -752,4 +779,10 @@ class MetaStrategy(BaseStrategy):
                 return "react"
             if current == "react":
                 return "plan-execute"
+            if current == "plan-execute":
+                return "reflexion"   # 计划执行失败 → 反思
+            if current == "tree-of-thought":
+                return "reflexion"   # 探索失败 → 反思
+            if current == "reflexion":
+                return "plan-execute"  # 反思失败 → 换角度重规划
         return current  # 不变

@@ -172,7 +172,8 @@ class TreeOfThoughtStrategy(BaseStrategy):
                      f"{' (simple task)' if is_simple else ''}")
         if is_simple:
             # 简单任务：直接执行，不生成候选
-            result, _ = agent_loop_fn([{"role": "user", "content": task}])
+            messages = self.build_messages(task, include_memory=True)
+            result, _ = agent_loop_fn(messages)
             logger.info(f"[ToT:Simple] Direct execution complete.")
             return result
 
