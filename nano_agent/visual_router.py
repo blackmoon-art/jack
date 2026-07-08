@@ -25,6 +25,26 @@ _EXACT_ROUTES: list[tuple[str, str, dict]] = [
     # 等高线（放最前面，优先级高于其他含"图"的词）
     ("等高线|梯度下降|contour|loss surface|损失函数可视化",
      "generate_chart", {"chart_type": "contour", "data": "X**2+Y**2"}),
+    # 滤波器 + 频率响应 → 走模拟电路仿真（真实 Bode），非泛化图表
+    # 用单个 regex（不用 | 分隔，避免 split 冲突）
+    (r"低通.*bode|高通.*bode|带通.*bode|带阻.*bode|"
+     r"低通.*频率响应|高通.*频率响应|带通.*频率响应|带阻.*频率响应|"
+     r"低通.*伯德|高通.*伯德|带通.*伯德|带阻.*伯德|"
+     r"低通.*幅频|高通.*幅频|带通.*幅频|带阻.*幅频|"
+     r"低通.*spectrum|高通.*spectrum|带通.*spectrum|带阻.*spectrum|"
+     r"频率响应.*低通|频率响应.*高通|频率响应.*带通|频率响应.*带阻|"
+     r"幅频.*低通|幅频.*高通|幅频.*带通|幅频.*带阻|"
+     r"滤波器.*bode|bode.*滤波器|滤波器.*伯德|伯德.*滤波器|"
+     r"滤波器.*频率响应|频率响应.*滤波器|"
+     r"滤波器.*幅频|幅频.*滤波器|"
+     r"rc.*bode|bode.*rc|lc.*bode|bode.*lc|"
+     r"low.pass.*bode|bode.*low.pass|high.pass.*bode|band.pass.*bode|"
+     r"filter.*freq.*resp|freq.*resp.*filter|"
+     r"sallen.*bode|bode.*sallen|butterworth.*bode|"
+     r"运放.*bode|运放.*频率响应|放大器.*bode|放大器.*频率响应|"
+     r"有源.*bode|有源.*频率响应|无源.*bode|无源.*频率响应|"
+     r"滤波器.*spectrum|spectrum.*滤波器|滤波器.*频谱|频谱.*滤波器",
+     "draw_analog_svg", {}),
     # Bode / 频率响应（放频谱前面，更精确的滤波器关键词）
     ("bode|频率响应|幅频特性|相频特性|freq.*resp|frequency response|"
      "滤波器响应|filter.*response|伯德图|bode.*plot",
