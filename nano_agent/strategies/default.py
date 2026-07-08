@@ -195,6 +195,9 @@ class DefaultStrategy(BaseStrategy):
                 f"Pass the user's description directly as the argument. "
                 f"Do NOT just describe what you would do — actually call the tool."
             )
+            # Only accept the routed tool in step_callback; prevent LLM
+            # from calling generate_chart or draw_analog when draw_block is routed
+            _target_tools = {r_tool}
         else:
             override = (
                 "Call a drawing tool NOW. Context:\n{ctx}\n"
@@ -229,7 +232,16 @@ class DefaultStrategy(BaseStrategy):
             messages.append({"role": "assistant", "content": full_text})
 
         messages.append({"role": "user", "content": override})
-        result, msgs = agent_loop_fn(messages, step_callback=_visual_step)
+
+        # When a specific visual tool was routed (e.g. draw_block for 框图),
+        # exclude all other visual tools from the LLM's schema. This prevents
+        # the LLM from calling generate_chart (producing coordinate axes) or
+        # draw_analog (producing schemdraw schematics) instead of draw_block.
+        _other_visuals = sorted(visual_tools - _target_tools) if visual_tools else []
+        result, msgs = agent_loop_fn(
+            messages, step_callback=_visual_step,
+            exclude_tools=_other_visuals if _other_visuals else None,
+        )
 
         # 兜底：agent_loop 可能因 max_iterations 或空响应返回空字符串
         if not result or not result.strip():
