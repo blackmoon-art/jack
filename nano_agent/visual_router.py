@@ -275,10 +275,46 @@ _CIRCUIT_CLASSIFY_PROMPT = (
 
 
 def classify_circuit_type(task: str, llm) -> str:
-    """用一次轻量 LLM 调用判断电路类型，返回正确的工具名。
+    """用关键词预检 + LLM 兜底判断电路类型，返回正确的工具名。
 
-    仅在关键词全不命中时调用（~200 tokens）。
+    Layer 1: 关键词规则匹配（0 LLM，覆盖常见数字/模拟/框图术语）
+    Layer 2: LLM 分类（仅关键词不命中时调用，~200 tokens）
     """
+    task_lower = task.lower().strip()
+
+    # ── Layer 1: 关键词预检，避免 LLM 误判 ──
+    _DIGITAL_KW = re.compile(
+        r"occ|dft|scan.chain|state.machine|synchronizer|fifo|"
+        r"逻辑门|门电路|半加器|全加器|触发器|计数器|锁存器|寄存器|译码器|"
+        r"多路复用|alu|verilog|数字电路|digital|flip.flop|mux|decoder|encoder|"
+        r"fsm|finite.state|clock.controller|时钟控制|分频器|移位寄存器|三态",
+        re.IGNORECASE,
+    )
+    _ANALOG_KW = re.compile(
+        r"运放|放大器|滤波|低通|高通|带通|带阻|振荡器|整流|稳压|偏置|分压|"
+        r"共射|共集|共基|共源|共栅|cascode|电流镜|差分对|"
+        r"sallen|butterworth|chebyshev|bessel|"
+        r"spice|op.?amp|opamp|analog|模拟电路|bode|频率响应|幅频|相频|"
+        r"ldo|buck|boost|switching|regulator|transistor|bjt|mosfet",
+        re.IGNORECASE,
+    )
+    _BLOCK_KW = re.compile(
+        r"框图|block.diagram|系统图|架构图|信号链|signal.chain|"
+        r"soc|mixed.signal|top.level|system.level|模块图",
+        re.IGNORECASE,
+    )
+
+    if _DIGITAL_KW.search(task_lower):
+        logger.debug(f"[CircuitClassify] Layer1 digital: '{task[:40]}'")
+        return "draw_logic"
+    if _ANALOG_KW.search(task_lower):
+        logger.debug(f"[CircuitClassify] Layer1 analog: '{task[:40]}'")
+        return "draw_analog_svg"
+    if _BLOCK_KW.search(task_lower):
+        logger.debug(f"[CircuitClassify] Layer1 block: '{task[:40]}'")
+        return "draw_block"
+
+    # ── Layer 2: LLM 分类 ──
     prompt = _CIRCUIT_CLASSIFY_PROMPT.format(task=task)
     try:
         resp = llm.chat(
@@ -286,16 +322,17 @@ def classify_circuit_type(task: str, llm) -> str:
             tools=[],
             system="Reply with exactly one word: digital, analog, or block.",
         )
-        text = resp.get("text", "").strip().lower()
+        text = str(resp.get("text", "")).strip().lower()
     except Exception:
-        return "draw_analog_svg"  # LLM 不可用时的安全兜底
+        logger.warning("[CircuitClassify] LLM unavailable, defaulting to analog")
+        return "draw_analog_svg"
 
     if "block" in text:
         return "draw_block"
     elif "analog" in text:
         return "draw_analog_svg"
     else:
-        return "draw_logic"  # 数字电路默认（新领域术语更可能是数字）
+        return "draw_logic"  # 默认数字电路
 
 
 # ── 公共接口 ──────────────────────────────────────────
