@@ -679,6 +679,21 @@ class SpiceRenderer:
                 d.pop()
                 placed.add(bci)
 
+        # ── Feedback connections ──
+        # Feedback wires (e.g., op-amp output → feedback resistor → input)
+        # are detected by the layout engine but rendered as annotations rather
+        # than full schemdraw wires due to the relative coordinate system.
+        feedback = layout.get("feedback", [])
+        if feedback:
+            d.add(elm.Label(
+                f"⚠ Feedback path(s) detected: "
+                f"{len(feedback)} connection(s). "
+                f"Schematic is drawn in signal-flow order; "
+                f"the actual circuit may have feedback loops."
+            ).at((0, -2)))
+            logger.info(f"[SpiceRenderer] {len(feedback)} feedback connection(s) "
+                        f"annotated in schematic")
+
         # ── Render to SVG string ──
         svg_bytes = d.get_imagedata('svg')
         svg = svg_bytes.decode('utf-8') if isinstance(svg_bytes, bytes) else str(svg_bytes)

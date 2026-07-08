@@ -211,9 +211,20 @@ _CIRCUIT_TEMPLATES = {
 
 # ═══════════ Parameter Calculators ═══════════
 
+def _require_positive(**kwargs) -> None:
+    """Validate that all given values are positive. Raises ValueError on zero/negative."""
+    for name, val in kwargs.items():
+        if val <= 0:
+            raise ValueError(
+                f"Invalid {name}={val}: must be positive. "
+                f"Check the component values in your request."
+            )
+
+
 def _calc_rc_lowpass(tmpl: dict, params: dict) -> dict:
     fc = _parse_value(str(params.get("fc", "1k")))
     r = _parse_value(str(params.get("R", "1k")))
+    _require_positive(fc=fc, R=r)
     c = 1.0 / (2 * math.pi * fc * r)
     return {"R": _format_value(r), "C": _format_value(c)}
 
@@ -221,6 +232,7 @@ def _calc_rc_lowpass(tmpl: dict, params: dict) -> dict:
 def _calc_lc_lowpass(tmpl: dict, params: dict) -> dict:
     fc = _parse_value(str(params.get("fc", "1k")))
     L = _parse_value(str(params.get("L", "1m")))
+    _require_positive(fc=fc, L=L)
     c = 1.0 / ((2 * math.pi * fc) ** 2 * L)
     return {"L": _format_value(L), "C": _format_value(c)}
 
@@ -228,6 +240,7 @@ def _calc_lc_lowpass(tmpl: dict, params: dict) -> dict:
 def _calc_sallen_key_lp(tmpl: dict, params: dict) -> dict:
     fc = _parse_value(str(params.get("fc", "1k")))
     r = _parse_value(str(params.get("R", "10k")))
+    _require_positive(fc=fc, R=r)
     c = 1.0 / (2 * math.pi * fc * r)
     return {"R": _format_value(r), "C": _format_value(c)}
 
@@ -377,6 +390,7 @@ def _calc_bjt_diff_pair(tmpl: dict, params: dict) -> dict:
     """
     Itail = _parse_value(str(params.get("Itail", "1m")))
     gain = _parse_value(str(params.get("gain", "20")))
+    _require_positive(Itail=Itail, gain=gain)
     Ic = Itail / 2.0
     Rc = 2.0 * gain * VTH / Ic
     # Vee is typically 12V from template
@@ -418,6 +432,7 @@ def _calc_mfb_bandpass(tmpl: dict, params: dict) -> dict:
     """
     f0 = _parse_value(str(params.get("fc", "1k")))
     Q = _parse_value(str(params.get("Q", "5")))
+    _require_positive(f0=f0, Q=Q)
     # Choose C based on f0
     if f0 < 100:
         C = 100e-9
@@ -443,6 +458,7 @@ def _calc_twin_t_notch(tmpl: dict, params: dict) -> dict:
     """Twin-T notch filter: fn = 1/(2*pi*R*C). R3=R/2, C3=2C."""
     fn = _parse_value(str(params.get("fc", "100")))
     R = _parse_value(str(params.get("R", "10k")))
+    _require_positive(fn=fn, R=R)
     C = 1.0 / (2 * math.pi * fn * R)
     return {"R": _format_value(R), "C": _format_value(C),
             "R3": _format_value(R / 2), "C3": _format_value(2 * C)}
@@ -454,6 +470,7 @@ def _calc_integrator(tmpl: dict, params: dict) -> dict:
     """Integrator: fc = 1/(2*pi*R*C) → C = 1/(2*pi*fc*R)."""
     fc = _parse_value(str(params.get("fc", "159")))
     R = _parse_value(str(params.get("R", "10k")))
+    _require_positive(fc=fc, R=R)
     C = 1.0 / (2 * math.pi * fc * R)
     return {"Rin": _format_value(R), "Cf": _format_value(C)}
 
@@ -462,6 +479,7 @@ def _calc_differentiator(tmpl: dict, params: dict) -> dict:
     """Differentiator: fc = 1/(2*pi*R*C) → C = 1/(2*pi*fc*R)."""
     fc = _parse_value(str(params.get("fc", "159")))
     R = _parse_value(str(params.get("R", "10k")))
+    _require_positive(fc=fc, R=R)
     C = 1.0 / (2 * math.pi * fc * R)
     return {"Rf": _format_value(R), "Cin": _format_value(C)}
 
@@ -1713,7 +1731,7 @@ class AnalogSVG:
                 f.write("* Circuit simulation\n")
                 if has_opamp and subckt_ok:
                     f.write(_OPAMP_SUBCKT_MODEL)
-                if re.search(r'(?:^|\s)D\d\w*\s', sim_spice, re.MULTILINE):
+                if re.search(r'(?:^|\s)D\w+\s', sim_spice, re.MULTILINE):
                     f.write(".model DEFAULT_D D (IS=1e-14 RS=1 N=1)\n")
                 # Auto-inject device models
                 from .spice_common import NPN_MODEL, PNP_MODEL, NMOS_MODEL, PMOS_MODEL

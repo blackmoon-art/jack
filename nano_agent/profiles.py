@@ -59,7 +59,7 @@ AGENT_PROFILES: dict[str, AgentProfile] = {
         name="circuit",
         excluded_tools={
             # 只保留电路相关 + 基础工具
-            "get_weather", "get_stock", "stock_chart",
+            "get_weather", "stock",
             "create_ppt", "create_excel",
             "ai_image",
         },

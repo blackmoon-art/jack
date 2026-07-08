@@ -117,8 +117,8 @@ class Shell:
 
         # 危险内部命令黑名单：即使白名单命令也阻止危险的二级执行
         _DANGEROUS_INNER = (
-            # 代码执行 — 可绕过沙箱
-            # python3 -c is allowed: path sandbox prevents workspace escape
+            # 代码执行 — 可绕过沙箱（路径沙箱只能防文件逃逸，不能防网络外泄/资源耗尽）
+            "python -c", "python3 -c", "python -C", "python3 -C",
             "node -e", "perl -e", "ruby -e",
             # 提权
             "sudo", "su ", "doas ",
@@ -172,7 +172,13 @@ class Shell:
 
         # Redirect-only commands: use shell=True so >, >>, << work.
         # Only allowed for simple commands without pipes/separators/subshells.
-        _has_redirect = any(tok in command for tok in (">", ">>", "2>", "2>>", "<<"))
+        # Use shlex to properly tokenize — avoids false positives when ">"
+        # appears inside quoted strings (e.g. python3 -c "print(1 > 2)").
+        try:
+            _test_parts = shlex.split(command)
+        except ValueError:
+            _test_parts = []
+        _has_redirect = any(tok in (">", ">>", "2>", "2>>", "<<") for tok in _test_parts)
         _has_dangerous_shell = any(tok in command for tok in ("|", ";", "&&", "||", "`", "$(", "${", "\n"))
         use_shell = _has_redirect and not _has_dangerous_shell
 

@@ -197,7 +197,10 @@ def auto_testbench(verilog: str, num_vectors: int = 8) -> str:
     current_width = ""
     # Split port block by comma-separated names
     for token in re.split(r'[,\n]', ports_block):
-        token = token.strip()
+        token = token.strip().rstrip(';').strip()
+        if not token:
+            continue
+        # Skip leftover empty tokens after stripping semicolons
         if "//" in token:
             token = token[:token.index("//")]
         if not token:

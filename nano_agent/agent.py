@@ -97,6 +97,7 @@ class Agent:
         # 用 threading.local 避免并发请求互相覆盖
         self._local.on_event = on_event
         self._local.model_override = model_override
+        self._local.strategy_instance = None  # reset per request
         self._local.visual_routed = False
         self._local.prompt_cache = None  # reset per request
         self._local.prompt_cache_key = ()
@@ -159,6 +160,7 @@ class Agent:
         finally:
             self._local.on_event = None
             self._local.current_orient_fn = None
+            self._local.strategy_instance = None
 
     def _emit(self, event_type: str, data: dict):
         """发送事件给回调。线程安全。"""
@@ -435,7 +437,11 @@ class Agent:
                 model=getattr(self._local, "model_override", None),
             )
             verdict = str(resp.get("text", "")).strip().upper()
-        except Exception:
+        except Exception as e:
+            logger.warning(
+                f"[Circuit Verify] LLM verification skipped for {tool_name}: "
+                f"{type(e).__name__}: {e}"
+            )
             return None  # LLM 不可用或解析失败时不拦截
 
         if "FAIL" in verdict:
@@ -580,7 +586,7 @@ class Agent:
         # Schema 裁剪：只保留匹配工具 + 必要基础工具，省 ~1800 tokens/次
         _ESSENTIAL = {"bash", "read", "write", "edit",
                       "search_and_fetch", "web_search", "fetch_url",
-                      "calculate"}
+                      "calculate", "glob", "grep", "excel"}
         # 电路工具配套：模拟电路需要仿真能力，数字电路需要编译/综合能力
         _CIRCUIT_COMPANIONS = {
             "draw_analog_svg": {"simulate_spice", "draw_analog_spice"},

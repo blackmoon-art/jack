@@ -477,12 +477,15 @@ def _compute_ac_metrics(ac_data: dict) -> dict:
             metrics["roll_off_db_per_decade"] = db_change / math.log10(freq_ratio)
 
     # Filter type identification
+    # Check band-pass BEFORE high-pass: band-pass filters have low DC gain
+    # but a mid-frequency peak, which would be misidentified as high-pass
+    # if the high-pass check (dc_gain < -20) runs first.
     if metrics.get("dc_gain_db", -999) > -1 and metrics.get("cutoff_freq"):
         metrics["filter_type"] = "low-pass"
-    elif metrics.get("dc_gain_db", 0) < -20 and metrics.get("cutoff_freq"):
-        metrics["filter_type"] = "high-pass"
     elif metrics.get("max_gain_db", -999) > metrics.get("dc_gain_db", -999) + 3:
         metrics["filter_type"] = "band-pass"
+    elif metrics.get("dc_gain_db", 0) < -20 and metrics.get("cutoff_freq"):
+        metrics["filter_type"] = "high-pass"
     else:
         metrics["filter_type"] = "unknown"
 
@@ -665,7 +668,7 @@ def _compute_tran_metrics(tran_data: dict) -> dict:
 
 def _export_csv(analysis: str, ac_data: dict, tran_data: dict, charts_dir: Path) -> str:
     """Export simulation data to CSV. Returns URL path."""
-    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
     csv_path = charts_dir / f"sim_{ts}.csv"
 
     with open(csv_path, "w", newline="") as f:

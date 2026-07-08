@@ -42,10 +42,14 @@ _db_lock = threading.Lock()
 
 
 def _get_db() -> sqlite3.Connection:
-    """获取线程本地 SQLite 连接（复用，避免频繁 open/close）。"""
+    """获取线程本地 SQLite 连接（复用，避免频繁 open/close）。
+
+    设置 busy_timeout=5000ms 防止并发写入时 SQLITE_BUSY 导致数据丢失。
+    WAL 模式下写入者不阻塞读取者，但并发写入需要超时重试。
+    """
     conn = getattr(_db_local, "conn", None)
     if conn is None:
-        conn = sqlite3.connect(str(DB_PATH), check_same_thread=False)
+        conn = sqlite3.connect(str(DB_PATH), check_same_thread=False, timeout=5.0)
         conn.row_factory = sqlite3.Row
         _db_local.conn = conn
         with _db_lock:

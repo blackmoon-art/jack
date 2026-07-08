@@ -724,10 +724,10 @@ class DigitalCircuit:
 
         if counter_match:
             n_bits = int(counter_match.group(1))
-            if n_bits > 16:
+            if n_bits < 1 or n_bits > 16:
                 raise ValueError(
-                    f"Counter width {n_bits}-bit exceeds maximum 16-bit. "
-                    f"Please choose a smaller width.")
+                    f"Counter width {n_bits}-bit is out of range (1–16). "
+                    f"Please choose a width between 1 and 16.")
             if n_bits != 4:  # use dynamic generation for non-4-bit counters
                 return DigitalCircuit._generate_ripple_counter(n_bits)
 
