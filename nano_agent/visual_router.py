@@ -178,19 +178,19 @@ _EXACT_ROUTES: list[tuple[str, str, dict]] = [
      "LC谐振|并联谐振|串联谐振|偏置|biasing|分压|"
      "共模|CMRR",
      "draw_analog_svg", {}),
-    # 数字 IP / 复杂模块 → 框图 (非门级网表)
+    # 数字 IP / 复杂模块 → draw_digital
     ("fifo|异步.*fifo|async.*fifo|ram|双口|dpram|"
      "occ|dft|bist|jtag|scan.*chain|"
      "时钟控制|clock.*control|时钟管理|clock.*manage|"
      "pll|dll|时钟树|clock.*tree|"
      "power.*manage|电源管理|pmu|ldo.*ctrl|复位.*电路|reset.*circuit",
-     "draw_block", {}),
-    # 系统框图 / 信号链 → draw_block
+     "draw_digital", {}),
+    # 系统框图 / 信号链 → draw_digital
     ("系统框图|block.*diagram|信号链|signal.*chain|rf.*chain|"
      "rf.*front|混频器|mixer|低噪放|lna|中频|if.*signal|"
      "fmcw|radar.*if|雷达.*中频|rf.*receiver|发射机|transmitter|"
      "接收机|receiver.*chain",
-     "draw_block", {}),
+     "draw_digital", {}),
     # 通用电路 (兜底) → LLM 轻量分类 (digital / analog / block)
     ("电路|原理图|schematic|circuit|电路图|接线图|电路设计|"
      "电子电路|pcb|布线",
@@ -291,7 +291,7 @@ def classify_circuit_type(task: str, llm) -> str:
         return "draw_analog_svg"  # LLM 不可用时的安全兜底
 
     if "block" in text:
-        return "draw_block"
+        return "draw_digital"
     elif "analog" in text:
         return "draw_analog_svg"
     else:
