@@ -136,7 +136,8 @@ _EXACT_ROUTES: list[tuple[str, str, dict]] = [
      "mermaid_chart", {}),
     # 架构图 / 结构图 → mermaid flowchart 自动布局比手写网格好
     ("架构图|系统架构|architecture diagram|组件图|系统设计图|"
-     "结构图|结构框图|系统结构|功能结构|层次结构|拓扑图|组织架构",
+     "结构图|结构框图|系统结构|功能结构|层次结构|拓扑图|组织架构|"
+     "系统框图|框架图|模块图|系统框架|功能框架|技术架构|业务架构",
      "mermaid_chart", {}),
 
     # === 其他画图工具 ===
@@ -187,8 +188,8 @@ _EXACT_ROUTES: list[tuple[str, str, dict]] = [
      "pll|dll|时钟树|clock.*tree|"
      "power.*manage|电源管理|pmu|ldo.*ctrl|复位.*电路|reset.*circuit",
      "draw_block", {}),
-    # 框图 / 系统框图 / 框架图 / 模块图 → draw_block
-    ("框图|系统框图|框架图|模块图|block.*diagram|信号链|signal.*chain|rf.*chain|"
+    # 简单框图 / RF信号链 → draw_block（结构图已走 mermaid）
+    ("框图|block.*diagram|信号链|signal.*chain|rf.*chain|"
      "rf.*front|混频器|mixer|低噪放|lna|中频|if.*signal|"
      "fmcw|radar.*if|雷达.*中频|rf.*receiver|发射机|transmitter|"
      "接收机|receiver.*chain",
@@ -424,6 +425,8 @@ _DRAW_INTENT_RE = re.compile(
     # 电路类型名本身隐含绘制意图, 不需要额外画/设计前缀
     r"滤波器|放大器|整流|分压器|运放|低通|高通|带通|带阻|"
     r"RC滤波|LC滤波|RL滤波|RLC|Sallen|sallen|"
+    r"混频器|低噪放|LNA|mixer|PLL|DLL|FMCW|发射机|接收机|雷达|信号链|"
+    r"框图|系统框图|结构框图|框架图|模块图|"
     r"反相放大|同相放大|差分放大|求和放大|"
     r"半波|全波|桥式|倍压|"
     r"计数器|振荡器|施密特|仪表放大|cascode|"
