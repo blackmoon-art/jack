@@ -280,20 +280,26 @@ class Diagram:
             gv_result = self._render_graphviz(code, theme)
             if gv_result:
                 return gv_result
-            return f"Error: Mermaid render failed — {e.reason}"
+            return f"Error: Diagram render failed (mermaid.ink + graphviz both unavailable). Reason: {e.reason}"
         except Exception as e:
             logger.warning(f"Mermaid render failed: {e}, trying Graphviz fallback")
             gv_result = self._render_graphviz(code, theme)
             if gv_result:
                 return gv_result
-            return f"Error: {e}"
+            return f"Error: Diagram render failed (mermaid.ink + graphviz both unavailable). Reason: {e}"
 
         img_url = f"/charts/{filename}"
         alt = code[:50].replace(chr(10), ' ').replace('[', '(').replace(']', ')')
         return f"![Mermaid chart]({img_url})\n> `{alt}...`\n{img_url}"
 
     def _mermaid_to_dot(self, code: str) -> str:
-        """Convert Mermaid flowchart syntax to Graphviz DOT format."""
+        """Convert Mermaid flowchart syntax to Graphviz DOT format.
+
+        Handles: subgraph → cluster (boxed grouping), chained edges
+        (A --> B --> C), node labels A[Label], edge labels -->|lbl|-->.
+        """
+        import re as _re_dot
+
         lines = code.strip().split("\n")
         dot_lines = ["digraph G {"]
         dot_lines.append('  rankdir=TB;')
@@ -302,42 +308,95 @@ class Diagram:
         dot_lines.append('  edge [color="#7c3aed", fontcolor="#e0e0e0", fontname="monospace", fontsize=9];')
         dot_lines.append('  bgcolor="#1a1a2e";')
 
+        subgraph_counter = 0
+
+        def _clean(name: str) -> str:
+            """Strip Mermaid shape decorators from a node name.
+
+            For 'A[Label]' returns 'A', for '(Shape)' returns 'Shape', etc.
+            """
+            # If name contains brackets, extract the ID before the bracket
+            m = _re_dot.match(r'([A-Za-z_][A-Za-z0-9_]*)', name)
+            if m:
+                return m.group(1)
+            # Fallback: strip decorators
+            return name.strip('[](){}<>/\'' + '"')
+
+        def _emit_node_label(tok: str) -> None:
+            """If tok looks like ID[Label], emit a DOT node label attr."""
+            lm = _re_dot.match(r'(\S+?)\[([^\]]+)\]', tok)
+            if lm:
+                nid = _clean(lm.group(1))
+                nlbl = lm.group(2).strip('"' + "'")
+                dot_lines.append(f'    "{nid}" [label="{nlbl}"];')
+
         for line in lines:
             line = line.strip()
             if not line or line.startswith("%%") or line.startswith("graph ") or line.startswith("flowchart "):
                 continue
-            # Skip subgraph declarations
+            # direction inside subgraph — skip (DOT uses rankdir at top level)
+            if _re_dot.match(r'direction\s+(TB|BT|LR|RL)', line, _re_dot.IGNORECASE):
+                continue
+            # subgraph → DOT cluster (boxed, coloured grouping)
             if line.startswith("subgraph "):
-                dot_lines.append(f'  // {line}')
+                subgraph_counter += 1
+                sg_m = _re_dot.match(r'subgraph\s+(\S+?)(?:\[([^\]]+)\])?\s*$', line)
+                if sg_m:
+                    sg_id = sg_m.group(1)
+                    sg_label = sg_m.group(2) or sg_id
+                    dot_lines.append(f'  subgraph cluster_{sg_id} {{')
+                    dot_lines.append(f'    label="{sg_label}";')
+                    dot_lines.append('    style=filled; fillcolor="#252545"; fontcolor="#c4b5fd";')
+                else:
+                    dot_lines.append(f'  subgraph cluster_sg{subgraph_counter} {{')
+                    dot_lines.append('    style=filled; fillcolor="#252545"; fontcolor="#c4b5fd";')
                 continue
             if line == "end":
+                dot_lines.append('  }')
                 continue
-            # A --> B or A -->|label| B
-            import re as _re_dot
-            m = _re_dot.match(r'(\S+)\s*-->\s*(?:\|([^|]+)\|)?\s*(\S+)', line)
-            if m:
-                src, label, dst = m.group(1), m.group(2), m.group(3)
-                # Clean node names
-                src = src.strip('[]()"\'')
-                dst = dst.strip('[]()"\'')
-                if label:
-                    dot_lines.append(f'  "{src}" -> "{dst}" [label="{label.strip()}"];')
-                else:
-                    dot_lines.append(f'  "{src}" -> "{dst}";')
-                continue
-            # A --> B (without pipe labels)
-            m2 = _re_dot.match(r'(\S+)\s*-->\s*(\S+)', line)
-            if m2:
-                src, dst = m2.group(1).strip('[]()"\''), m2.group(2).strip('[]()"\'')
-                dot_lines.append(f'  "{src}" -> "{dst}";')
-                continue
-            # Node declarations like A[Label]
-            m3 = _re_dot.match(r'(\S+)\[([^\]]+)\]', line)
+
+            # ── Edge handling: support chained A --> B --> C ──
+            if '-->' in line:
+                # Parse each segment between --> delimiters
+                # Strategy: split on --> first, then extract optional |label| from each segment
+                # e.g. "A[Client] -->|req| B[Server] --> C[DB]"
+                #   raw_segs: ["A[Client] ", "req", " B[Server] ", " C[DB]"]
+                # But we need to handle |label| correctly — it sits between --> and the next node
+                # Simpler: find all edges sequentially using findall
+                edge_pattern = r'(\S+(?:\[[^\]]+\])?)\s*-->(?:\s*\|([^|]*)\|\s*)?'
+                matches = list(_re_dot.finditer(edge_pattern, line))
+                # Each match gives (src_node, optional_label)
+                # The final destination is whatever comes after the last -->
+                last_arrow = matches[-1].end() if matches else 0
+                # Find final destination after last -->
+                final_dst_m = _re_dot.match(r'\s*(\S+(?:\[[^\]]+\])?)', line[last_arrow:])
+                final_dst = final_dst_m.group(1) if final_dst_m else None
+
+                if matches and final_dst:
+                    for idx, m in enumerate(matches):
+                        src_raw = m.group(1)
+                        lbl = m.group(2)
+                        dst_raw = matches[idx + 1].group(1) if idx + 1 < len(matches) else final_dst
+
+                        _emit_node_label(src_raw)
+                        _emit_node_label(dst_raw)
+
+                        src = _clean(src_raw)
+                        dst = _clean(dst_raw)
+                        if lbl:
+                            dot_lines.append(f'    "{src}" -> "{dst}" [label="{lbl.strip()}"];')
+                        else:
+                            dot_lines.append(f'    "{src}" -> "{dst}";')
+                    continue
+
+            # ── Node declarations like A[Label] (standalone, no edge) ──
+            m3 = _re_dot.match(r'(\S+?)\[([^\]]+)\]', line)
             if m3:
-                node_id = m3.group(1)
-                node_label = m3.group(2).strip('"\'')
-                dot_lines.append(f'  "{node_id}" [label="{node_label}"];')
+                node_id = _clean(m3.group(1))
+                node_label = m3.group(2).strip('"' + "'")
+                dot_lines.append(f'    "{node_id}" [label="{node_label}"];')
                 continue
+
             # Style lines (classDef, style, etc.) — skip
             if any(line.startswith(kw) for kw in ("classDef", "style", "linkStyle", "click")):
                 continue
