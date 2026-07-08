@@ -388,7 +388,7 @@ class Agent:
                 system="Reply with exactly one word: PASS or FAIL.",
                 model=getattr(self._local, "model_override", None),
             )
-            verdict = resp.get("text", "").strip().upper()
+            verdict = str(resp.get("text", "")).strip().upper()
         except Exception:
             return None  # LLM 不可用或解析失败时不拦截
 

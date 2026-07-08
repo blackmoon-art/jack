@@ -52,7 +52,7 @@ class ReflexionStrategy(BaseStrategy):
 
     def _needs_evaluation(self, result: str) -> bool:
         """判断是否需要 LLM 评估。结果明显成功或失败时可跳过。"""
-        result_lower = result.lower().strip()
+        result_lower = str(result).lower().strip()
 
         # 结果太短——可能没完成
         if len(result_lower) < 20:
@@ -77,7 +77,7 @@ class ReflexionStrategy(BaseStrategy):
           {"status": "success"|"partial"|"failed",
            "reason": str, "missing": str, "score": int}
         """
-        result_lower = result.lower().strip()
+        result_lower = str(result).lower().strip()
 
         # 快速路径：明显失败
         if any(s in result_lower for s in _FAILURE_SIGNALS):
