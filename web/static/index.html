@@ -265,6 +265,7 @@ function renderUploadPreview() {
 let currentMsg = null;
 let thinkingCount = 0;
 let chartImages = [];
+let isRunning = false;
 
 // ── 历史恢复 ─────────────────────────────────────────
 
@@ -453,8 +454,9 @@ async function send() {
 
   if (!task) return;
 
-  $send.disabled = true;
-  $input.disabled = true;
+  // 执行中不禁用输入框，用户可以中途发送消息交互
+  isRunning = true;
+  $send.textContent = '⏸ 发送';
   thinkingCount = 0;
   chartImages = [];
 
@@ -463,6 +465,20 @@ async function send() {
   // 清除上传列表
   uploadedFiles = [];
   $uploadPreview.style.display = 'none';
+
+  // 正在执行中 → 消息推入队列，不启动新 stream
+  if (isRunning) {
+    try {
+      await fetch('/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'ngrok-skip-browser-warning': 'true' },
+        body: JSON.stringify({ message: task, strategy: $strategy.value, session_id: SESSION_ID, code: getCode() }),
+      });
+    } catch(e) { /* ignore */ }
+    $input.value = '';
+    $input.focus();
+    return;
+  }
 
   // 显示 loading 动画
   currentMsg = addMessage('agent', '');
@@ -550,6 +566,12 @@ async function send() {
               ensureThinkingTag();
               addThinkingBlock('orient',
                 `💡 ${data.implication || data.interpretation || ''}`.slice(0, 200));
+              break;
+            }
+            case 'interrupt': {
+              // 用户中途发送的消息被 agent 接收
+              addMessage('user', (data.raw || data.text || ''));
+              $messages.scrollTop = $messages.scrollHeight;
               break;
             }
             case 'done': {
@@ -641,8 +663,8 @@ async function send() {
     }
   }
 
-  $send.disabled = false;
-  $input.disabled = false;
+  isRunning = false;
+  $send.textContent = '发送';
   $input.value = '';
   $input.focus();
 }
