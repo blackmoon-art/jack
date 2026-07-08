@@ -581,7 +581,13 @@ class Agent:
         _ESSENTIAL = {"bash", "read", "write", "edit",
                       "search_and_fetch", "web_search", "fetch_url",
                       "calculate"}
+        # 电路工具配套：模拟电路需要仿真能力，数字电路需要编译/综合能力
+        _CIRCUIT_COMPANIONS = {
+            "draw_analog_svg": {"simulate_spice", "draw_analog_spice"},
+            "draw_logic": {"design_digital", "simulate_verilog", "synthesize_gates"},
+        }
         keep = _ESSENTIAL | {tool_name}
+        keep.update(_CIRCUIT_COMPANIONS.get(tool_name, set()))
         schemas = [s for s in schemas if s["function"]["name"] in keep]
         if messages and messages[-1].get("role") == "user":
             messages[-1]["content"] += hint
