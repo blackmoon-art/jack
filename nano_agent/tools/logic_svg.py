@@ -120,7 +120,8 @@ class LogicSVG:
 
             svg = self._render(gates, inputs, outputs, title, layout=layout, seed=seed)
         except Exception as e:
-            return f"Error drawing logic: {e}"
+            logger.exception(f"Logic SVG rendering failed for: {description[:100]}")
+            return f"❌ Error drawing logic circuit: {type(e).__name__}: {e}"
 
         ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
         filename = f"logic_{ts}.svg"
@@ -256,8 +257,8 @@ class LogicSVG:
                 s = LogicSVG.score_layout_quality(svg_xml).get("score", 0)
                 candidates.append((s, svg_xml,
                     f"sugiyama gap={col_gap}/{row_gap} sort={sorting} ch={channel_h}"))
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"Layout candidate {sorting} gap={col_gap}/{row_gap} failed: {e}")
 
         # Pick best (or use fallback if all candidates failed)
         if not candidates:

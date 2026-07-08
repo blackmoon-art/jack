@@ -134,8 +134,9 @@ _EXACT_ROUTES: list[tuple[str, str, dict]] = [
     # 流程图（放后面，"流程"较宽泛）
     ("流程图|flowchart|流程|工作流|workflow|泳道",
      "mermaid_chart", {}),
-    # 架构图
-    ("架构图|系统架构|architecture diagram|组件图|系统设计图",
+    # 架构图 / 结构图 → mermaid flowchart 自动布局比手写网格好
+    ("架构图|系统架构|architecture diagram|组件图|系统设计图|"
+     "结构图|结构框图|系统结构|功能结构|层次结构|拓扑图|组织架构",
      "mermaid_chart", {}),
 
     # === 其他画图工具 ===
