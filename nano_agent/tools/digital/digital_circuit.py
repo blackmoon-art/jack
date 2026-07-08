@@ -193,6 +193,261 @@ _DIGITAL_TEMPLATES = {
         ),
         "params": {},
     },
+    ("combinational", "full_subtractor"): {
+        "name": "Full Subtractor",
+        "keywords_cn": ["全减器", "full subtractor", "减法器", "全减"],
+        "guide": "A full subtractor subtracts b from a with borrow-in. Outputs Difference and Borrow.",
+        "verilog": (
+            "module full_subtractor(\n"
+            "  input  a, b, bin,\n"
+            "  output diff, bout\n"
+            ");\n"
+            "  assign diff = a ^ b ^ bin;\n"
+            "  assign bout = (~a & b) | (~a & bin) | (b & bin);\n"
+            "endmodule\n"
+        ),
+        "testbench": (
+            "module tb;\n"
+            "  reg a, b, bin;\n"
+            "  wire diff, bout;\n"
+            "  full_subtractor uut(.a(a), .b(b), .bin(bin), .diff(diff), .bout(bout));\n"
+            "  initial begin\n"
+            "    $display(\"a b bin | diff bout\");\n"
+            '    $display("---------+----------");\n'
+            "    for (integer i=0; i<8; i=i+1) begin\n"
+            "      {a,b,bin}=i; #10;\n"
+            '      $display("%b %b  %b  |  %b    %b", a,b,bin,diff,bout);\n'
+            "    end\n"
+            '    $display("PASS: full_subtractor");\n'
+            "    $finish;\n"
+            "  end\n"
+            "endmodule\n"
+        ),
+        "params": {},
+    },
+    ("combinational", "demux_1to4"): {
+        "name": "1-to-4 Demultiplexer",
+        "keywords_cn": ["多路分配器", "demux", "分配器", "1对4", "demultiplexer"],
+        "guide": "A 1-to-4 demultiplexer routes input to one of 4 outputs based on sel[1:0].",
+        "verilog": (
+            "module demux_1to4(\n"
+            "  input  in,\n"
+            "  input  [1:0] sel,\n"
+            "  output [3:0] y\n"
+            ");\n"
+            "  assign y[0] = in & ~sel[1] & ~sel[0];\n"
+            "  assign y[1] = in & ~sel[1] &  sel[0];\n"
+            "  assign y[2] = in &  sel[1] & ~sel[0];\n"
+            "  assign y[3] = in &  sel[1] &  sel[0];\n"
+            "endmodule\n"
+        ),
+        "testbench": (
+            "module tb;\n"
+            "  reg in;\n"
+            "  reg [1:0] sel;\n"
+            "  wire [3:0] y;\n"
+            "  demux_1to4 uut(.in(in), .sel(sel), .y(y));\n"
+            "  initial begin\n"
+            "    in=1;\n"
+            "    for (integer i=0; i<4; i=i+1) begin\n"
+            "      sel=i; #10;\n"
+            '      $display("sel=%b in=%b → y=%b", sel, in, y);\n'
+            "    end\n"
+            '    $display("PASS: demux_1to4");\n'
+            "    $finish;\n"
+            "  end\n"
+            "endmodule\n"
+        ),
+        "params": {},
+    },
+    ("combinational", "priority_encoder"): {
+        "name": "8-to-3 Priority Encoder",
+        "keywords_cn": ["优先编码器", "priority encoder", "编码器", "8线3线", "8-3编码"],
+        "guide": "An 8-to-3 priority encoder. Higher bit has higher priority. Outputs valid signal.",
+        "verilog": (
+            "module priority_encoder_8to3(\n"
+            "  input  [7:0] in,\n"
+            "  output reg [2:0] out,\n"
+            "  output reg valid\n"
+            ");\n"
+            "  always @(*) begin\n"
+            "    valid = 1; out = 0;\n"
+            "    if (in[7]) out = 7;\n"
+            "    else if (in[6]) out = 6;\n"
+            "    else if (in[5]) out = 5;\n"
+            "    else if (in[4]) out = 4;\n"
+            "    else if (in[3]) out = 3;\n"
+            "    else if (in[2]) out = 2;\n"
+            "    else if (in[1]) out = 1;\n"
+            "    else if (in[0]) out = 0;\n"
+            "    else begin valid = 0; out = 0; end\n"
+            "  end\n"
+            "endmodule\n"
+        ),
+        "testbench": (
+            "module tb;\n"
+            "  reg [7:0] in;\n"
+            "  wire [2:0] out;\n"
+            "  wire valid;\n"
+            "  priority_encoder_8to3 uut(.in(in), .out(out), .valid(valid));\n"
+            "  initial begin\n"
+            "    for (integer i=0; i<8; i=i+1) begin\n"
+            "      in = 1 << i; #10;\n"
+            '      $display("in=%b → out=%d valid=%b", in, out, valid);\n'
+            "    end\n"
+            "    in = 8'h00; #10;\n"
+            '    $display("in=%b → out=%d valid=%b", in, out, valid);\n'
+            '    $display("PASS: priority_encoder_8to3");\n'
+            "    $finish;\n"
+            "  end\n"
+            "endmodule\n"
+        ),
+        "params": {},
+    },
+    ("combinational", "magnitude_comparator"): {
+        "name": "4-Bit Magnitude Comparator",
+        "keywords_cn": ["数值比较器", "大小比较器", "magnitude comparator", "比较器", "比较大小"],
+        "guide": "A 4-bit magnitude comparator. Outputs A>B, A=B, A<B.",
+        "verilog": (
+            "module mag_comp_4bit(\n"
+            "  input  [3:0] a, b,\n"
+            "  output a_gt_b, a_eq_b, a_lt_b\n"
+            ");\n"
+            "  assign a_gt_b = (a > b);\n"
+            "  assign a_eq_b = (a == b);\n"
+            "  assign a_lt_b = (a < b);\n"
+            "endmodule\n"
+        ),
+        "testbench": (
+            "module tb;\n"
+            "  reg [3:0] a, b;\n"
+            "  wire gt, eq, lt;\n"
+            "  mag_comp_4bit uut(.a(a), .b(b), .a_gt_b(gt), .a_eq_b(eq), .a_lt_b(lt));\n"
+            "  initial begin\n"
+            "    a=5; b=3; #10;\n"
+            '    $display("a=%d b=%d → gt=%b eq=%b lt=%b", a, b, gt, eq, lt);\n'
+            "    a=3; b=3; #10;\n"
+            '    $display("a=%d b=%d → gt=%b eq=%b lt=%b", a, b, gt, eq, lt);\n'
+            "    a=2; b=7; #10;\n"
+            '    $display("a=%d b=%d → gt=%b eq=%b lt=%b", a, b, gt, eq, lt);\n'
+            '    $display("PASS: mag_comp_4bit");\n'
+            "    $finish;\n"
+            "  end\n"
+            "endmodule\n"
+        ),
+        "params": {},
+    },
+    ("sequential", "ring_counter"): {
+        "name": "4-Bit Ring Counter",
+        "keywords_cn": ["环形计数器", "ring counter", "环形计数"],
+        "guide": "A 4-bit ring counter. One hot output rotates on each clock.",
+        "verilog": (
+            "module ring_counter_4bit(\n"
+            "  input  clk, rst_n,\n"
+            "  output reg [3:0] q\n"
+            ");\n"
+            "  always @(posedge clk or negedge rst_n) begin\n"
+            "    if (!rst_n)\n"
+            "      q <= 4'b0001;\n"
+            "    else\n"
+            "      q <= {q[0], q[3:1]};\n"
+            "  end\n"
+            "endmodule\n"
+        ),
+        "testbench": (
+            "module tb;\n"
+            "  reg clk, rst_n;\n"
+            "  wire [3:0] q;\n"
+            "  ring_counter_4bit uut(.clk(clk), .rst_n(rst_n), .q(q));\n"
+            "  always #5 clk = ~clk;\n"
+            "  initial begin\n"
+            "    clk=0; rst_n=0; #12;\n"
+            "    rst_n=1;\n"
+            "    repeat(8) #10 $display(\"q=%b\", q);\n"
+            '    $display("PASS: ring_counter_4bit");\n'
+            "    $finish;\n"
+            "  end\n"
+            "endmodule\n"
+        ),
+        "params": {},
+    },
+    ("sequential", "johnson_counter"): {
+        "name": "4-Bit Johnson Counter",
+        "keywords_cn": ["约翰逊计数器", "johnson counter", "扭环计数器", "johnson"],
+        "guide": "A 4-bit Johnson (twisted-ring) counter. 2N states for N bits.",
+        "verilog": (
+            "module johnson_counter_4bit(\n"
+            "  input  clk, rst_n,\n"
+            "  output reg [3:0] q\n"
+            ");\n"
+            "  always @(posedge clk or negedge rst_n) begin\n"
+            "    if (!rst_n)\n"
+            "      q <= 0;\n"
+            "    else\n"
+            "      q <= {~q[0], q[3:1]};\n"
+            "  end\n"
+            "endmodule\n"
+        ),
+        "testbench": (
+            "module tb;\n"
+            "  reg clk, rst_n;\n"
+            "  wire [3:0] q;\n"
+            "  johnson_counter_4bit uut(.clk(clk), .rst_n(rst_n), .q(q));\n"
+            "  always #5 clk = ~clk;\n"
+            "  initial begin\n"
+            "    clk=0; rst_n=0; #12;\n"
+            "    rst_n=1;\n"
+            "    repeat(10) #10 $display(\"q=%b\", q);\n"
+            '    $display("PASS: johnson_counter_4bit");\n'
+            "    $finish;\n"
+            "  end\n"
+            "endmodule\n"
+        ),
+        "params": {},
+    },
+    ("combinational", "adder_subtractor"): {
+        "name": "4-Bit Adder-Subtractor",
+        "keywords_cn": ["加减法器", "加减器", "adder subtractor", "加减法", "加法减法"],
+        "guide": "A 4-bit adder-subtractor. mode=0: add, mode=1: subtract using 2's complement.",
+        "verilog": (
+            "module adder_sub_4bit(\n"
+            "  input  [3:0] a, b,\n"
+            "  input  mode,\n"
+            "  output [3:0] sum,\n"
+            "  output cout\n"
+            ");\n"
+            "  wire [3:0] b_xor;\n"
+            "  wire c1, c2, c3;\n"
+            "  assign b_xor = b ^ {4{mode}};\n"
+            "  full_adder fa0(.a(a[0]), .b(b_xor[0]), .cin(mode),  .sum(sum[0]), .cout(c1));\n"
+            "  full_adder fa1(.a(a[1]), .b(b_xor[1]), .cin(c1),   .sum(sum[1]), .cout(c2));\n"
+            "  full_adder fa2(.a(a[2]), .b(b_xor[2]), .cin(c2),   .sum(sum[2]), .cout(c3));\n"
+            "  full_adder fa3(.a(a[3]), .b(b_xor[3]), .cin(c3),   .sum(sum[3]), .cout(cout));\n"
+            "endmodule\n"
+            "module full_adder(input a, b, cin, output sum, cout);\n"
+            "  assign sum = a ^ b ^ cin;\n"
+            "  assign cout = (a & b) | (a & cin) | (b & cin);\n"
+            "endmodule\n"
+        ),
+        "testbench": (
+            "module tb;\n"
+            "  reg [3:0] a, b;\n"
+            "  reg mode;\n"
+            "  wire [3:0] sum;\n"
+            "  wire cout;\n"
+            "  adder_sub_4bit uut(.a(a), .b(b), .mode(mode), .sum(sum), .cout(cout));\n"
+            "  initial begin\n"
+            "    a=5; b=3; mode=0; #10;\n"
+            '    $display("5+3=%d cout=%b", sum, cout);\n'
+            "    mode=1; #10;\n"
+            '    $display("5-3=%d cout=%b", sum, cout);\n'
+            '    $display("PASS: adder_sub_4bit");\n'
+            "    $finish;\n"
+            "  end\n"
+            "endmodule\n"
+        ),
+        "params": {},
+    },
 }
 
 
@@ -211,7 +466,8 @@ class DigitalCircuit:
          "\n"
          "**Supported templates:**\n"
          "- Combinational: half_adder, full_adder, mux_2to1\n"
-         "- Sequential: dff, counter_4bit\n"
+         "- Combinational: half_adder, full_adder, mux_2to1, full_subtractor, demux_1to4, priority_encoder, magnitude_comparator, adder_subtractor\n"
+         "- Sequential: dff, counter_4bit, ring_counter, johnson_counter\n"
          "\n"
          "**Examples:**\n"
          "- `design_digital('half adder')`\n"
@@ -327,10 +583,10 @@ class DigitalCircuit:
                                 "guide": f"LLM-generated: {description}"}
                     else:
                         return (f"❌ **LLM generation failed** for '{description}'.\n"
-                                f"Available templates: half_adder, full_adder, mux_2to1, dff, counter_4bit")
+                                f"Available templates: half_adder, full_adder, mux_2to1, dff, counter_4bit, full_subtractor, demux_1to4, priority_encoder, mag_comp, ring_counter, johnson_counter, adder_subtractor")
                 else:
                     return (f"❌ **Template matching failed** — no template for '{description}'.\n"
-                            f"Available: half_adder, full_adder, mux_2to1, dff, counter_4bit\n"
+                            f"Available: half_adder, full_adder, mux_2to1, dff, counter_4bit, full_subtractor, demux_1to4, priority_encoder, mag_comp, ring_counter, johnson_counter, adder_subtractor\n"
                             f"💡 Pass raw Verilog via `verilog=` parameter.")
 
         circuit_name = title or tmpl.get("name", description)
@@ -747,7 +1003,7 @@ class DigitalCircuit:
         if not matches:
             raise ValueError(
                 f"No digital template matched '{desc}'. "
-                f"Available: half_adder, full_adder, mux_2to1, dff, counter_4bit")
+                f"Available: half_adder, full_adder, mux_2to1, dff, counter_4bit, full_subtractor, demux_1to4, priority_encoder, mag_comp, ring_counter, johnson_counter, adder_subtractor")
         matches.sort(reverse=True)
         cat, sub_id = matches[0][1], matches[0][2]
         return dict(_DIGITAL_TEMPLATES[(cat, sub_id)])
