@@ -1,9 +1,9 @@
-"""电路图工具 — 基于 schemdraw 渲染专业电路图。
+"""电路图工具 — 纯 SVG（digital/block）+ schemdraw（analog）。
 
 三个独立工具:
-  draw_digital — 数字逻辑电路 (门电路、触发器、同步器、FIFO 等)
-  draw_analog  — 模拟电路 (滤波器、放大器、运放电路等)
-  draw_block   — 系统框图 (RF 信号链、混合信号架构等)
+  draw_digital — 数字逻辑电路 (门电路、触发器、同步器、FIFO 等) — 纯 SVG
+  draw_analog  — 模拟电路 (滤波器、放大器、运放电路等) — schemdraw
+  draw_block   — 系统框图 (RF 信号链、混合信号架构等) — 纯 SVG
 
 支持语法:
   - 串联: A -> B -> C
@@ -263,8 +263,8 @@ class Circuit:
     def _draw(self, description: str, title: str, comp_set: str) -> str:
         """统一渲染引擎，按 comp_set 过滤可用元件。
 
-        block 类型使用纯 SVG 渲染（无外部依赖），
-        digital/analog 使用 schemdraw。
+        block/digital 使用纯 SVG（无外部依赖），
+        analog 使用 schemdraw。
         """
         # 选择元件集
         if comp_set == "digital":
