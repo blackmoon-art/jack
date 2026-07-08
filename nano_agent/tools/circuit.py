@@ -279,8 +279,17 @@ class Circuit:
 
         # block 框图 → 纯 SVG
         if comp_set == "block":
-            return self._draw_block_svg(description, title, allowed)
+            try:
+                return self._draw_block_svg(description, title)
+            except Exception as e:
+                logger.exception(f"Block SVG rendering failed: {e}")
+                return f"Error drawing block diagram: {e}"
 
+        # digital 逻辑门 → 纯 SVG（不依赖 schemdraw）
+        if comp_set == "digital":
+            return self._draw_logic_svg(description, title, allowed)
+
+        # analog 模拟电路 → schemdraw
         import schemdraw
         import schemdraw.elements as elm
         from schemdraw import Drawing
@@ -372,7 +381,7 @@ class Circuit:
 
     # ── Block SVG 渲染 (纯 Python, 无外部依赖) ────────────
 
-    def _draw_block_svg(self, description: str, title: str, allowed: set) -> str:
+    def _draw_block_svg(self, description: str, title: str) -> str:
         """Simple SVG block diagram: left-to-right grid, one chain per row."""
         import xml.etree.ElementTree as ET
 
@@ -386,25 +395,26 @@ class Circuit:
         max_boxes = 0
         for chain in chains:
             boxes = []
+            # Pre-process: replace 'comp as NAME' with just 'NAME'
+            chain_clean = re.sub(r'\b\w+\s+as\s+(\w+)', r'\1', chain)
             # Remove arrows, split by -> or whitespace
-            tokens = [t.strip() for t in chain.replace("->", " ").replace("[", " [").split()]
+            tokens = [t.strip() for t in chain_clean.replace("->", " ").replace("[", " [").split()]
             for tok in tokens:
                 tok = tok.strip(",")
                 if not tok or tok in ("up", "down", "left", "right", "[", "]", ";"):
                     continue
-                # Extract label: port(name) → name; comp as N1 → N1; comp(val) → comp
+                # Skip connect() syntax — no box, just a wire
+                if tok.startswith("connect("):
+                    continue
+                # Extract label: port(name) → name; comp(val) → comp
                 label = tok
                 if "(" in tok and ")" in tok:
                     inner = tok[tok.index("(")+1:tok.rindex(")")]
-                    # skip numbered params like rf(RF_in), just use the part before (
                     base = tok.split("(")[0]
                     if base in ("port", "terminal"):
                         label = inner.split(".")[0]  # port(RF_in) → RF_in
                     else:
                         label = base + "\n" + inner if len(base) < 6 else base
-                _as_m = re.search(r'\s+as\s+', tok)
-                if _as_m:
-                    label = tok[_as_m.end():].strip()
                 # Clean up
                 label = label.strip()
                 if len(label) > 15:
@@ -478,13 +488,172 @@ class Circuit:
                         "fill": arrow_color,
                     })
 
-        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
         filename = f"block_{ts}.svg"
         filepath = self.charts_dir / filename
         filepath.write_text(ET.tostring(svg, encoding="unicode"), encoding="utf-8")
 
         img_url = f"/charts/{filename}"
         return f"![{title or 'Block Diagram'}]({img_url})\n{img_url}"
+
+    def _draw_logic_svg(self, description: str, title: str, allowed: set) -> str:
+        """纯 SVG 逻辑门图渲染，不依赖 schemdraw。
+
+        支持的逻辑门: and, nand, or, nor, xor, xnor, not, buf,
+        dff, latch, mux, adder, counter, register 等。
+        """
+        import xml.etree.ElementTree as ET
+
+        _GATE_SHAPES = {"and", "nand", "or", "nor", "xor", "xnor", "not", "buf"}
+
+        chains = Circuit._split_chains(description)
+        if not chains:
+            return "Error: no gates in circuit description"
+
+        # Parse each chain into gate tokens
+        all_gates = []
+        max_gates = 0
+        for chain in chains:
+            tokens = [t.strip().rstrip(",") for t in
+                      chain.replace("->", " ").replace("[", " [").split()]
+            gates = []
+            for tok in tokens:
+                if not tok or tok in ("up", "down", "left", "right", "[", "]", ";"):
+                    continue
+                # Extract gate type and label
+                label = tok.strip().lstrip("[").rstrip("]")
+                gate_type = label.lower()
+                # Handle "gate(label)" syntax
+                if "(" in label and ")" in label:
+                    gate_type = label[:label.index("(")]
+                    label = label[label.index("(")+1:label.rindex(")")]
+                gates.append((label, gate_type))
+            all_gates.append(gates)
+            max_gates = max(max_gates, len(gates))
+
+        if max_gates == 0:
+            return "Error: no gates found in description"
+
+        # Layout
+        W, H = 90, 56
+        GAP_X, GAP_Y = 50, 40
+        MARGIN = 50
+        n_rows = len(all_gates)
+        n_cols = max_gates
+        svg_w = MARGIN * 2 + n_cols * (W + GAP_X)
+        svg_h = MARGIN * 2 + n_rows * (H + GAP_Y) + (n_rows - 1) * 20
+
+        svg = ET.Element("svg", {
+            "xmlns": "http://www.w3.org/2000/svg",
+            "viewBox": f"0 0 {svg_w} {svg_h}",
+            "width": str(svg_w), "height": str(svg_h),
+        })
+        ET.SubElement(svg, "rect", {
+            "width": str(svg_w), "height": str(svg_h), "fill": "#1a1a2e",
+        })
+        if title:
+            ET.SubElement(svg, "text", {
+                "x": str(svg_w // 2), "y": "22", "text-anchor": "middle",
+                "fill": "#e0e0e0", "font-family": "monospace",
+                "font-size": "13", "font-weight": "bold",
+            }).text = title
+
+        def _draw_gate_shape(parent, cx, cy, w, h, gtype):
+            """Draw a logic gate shape: AND/OR/NOT shapes or rounded rect."""
+            g = ET.SubElement(parent, "g")
+            fill, stroke = "#2a2a4e", "#10b981"
+            x, y = cx - w // 2, cy - h // 2
+            if gtype == "and":
+                d = f"M{x},{y} L{x},{y+h} L{x+w*0.6},{y+h} A{w*0.4},{h/2} 0 0,0 {x+w*0.6},{y} Z"
+                ET.SubElement(g, "path", {"d": d, "fill": fill, "stroke": stroke, "stroke-width": "1.5"})
+            elif gtype == "nand":
+                d = f"M{x},{y} L{x},{y+h} L{x+w*0.55},{y+h} A{w*0.4},{h/2} 0 0,0 {x+w*0.55},{y} Z"
+                ET.SubElement(g, "path", {"d": d, "fill": fill, "stroke": stroke, "stroke-width": "1.5"})
+                ET.SubElement(g, "circle", {"cx": str(int(x+w+3)), "cy": str(cy), "r": "3",
+                   "fill": fill, "stroke": stroke, "stroke-width": "1.2"})
+            elif gtype == "or":
+                d = (f"M{x+w*0.15},{y} Q{x+w*0.1},{cy} {x+w*0.25},{cy} "
+                     f"Q{x},{y+h} {x+w*0.6},{y+h} A{w*0.4},{h/2} 0 0,0 {x+w*0.6},{y} Z")
+                ET.SubElement(g, "path", {"d": d, "fill": fill, "stroke": stroke, "stroke-width": "1.5"})
+            elif gtype == "nor":
+                d = (f"M{x+w*0.15},{y} Q{x+w*0.1},{cy} {x+w*0.25},{cy} "
+                     f"Q{x},{y+h} {x+w*0.55},{y+h} A{w*0.4},{h/2} 0 0,0 {x+w*0.55},{y} Z")
+                ET.SubElement(g, "path", {"d": d, "fill": fill, "stroke": stroke, "stroke-width": "1.5"})
+                ET.SubElement(g, "circle", {"cx": str(int(x+w+3)), "cy": str(cy), "r": "3",
+                   "fill": fill, "stroke": stroke, "stroke-width": "1.2"})
+            elif gtype == "xor":
+                d = (f"M{x+w*0.05},{y} Q{x-w*0.05},{cy} {x+w*0.25},{cy} "
+                     f"Q{x+w*0.05},{y+h} {x+w*0.6},{y+h} A{w*0.4},{h/2} 0 0,0 {x+w*0.6},{y} Z")
+                ET.SubElement(g, "path", {"d": d, "fill": fill, "stroke": stroke, "stroke-width": "1.5"})
+            elif gtype == "xnor":
+                d = (f"M{x+w*0.05},{y} Q{x-w*0.05},{cy} {x+w*0.25},{cy} "
+                     f"Q{x+w*0.05},{y+h} {x+w*0.55},{y+h} A{w*0.4},{h/2} 0 0,0 {x+w*0.55},{y} Z")
+                ET.SubElement(g, "path", {"d": d, "fill": fill, "stroke": stroke, "stroke-width": "1.5"})
+                ET.SubElement(g, "circle", {"cx": str(int(x+w+3)), "cy": str(cy), "r": "3",
+                   "fill": fill, "stroke": stroke, "stroke-width": "1.2"})
+            elif gtype in ("not", "inv"):
+                points = f"{x+w},{cy} {x},{y} {x},{y+h}"
+                ET.SubElement(g, "polygon", {"points": points, "fill": fill, "stroke": stroke, "stroke-width": "1.5"})
+                ET.SubElement(g, "circle", {"cx": str(int(x+w+3)), "cy": str(cy), "r": "3",
+                   "fill": fill, "stroke": stroke, "stroke-width": "1.2"})
+            elif gtype == "buf":
+                points = f"{x+w},{cy} {x},{y} {x},{y+h}"
+                ET.SubElement(g, "polygon", {"points": points, "fill": fill, "stroke": stroke, "stroke-width": "1.5"})
+            else:
+                ET.SubElement(g, "rect", {
+                    "x": str(x), "y": str(y), "width": str(w), "height": str(h),
+                    "rx": "6", "fill": fill, "stroke": stroke, "stroke-width": "1.5",
+                })
+            # Label
+            disp = gtype.upper() if len(gtype) <= 4 else gtype[:4].upper()
+            ET.SubElement(g, "text", {
+                "x": str(cx), "y": str(int(cy + 4)), "text-anchor": "middle",
+                "fill": "#e0e0e0", "font-family": "monospace", "font-size": "9",
+                "font-weight": "bold",
+            }).text = disp
+
+        arrow_color = "#10b981"
+        for row_i, gates in enumerate(all_gates):
+            for col_i, (label, gtype) in enumerate(gates):
+                x = MARGIN + col_i * (W + GAP_X)
+                y = MARGIN + row_i * (H + GAP_Y + 20)
+                cx, cy = x + W // 2, y + H // 2
+                gtype_clean = gtype.strip().lower()
+                # Normalize: strip _gate suffix (and_gate→and), _ff, _flop etc.
+                for sfx in ("_gate", "_flop", "_ff", "_box"):
+                    if gtype_clean.endswith(sfx):
+                        gtype_clean = gtype_clean[:-len(sfx)]
+                if gtype_clean not in allowed and gtype_clean not in _GATE_SHAPES:
+                    allowed_list = sorted(allowed)
+                    img_url = f"Error: unknown gate '{gtype}'. Valid: {allowed_list[:15]}..."
+                    return img_url
+                _draw_gate_shape(svg, cx, cy, W, H, gtype_clean)
+                # Label below gate
+                ET.SubElement(svg, "text", {
+                    "x": str(cx), "y": str(int(y + H + 13)), "text-anchor": "middle",
+                    "fill": "#a0a0a0", "font-family": "monospace", "font-size": "8",
+                }).text = label if label != gtype_clean else ""
+                # Arrow to next gate
+                if col_i < len(gates) - 1:
+                    ax1 = x + W
+                    ay = cy
+                    ax2 = x + W + GAP_X
+                    ET.SubElement(svg, "line", {
+                        "x1": str(ax1), "y1": str(ay),
+                        "x2": str(ax2), "y2": str(ay),
+                        "stroke": arrow_color, "stroke-width": "1.5",
+                    })
+                    ET.SubElement(svg, "polygon", {
+                        "points": f"{ax2-6},{ay-3} {ax2},{ay} {ax2-6},{ay+3}",
+                        "fill": arrow_color,
+                    })
+
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"logic_{ts}.svg"
+        filepath = self.charts_dir / filename
+        filepath.write_text(ET.tostring(svg, encoding="unicode"), encoding="utf-8")
+        img_url = f"/charts/{filename}"
+        return f"![{title or 'Logic Diagram'}]({img_url})\n{img_url}"
 
     # ── 链拆分 ────────────────────────────────────────
 
