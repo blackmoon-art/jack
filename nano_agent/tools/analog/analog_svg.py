@@ -311,12 +311,18 @@ def _calc_common_emitter(tmpl: dict, params: dict) -> dict:
     """
     gain_raw = params.get("gain", params.get("Gain", ""))
     Ic = _parse_value(str(params.get("Ic", "1m")))
+    if Ic <= 0:
+        Ic = 1e-3  # guard against zero/negative current
     Vcc = _parse_value(str(params.get("Vcc", "12")))
+    if Vcc <= 0:
+        Vcc = 12.0
     Ve = Vcc * 0.1
     Re = Ve / Ic
     if gain_raw and gain_raw != "?":
         # Rc set by gain target: |gain| = gm*Rc = Ic*Rc/VTH
         target_gain = abs(_parse_value(str(gain_raw)))
+        if target_gain <= 0:
+            target_gain = 1.0  # guard against zero/nonsense gain
         Rc = target_gain * VTH / Ic
         Vc = Vcc - Ic * Rc
         # If Rc too large (saturation), clamp
@@ -545,9 +551,15 @@ def _calc_cascode(tmpl: dict, params: dict) -> dict:
     """
     gain_raw = params.get("gain", params.get("Gain", ""))
     Ic = _parse_value(str(params.get("Ic", "1m")))
+    if Ic <= 0:
+        Ic = 1e-3  # guard against zero/negative current
     Vcc = _parse_value(str(params.get("Vcc", "15")))
+    if Vcc <= 0:
+        Vcc = 15.0
     if gain_raw and gain_raw != "?":
         target_gain = abs(_parse_value(str(gain_raw)))
+        if target_gain <= 0:
+            target_gain = 1.0
         Rc = target_gain * VTH / Ic
         Vc2 = Vcc - Ic * Rc
         if Vc2 < Vcc * 0.15:
@@ -1333,7 +1345,7 @@ def _spec_to_metric(calc_name: str) -> str:
 def _adjust_params(values: dict, calc_name: str, metric: str,
                    current: float, target: float) -> dict:
     """Simple proportional parameter adjustment."""
-    if current <= 0:
+    if current <= 0 or target <= 0:
         return values
     ratio = target / current
     new = dict(values)
@@ -1363,11 +1375,13 @@ def _adjust_params(values: dict, calc_name: str, metric: str,
             for k in ("Rg",):
                 if k in new:
                     new[k] = _format_value(_parse_value(str(new[k])) / ratio)
-        # Rg in differential amp: scale inversely with Rf to maintain balance
+        # Diff amp: scale Rf AND Rg forward together to maintain Rf=Rg (CMRR)
+        # Gain = Rf/R1, so scaling Rf by ratio gives gain' = gain * ratio
+        # Do NOT scale R1/R2 — that would double-correct (ratio-squared oscillation)
         if calc_name == "differential_amp":
-            for k in ("Rg", "R1", "R2"):
+            for k in ("Rg",):
                 if k in new:
-                    new[k] = _format_value(_parse_value(str(new[k])) / ratio)
+                    new[k] = _format_value(_parse_value(str(new[k])) * ratio)
 
     return new
 
@@ -2467,8 +2481,8 @@ class AnalogSVG:
                 cat, sub = "output", "class_ab_push_pull"
             elif any(w in desc_lower for w in ("甲类", "class a")):
                 cat, sub = "output", "class_a_ce_output"
-            elif any(w in desc_lower for w in ("两级放大", "多级放大", "射频放大", "rf放大",
-                                               "射频", "rf amplifier")):
+            elif any(w in desc_lower for w in ("射频放大器", "rf放大器", "射频放大", "rf放大",
+                                               "rf amplifier")):
                 cat, sub = "bjt", "cascode"  # closest multi-transistor topology
             elif any(w in desc_lower for w in ("放大", "运放")):
                 cat, sub = "amplifier", "inverting"

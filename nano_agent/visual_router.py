@@ -38,7 +38,7 @@ _EXACT_ROUTES: list[tuple[str, str, dict]] = [
      r"滤波器.*频率响应|频率响应.*滤波器|"
      r"滤波器.*幅频|幅频.*滤波器|"
      r"rc.*bode|bode.*rc|lc.*bode|bode.*lc|"
-     r"low.pass.*bode|bode.*low.pass|high.pass.*bode|band.pass.*bode|"
+     r"low.?pass.*bode|bode.*low.?pass|high.?pass.*bode|band.?pass.*bode|"
      r"filter.*freq.*resp|freq.*resp.*filter|"
      r"sallen.*bode|bode.*sallen|butterworth.*bode|"
      r"运放.*bode|运放.*频率响应|放大器.*bode|放大器.*频率响应|"
