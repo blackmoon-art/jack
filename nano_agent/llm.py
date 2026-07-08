@@ -154,10 +154,16 @@ class LLM:
         """
         for attempt in range(3):
             try:
-                provider = self._get_provider()
+                # 如果 model 参数指定了不同 provider（如 glm→zhipu），自动切换
+                effective_model = model or self._model
+                effective_provider_str = ProviderRegistry.resolve_by_model(effective_model) if model else self._effective_provider_str
+                if effective_provider_str != self._effective_provider_str:
+                    provider = ProviderRegistry.resolve_provider(effective_provider_str, self.config)
+                else:
+                    provider = self._get_provider()
                 result = provider.chat(
                     messages=messages, tools=tools, system=system,
-                    model=model or self._model,
+                    model=effective_model,
                     max_tokens=self.config.max_tokens,
                     timeout=120,
                 )
@@ -207,9 +213,14 @@ class LLM:
         Yields:
             str: 文本 chunk，或 dict: {"type": "tool_calls", "tool_calls": [...]}
         """
-        provider = self._get_provider()
+        effective_model = model or self._model
+        effective_provider_str = ProviderRegistry.resolve_by_model(effective_model) if model else self._effective_provider_str
+        if effective_provider_str != self._effective_provider_str:
+            provider = ProviderRegistry.resolve_provider(effective_provider_str, self.config)
+        else:
+            provider = self._get_provider()
         yield from provider.chat_stream(
             messages=messages, system=system, tools=tools,
-            model=model or self._model,
+            model=effective_model,
             max_tokens=self.config.max_tokens,
         )
