@@ -39,7 +39,8 @@ templates:
   keywords_cn:
   - RC高通
   - rc高通
-  - 高通滤波器
+  - 一阶高通
+  - RC高通滤波
   - 高通滤波
   guide: A simple first-order passive RC high-pass filter.
   params:
@@ -113,6 +114,10 @@ templates:
   - sallen key
   - 有源低通
   - 有源滤波
+  - 二阶低通
+  - 二阶有源低通
+  - 2阶低通
+  - 二阶滤波
   guide: A second-order active low-pass filter using an op-amp. Butterworth response
     (Q=0.707).
   params:
@@ -955,6 +960,10 @@ templates:
   - 有源高通滤波
   - sallen key highpass
   - active highpass
+  - 二阶高通
+  - 二阶高通滤波
+  - 二阶有源高通
+  - 2阶高通
   guide: A second-order active high-pass filter. R and C swapped vs. low-pass. Butterworth
     Q=0.707.
   params:
@@ -1019,6 +1028,9 @@ templates:
   - 带通滤波
   - bandpass
   - band-pass
+  - MFB带通
+  - mfb bandpass
+  - 二阶带通
   - mfb
   - multiple feedback
   - 多重反馈
@@ -1095,6 +1107,8 @@ templates:
   - 双T
   - 带阻
   - band-stop
+  - 二阶陷波
+  - 二阶带阻
   - 窄带滤波
   guide: Narrow notch (band-stop) filter using passive twin-T network + opamp buffer.
     fn = 1/(2*pi*R*C). Use R/2 and 2C for the center branch.

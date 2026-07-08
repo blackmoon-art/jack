@@ -61,7 +61,7 @@ _CIRCUIT_TEMPLATES = {
     },
     ("filter", "rc_highpass"): {
         "name": "RC High-Pass Filter",
-        "keywords_cn": ["RC高通", "rc高通", "高通滤波器", "高通滤波"],
+        "keywords_cn": ["RC高通", "rc高通", "一阶高通", "RC高通滤波", "高通滤波"],
         "guide": "A simple first-order passive RC high-pass filter.",
         "components": [
             {"type": "V", "name": "Vin", "nodes": ["in", "0"], "value": "AC 1"},
@@ -85,7 +85,8 @@ _CIRCUIT_TEMPLATES = {
     },
     ("filter", "sallen_key_lp"): {
         "name": "Sallen-Key Low-Pass Filter",
-        "keywords_cn": ["Sallen-Key", "sallen key", "有源低通", "有源滤波"],
+        "keywords_cn": ["Sallen-Key", "sallen key", "有源低通", "有源滤波",
+                        "二阶低通", "二阶有源低通", "2阶低通", "二阶滤波"],
         "guide": "A second-order active low-pass filter using an op-amp.",
         "components": [
             {"type": "V", "name": "Vin", "nodes": ["in", "0"], "value": "AC 1"},
