@@ -58,8 +58,20 @@ class OpenAIProvider(BaseProvider):
         msg = response.choices[0].message
         text = msg.content or ""
         # Guard: content may be a list of content blocks (multimodal API format)
+        # or a dict. Extract actual text rather than stringifying.
         if not isinstance(text, str):
-            text = str(text) if text else ""
+            if isinstance(text, list):
+                parts = []
+                for block in text:
+                    if isinstance(block, dict):
+                        parts.append(block.get("text", ""))
+                    else:
+                        parts.append(str(block))
+                text = "".join(parts)
+            elif isinstance(text, dict):
+                text = text.get("text", "")
+            else:
+                text = str(text)
 
         # DeepSeek reasoner: 保留 reasoning_content
         reasoning = getattr(msg, "reasoning_content", None) or ""
