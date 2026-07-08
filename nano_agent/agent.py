@@ -76,6 +76,8 @@ class Agent:
         self._local.prompt_cache_key = ()
         self._local.last_orientation = None  # 最近一次 Orient 结果 (per-request)
         self._local.current_orient_fn = None  # 当前 Orient 函数 (per-request)
+        self._local.excluded_tools = set()  # profile 排除的工具
+        self._local.profile_prompt = ""     # profile 追加的 system prompt
     # ── 主入口 ──────────────────────────────────────────
 
     def run(self, task: str, strategy: str = "default",
@@ -108,7 +110,27 @@ class Agent:
         self._emit("text", {"text": f"Task: {task}\nStrategy: {strategy}"})
 
         try:
+            # ── Intent Router: 识别意图 → QA / Code / Circuit ──
+            from .intent_router import classify as classify_intent
+            from .profiles import AGENT_PROFILES
+
+            intent = classify_intent(task, self.llm)
+            profile = AGENT_PROFILES[intent]
+            self._local.excluded_tools = profile.excluded_tools
+            self._local.profile_prompt = profile.prompt_prefix
+            self._emit("text", {"text": f"🎯 Intent: {intent}"})
+
+            # ── Model Router: 按复杂度选模型 ──
+            if not model_override:
+                from .model_router import select as select_model
+                routed_model = select_model(task, intent)
+                if routed_model:
+                    model_override = routed_model
+                    self._emit("text", {"text": f"🤖 Model: {routed_model}"})
+
             # auto 模式：LLM 根据用户意图自动选策略
+            if strategy == "auto":
+                strategy = profile.default_strategy if profile.default_strategy != "auto" else strategy
             if strategy == "auto":
                 strategy = self._auto_select_strategy(task)
                 self._emit("text", {"text": f"🤖 Auto-selected strategy: {strategy}"})
@@ -538,6 +560,10 @@ class Agent:
         schemas = self.tools.get_schemas()
         if exclude_tools:
             schemas = [s for s in schemas if s["function"]["name"] not in exclude_tools]
+        # Profile 工具过滤
+        profile_excludes = getattr(self._local, 'excluded_tools', set())
+        if profile_excludes:
+            schemas = [s for s in schemas if s["function"]["name"] not in profile_excludes]
 
         # system_prompt — 允许策略覆盖
         prompt = system_prompt or self._system_prompt()
@@ -688,7 +714,8 @@ class Agent:
         # 加载内置规则（rules/system_rules.md）
         builtin_rules = self._load_builtin_rules()
 
-        cache_key = (hash(rules), hash(persistent), hash(builtin_rules))
+        profile_prompt = getattr(self._local, 'profile_prompt', '')
+        cache_key = (hash(rules), hash(persistent), hash(builtin_rules), hash(profile_prompt))
         cached = getattr(self._local, 'prompt_cache', None)
         cached_key = getattr(self._local, 'prompt_cache_key', ())
         if cached is not None and cached_key == cache_key:
@@ -706,6 +733,8 @@ class Agent:
             "",
             builtin_rules,
         ]
+        if profile_prompt:
+            parts.append(f"\n# Role\n{profile_prompt}")
         if rules:
             parts.append(f"\n# Rules\n{rules}")
         if persistent:
