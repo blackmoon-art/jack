@@ -402,9 +402,9 @@ class Circuit:
                         label = inner.split(".")[0]  # port(RF_in) → RF_in
                     else:
                         label = base + "\n" + inner if len(base) < 6 else base
-                if " as " in tok.lower():
-                    parts = tok.lower().split(" as ")
-                    label = parts[1].strip()
+                _as_m = re.search(r'\s+as\s+', tok)
+                if _as_m:
+                    label = tok[_as_m.end():].strip()
                 # Clean up
                 label = label.strip()
                 if len(label) > 15:
@@ -456,7 +456,7 @@ class Circuit:
                 # Label (split multiline)
                 lines = label.split("\n")
                 for li, line in enumerate(lines):
-                    ly = y + BOX_H // 2 + (li - len(lines) / 2) * 12 + 4
+                    ly = int(y + BOX_H // 2 + (li - (len(lines) - 1) / 2) * 12 + 4)
                     ET.SubElement(svg, "text", {
                         "x": str(x + BOX_W // 2), "y": str(int(ly)),
                         "text-anchor": "middle", "fill": "#e0e0e0",
