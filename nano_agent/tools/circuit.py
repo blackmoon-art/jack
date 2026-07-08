@@ -259,11 +259,11 @@ class Circuit:
     # ── 核心渲染引擎 ──────────────────────────────────
 
     def _draw(self, description: str, title: str, comp_set: str) -> str:
-        """统一渲染引擎，按 comp_set 过滤可用元件。"""
-        import schemdraw
-        import schemdraw.elements as elm
-        from schemdraw import Drawing
+        """统一渲染引擎，按 comp_set 过滤可用元件。
 
+        block 类型使用纯 SVG 渲染（无外部依赖），
+        digital/analog 使用 schemdraw。
+        """
         # 选择元件集
         if comp_set == "digital":
             allowed = set(_DIGITAL_COMPS)
@@ -274,6 +274,14 @@ class Circuit:
         else:
             allowed = set(_BLOCK_COMPS)
             valid_names_str = _BLOCK_NAMES_STR
+
+        # block 框图 → 纯 SVG
+        if comp_set == "block":
+            return self._draw_block_svg(description, title, allowed)
+
+        import schemdraw
+        import schemdraw.elements as elm
+        from schemdraw import Drawing
 
         try:
             d = Drawing(show=False)
@@ -359,6 +367,122 @@ class Circuit:
         except Exception as e:
             logger.exception(f"Circuit drawing failed: {e}")
             return f"Error drawing circuit: {e}"
+
+    # ── Block SVG 渲染 (纯 Python, 无外部依赖) ────────────
+
+    def _draw_block_svg(self, description: str, title: str, allowed: set) -> str:
+        """Simple SVG block diagram: left-to-right grid, one chain per row."""
+        import xml.etree.ElementTree as ET
+
+        # Parse description into chains
+        chains = Circuit._split_chains(description)
+        if not chains:
+            return "Error: no components in circuit description"
+
+        # Parse each chain into labelled boxes
+        all_boxes = []  # [[(label, x, y, w, h), ...], ...]
+        max_boxes = 0
+        for chain in chains:
+            boxes = []
+            # Remove arrows, split by -> or whitespace
+            tokens = [t.strip() for t in chain.replace("->", " ").replace("[", " [").split()]
+            for tok in tokens:
+                tok = tok.strip(",")
+                if not tok or tok in ("up", "down", "left", "right", "[", "]", ";"):
+                    continue
+                # Extract label: port(name) → name; comp as N1 → N1; comp(val) → comp
+                label = tok
+                if "(" in tok and ")" in tok:
+                    inner = tok[tok.index("(")+1:tok.rindex(")")]
+                    # skip numbered params like rf(RF_in), just use the part before (
+                    base = tok.split("(")[0]
+                    if base in ("port", "terminal"):
+                        label = inner.split(".")[0]  # port(RF_in) → RF_in
+                    else:
+                        label = base + "\n" + inner if len(base) < 6 else base
+                if " as " in tok.lower():
+                    parts = tok.lower().split(" as ")
+                    label = parts[1].strip()
+                # Clean up
+                label = label.strip()
+                if len(label) > 15:
+                    label = label[:13] + ".."
+                boxes.append(label)
+            all_boxes.append(boxes)
+            max_boxes = max(max_boxes, len(boxes))
+
+        if max_boxes == 0:
+            return "Error: no blocks found in description"
+
+        # Layout params
+        BOX_W, BOX_H = 100, 50
+        GAP_X, GAP_Y = 60, 40
+        MARGIN = 40
+        n_rows = len(all_boxes)
+        n_cols = max_boxes
+        svg_w = MARGIN * 2 + n_cols * (BOX_W + GAP_X)
+        svg_h = MARGIN * 2 + n_rows * (BOX_H + GAP_Y) + (n_rows - 1) * 20
+
+        svg = ET.Element("svg", {
+            "xmlns": "http://www.w3.org/2000/svg",
+            "viewBox": f"0 0 {svg_w} {svg_h}",
+            "width": str(svg_w), "height": str(svg_h),
+        })
+        ET.SubElement(svg, "rect", {
+            "width": str(svg_w), "height": str(svg_h),
+            "fill": "#1a1a2e",
+        })
+        if title:
+            ET.SubElement(svg, "text", {
+                "x": str(svg_w // 2), "y": "22", "text-anchor": "middle",
+                "fill": "#e0e0e0", "font-family": "monospace",
+                "font-size": "13", "font-weight": "bold",
+            }).text = title
+
+        # Draw boxes and arrows
+        arrow_color = "#7c3aed"
+        for row_i, boxes in enumerate(all_boxes):
+            for col_i, label in enumerate(boxes):
+                x = MARGIN + col_i * (BOX_W + GAP_X)
+                y = MARGIN + row_i * (BOX_H + GAP_Y + 20)
+                # Box
+                ET.SubElement(svg, "rect", {
+                    "x": str(x), "y": str(y), "width": str(BOX_W), "height": str(BOX_H),
+                    "rx": "6", "fill": "#2a2a4e",
+                    "stroke": "#7c3aed", "stroke-width": "1.5",
+                })
+                # Label (split multiline)
+                lines = label.split("\n")
+                for li, line in enumerate(lines):
+                    ly = y + BOX_H // 2 + (li - len(lines) / 2) * 12 + 4
+                    ET.SubElement(svg, "text", {
+                        "x": str(x + BOX_W // 2), "y": str(int(ly)),
+                        "text-anchor": "middle", "fill": "#e0e0e0",
+                        "font-family": "monospace", "font-size": "9",
+                    }).text = line
+                # Arrow to next box
+                if col_i < len(boxes) - 1:
+                    ax1 = x + BOX_W
+                    ay = y + BOX_H // 2
+                    ax2 = x + BOX_W + GAP_X
+                    ET.SubElement(svg, "line", {
+                        "x1": str(ax1), "y1": str(ay),
+                        "x2": str(ax2), "y2": str(ay),
+                        "stroke": arrow_color, "stroke-width": "1.5",
+                    })
+                    # Arrowhead
+                    ET.SubElement(svg, "polygon", {
+                        "points": f"{ax2-6},{ay-3} {ax2},{ay} {ax2-6},{ay+3}",
+                        "fill": arrow_color,
+                    })
+
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"block_{ts}.svg"
+        filepath = self.charts_dir / filename
+        filepath.write_text(ET.tostring(svg, encoding="unicode"), encoding="utf-8")
+
+        img_url = f"/charts/{filename}"
+        return f"![{title or 'Block Diagram'}]({img_url})\n{img_url}"
 
     # ── 链拆分 ────────────────────────────────────────
 
