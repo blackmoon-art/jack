@@ -249,7 +249,8 @@ class ReflexionStrategy(BaseStrategy):
             if last_step_messages and attempt > 0:
                 tool_history = [
                     m for m in last_step_messages
-                    if m.get("role") in ("tool", "assistant") and m.get("tool_calls")
+                    if m.get("role") == "tool" or
+                       (m.get("role") == "assistant" and m.get("tool_calls"))
                 ]
                 if tool_history:
                     # 插入到 task 消息之前
