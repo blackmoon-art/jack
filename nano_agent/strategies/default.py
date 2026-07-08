@@ -30,8 +30,6 @@ class DefaultStrategy(BaseStrategy):
     uses_orient = False
     default_params = {}
     auto_keywords = (
-        # 画图关键词：单一来源，从 visual_router 导入
-        *get_all_visual_keywords(),
         # QA / 日常关键词
         '天气', '气温', '温度', '汇率', '股价', '行情', '大盘', '指数',
         '新闻', '热搜', '今天', '查询', '查一下', '搜索', '搜一下',

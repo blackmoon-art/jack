@@ -37,7 +37,7 @@ class ReflexionStrategy(BaseStrategy):
     default_params = {"max_retries": 3}
     auto_keywords = ('调试', '修复', 'bug', 'fix', 'debug', '出错', '报错',
                      '质量', '审查', 'review', '检查', '验证', '确保')
-    auto_priority = 2
+    auto_priority = 4
 
     def __init__(self, *args, max_retries: int = None, **kwargs):
         super().__init__(*args, **kwargs)
