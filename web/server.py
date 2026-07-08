@@ -303,7 +303,9 @@ def get_or_create_session(session_id: Optional[str] = None) -> str:
             "agent": agent,
             "history": history,
             "last_access": _time.time(),
-            "cancel_event": threading.Event(),  # 用户可发送新消息打断当前任务
+            "cancel_event": threading.Event(),
+            "running": False,             # agent 是否正在执行
+            "user_queue": Queue(),  # 执行中用户输入的消息队列
         }
         if history:
             logger.info(f"Restored session {new_id}: {len(history)} messages from DB")
@@ -315,14 +317,16 @@ def get_or_create_session(session_id: Optional[str] = None) -> str:
 def agent_stream(task: str, strategy: str, session_id: str,
                  model_override: str | None = None):
     """Generator that yields SSE events as the agent runs."""
-    # 在锁内安全获取 agent 引用和 cancel_event（避免锁外访问 sessions dict 的 race condition）
+    # 在锁内安全获取 agent 引用（避免锁外访问 sessions dict 的 race condition）
     with _sessions_lock:
         if session_id not in sessions:
             yield f"event: error\ndata: {json.dumps({'text': 'Session not found'})}\n\n"
             return
         agent = sessions[session_id]["agent"]
         sessions[session_id]["last_access"] = _time.time()
-        cancel_event = sessions[session_id].get("cancel_event")  # 锁内获取引用
+        sessions[session_id]["running"] = True
+        cancel_event = sessions[session_id].get("cancel_event")
+        user_queue_ref = sessions[session_id].get("user_queue")
 
     # 用队列收集 agent 事件
     queue: Queue = Queue()
@@ -355,11 +359,25 @@ def agent_stream(task: str, strategy: str, session_id: str,
     thread = Thread(target=run, daemon=True)
     thread.start()
 
+    # 将 user_messages 列表绑定到 agent 的线程本地存储
+    # streaming 线程写入，agent 线程在 _agent_loop 中读取
+    user_messages: list[str] = []
+    agent._local.user_messages = user_messages
+
     try:
         # 流式发送事件（带心跳，防止浏览器超时断开）
-        # cancel_event 已在锁内获取，此处直接使用
         last_heartbeat = _time.time()
         while True:
+            # 用户发送新消息 → 推入 user_messages 供 agent 接收
+            if user_queue_ref is not None:
+                try:
+                    user_msg = user_queue_ref.get_nowait()
+                    user_messages.append(user_msg)
+                    yield f"event: interrupt\ndata: {json.dumps({'type': 'user_message', 'text': f'📨 收到: {user_msg}', 'raw': user_msg}, ensure_ascii=False)}\n\n"
+                    continue  # 立即回到循环，让 agent 能看到消息
+                except Empty:
+                    pass
+
             # 用户发送新消息打断 → 取消事件被设置
             if cancel_event and cancel_event.is_set():
                 cancelled["value"] = True
@@ -385,6 +403,11 @@ def agent_stream(task: str, strategy: str, session_id: str,
         cancelled["value"] = True
         logger.info(f"Client disconnected from session {session_id}")
     finally:
+        # 标记 session 不再运行，清理 user_messages 引用
+        agent._local.user_messages = None
+        with _sessions_lock:
+            if session_id in sessions:
+                sessions[session_id]["running"] = False
         # 确保线程结束，避免泄露
         thread.join(timeout=5)
         if thread.is_alive():
@@ -416,13 +439,13 @@ async def chat(request: Request):
 
     session_id = get_or_create_session(session_id)
 
-    # 打断正在执行的任务（用户发新消息 = 取消旧任务）
+    # 如果 session 正在执行任务，推入 user_queue，agent 中途接收
     with _sessions_lock:
         if session_id in sessions:
-            old_event = sessions[session_id].get("cancel_event")
-            if old_event and not old_event.is_set():
-                old_event.set()
-                logger.info(f"Cancelled running task in session {session_id}")
+            if sessions[session_id].get("running"):
+                sessions[session_id]["user_queue"].put(task)
+                logger.info(f"Queued user message in running session {session_id}")
+                return {"ok": True, "status": "queued"}
 
     # 每日限流：owner 藉免，外部用户按 IP 限制
     owner_code = os.getenv("WEB_ACCESS_CODE", "")
