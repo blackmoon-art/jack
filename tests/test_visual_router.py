@@ -126,26 +126,31 @@ class TestLayer2IntentMatch(unittest.TestCase):
         reset_stats()
 
     def test_comparison_intent(self):
-        """比较 → bar"""
-        result = route_visual("比较三个季度的销售数据")
+        """比较+图 → bar"""
+        result = route_visual("画图比较三个季度的销售数据")
         self.assertEqual(result[0], "generate_chart")
         self.assertEqual(result[1]["chart_type"], "bar")
 
+    def test_comparison_no_draw_intent(self):
+        """比较但无绘制意图 → 不路由"""
+        result = route_visual("比较三个季度的销售数据")
+        self.assertIsNone(result)
+
     def test_trend_intent(self):
-        """趋势 → line"""
-        result = route_visual("展示温度变化趋势")
+        """趋势+图 → line"""
+        result = route_visual("展示温度变化趋势图")
         self.assertEqual(result[0], "generate_chart")
         self.assertEqual(result[1]["chart_type"], "line")
 
     def test_proportion_intent(self):
-        """占比 → pie"""
-        result = route_visual("各类型占比比例")
+        """占比+图 → pie"""
+        result = route_visual("画图看各类型占比比例")
         self.assertEqual(result[0], "generate_chart")
         self.assertEqual(result[1]["chart_type"], "pie")
 
     def test_correlation_intent(self):
-        """相关性 → scatter"""
-        result = route_visual("看这两个变量的关系")
+        """相关性+图 → scatter"""
+        result = route_visual("可视化这两个变量的关系")
         self.assertEqual(result[0], "generate_chart")
         self.assertEqual(result[1]["chart_type"], "scatter")
 
@@ -170,7 +175,7 @@ class TestLayer3Fallback(unittest.TestCase):
     def test_stats_tracked(self):
         """统计正确"""
         route_visual("画折线图")     # layer1
-        route_visual("比较销售数据")   # layer2
+        route_visual("画图比较销售数据")   # layer2
         route_visual("画个图")        # fallback
         stats = get_stats()
         self.assertEqual(stats["total"], 3)

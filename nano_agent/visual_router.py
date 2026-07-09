@@ -460,7 +460,17 @@ def _exact_match(task_lower: str) -> tuple[str, dict] | None:
 
 
 def _intent_match(task: str, task_lower: str) -> tuple[str, dict] | None:
-    """Layer 2: 动词+名词组合模式匹配。"""
+    """Layer 2: 动词+名词组合模式匹配。
+
+    要求任务包含绘制意图词（画/图/展示/可视化等），
+    避免 "销量增长原因" "股价下降怎么办" 等纯问答误触发图表路由。
+    """
+    _DRAW_HINT_RE = re.compile(
+        r"画|图|展示|可视化|plot|chart|graph|draw|visual|呈现|显示",
+        re.IGNORECASE,
+    )
+    if not _DRAW_HINT_RE.search(task_lower):
+        return None
     for verb_pat, noun_pat, tool_name, params in _INTENT_PATTERNS:
         if re.search(verb_pat, task_lower) and re.search(noun_pat, task_lower):
             return tool_name, dict(params)
