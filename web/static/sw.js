@@ -16,8 +16,9 @@ self.addEventListener("install", (e) => {
 });
 
 self.addEventListener("fetch", (e) => {
-  // API 请求不缓存
+  // API 请求和语音相关请求不缓存（语音识别需要实时网络访问）
   if (e.request.url.includes("/api/")) return;
+  if (e.request.url.startsWith("chrome-extension://") || e.request.url.includes("speech")) return;
   e.respondWith(
     caches.match(e.request).then((r) => r || fetch(e.request))
   );

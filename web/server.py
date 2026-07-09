@@ -832,10 +832,9 @@ async def download_file(filename: str, session_id: str = ""):
         return JSONResponse({"error": "File not found"}, status_code=404)
 
     from urllib.parse import quote
-    encoded_filename = quote(filename, safe=".")
+    encoded_filename = quote(filename, safe="")
     return FileResponse(
         str(filepath),
-        filename=filename,
         media_type="application/octet-stream",
         headers={"Content-Disposition":
                  f"attachment; filename=\"{encoded_filename}\"; "
