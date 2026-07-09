@@ -60,7 +60,7 @@ _EXACT_ROUTES: list[tuple[str, str, dict]] = [
     ("回归|拟合|regression|线性回归|最小二乘",
      "generate_chart", {"chart_type": "regression"}),
     # 函数图
-    (r"函数图|画函数|函数图像|function plot|画.*y\s*=|画.*f\(x\)|画.*sin\(|画.*cos\(|画.*tan\(|画.*log\(|画.*exp\(|画.*sqrt\(|画.*x\*\*|画.*x\^2|画.*数学函数",
+    (r"函数图|画函数|函数图像|二次函数|三角函数|function plot|画.*y\s*=|画.*f\(x\)|画.*sin\(|画.*cos\(|画.*tan\(|画.*log\(|画.*exp\(|画.*sqrt\(|画.*x\*\*|画.*x\^2|画.*数学函数",
      "generate_chart", {"chart_type": "function"}),
     # 几何证明
     ("证明.*定理|几何证明|勾股|pythagoras|相似三角形|全等三角形",
@@ -233,8 +233,8 @@ _INTENT_PATTERNS: list[tuple[str, str, str, dict]] = [
      r"定理|几何|勾股|相似|全等|面积|角度",
      "generate_chart", {"chart_type": "geometry"}),
 
-    (r"画出|绘制|可视化|plot|graph",
-     r"函数|方程|表达式|公式|y\s*=|f\(x\)|sin|cos|tan|exp|log|sqrt",
+    (r"画出|绘制|可视化|\bplot\b|\bgraph\b",
+     r"函数|方程|表达式|公式|f\(x\)|数学函数|二次函数|三角函数",
      "generate_chart", {"chart_type": "function"}),
 ]
 
@@ -464,9 +464,12 @@ def _intent_match(task: str, task_lower: str) -> tuple[str, dict] | None:
 
     要求任务包含绘制意图词（画/图/展示/可视化等），
     避免 "销量增长原因" "股价下降怎么办" 等纯问答误触发图表路由。
+
+    英文关键词加词边界，避免 getattr/paragraph 等误匹配。
     """
     _DRAW_HINT_RE = re.compile(
-        r"画|图|展示|可视化|plot|chart|graph|draw|visual|呈现|显示",
+        r"画|图|展示|可视化|呈现|显示|"
+        r"\bplot\b|\bchart\b|\bgraph\b|\bdraw\b|\bvisual\b",
         re.IGNORECASE,
     )
     if not _DRAW_HINT_RE.search(task_lower):
