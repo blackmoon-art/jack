@@ -554,7 +554,7 @@ async def survey_stats():
 async def health():
     # 每小时触发一次 chart 清理
     if _time.time() - _last_chart_cleanup > 3600:
-        cleanup_old_charts()
+        cleanup_temp_files()
     return {
         "status": "ok",
         "sessions": len(sessions),
@@ -672,21 +672,84 @@ _MAX_CHART_FILES = 200  # 最多保留的图片数量
 _last_chart_cleanup = _time.time()
 
 
-def cleanup_old_charts():
-    """启动时 + 运行时定期清理旧图表，保留最新的 N 个。"""
-    global _last_chart_cleanup
+_last_chart_cleanup = _time.time()
+_cleanup_thread_started = False
+
+
+def cleanup_temp_files():
+    """清理用户临时生成的文件：charts、session 残留、iverilog/yosys tmp。"""
+    # 1. 清理旧 charts（保留最新 _MAX_CHART_FILES 个）
     try:
-        patterns = ("*.png", "*.pptx", "*.jpg", "*.jpeg", "*.svg")
+        patterns = ("*.png", "*.pptx", "*.jpg", "*.jpeg", "*.svg", "*.csv")
         all_files = []
         for pat in patterns:
             all_files.extend(CHARTS_DIR.glob(pat))
         files = sorted(all_files, key=lambda f: f.stat().st_mtime, reverse=True)
         for f in files[_MAX_CHART_FILES:]:
             f.unlink()
-            logger.info(f"Cleaned up old file: {f.name}")
-        _last_chart_cleanup = _time.time()
+            logger.info(f"Cleaned up old chart: {f.name}")
     except Exception as e:
         logger.warning(f"Chart cleanup failed: {e}")
+
+    # 2. 清理过期的 session 工作目录（服务器重启后内存 session 丢失）
+    try:
+        work_root = Path(Config().work_dir)
+        for session_dir in work_root.glob("session_*"):
+            if not session_dir.is_dir():
+                continue
+            # 检查是否有运行的 session（理论上重启后不会有）
+            sid = session_dir.name.replace("session_", "")
+            if sid not in sessions:
+                try:
+                    import shutil as _shutil2
+                    _shutil2.rmtree(session_dir)
+                    logger.info(f"Cleaned up stale session dir: {session_dir.name}")
+                except Exception:
+                    pass
+    except Exception as e:
+        logger.warning(f"Session dir cleanup failed: {e}")
+
+    # 3. 清理 iverilog / yosys 残留临时目录
+    try:
+        for tmp_root in (Path("/tmp"), CHARTS_DIR):
+            if not tmp_root.exists():
+                continue
+            for tmpdir in tmp_root.glob("iverilog_*"):
+                try:
+                    import shutil as _shutil3
+                    _shutil3.rmtree(tmpdir)
+                except Exception:
+                    pass
+            for tmpdir in tmp_root.glob("yosys_*"):
+                try:
+                    import shutil as _shutil4
+                    _shutil4.rmtree(tmpdir)
+                except Exception:
+                    pass
+    except Exception as e:
+        logger.warning(f"Temp dir cleanup failed: {e}")
+
+    global _last_chart_cleanup
+    _last_chart_cleanup = _time.time()
+
+
+def _start_cleanup_thread():
+    """后台线程定期清理临时文件（每 30 分钟）。"""
+    global _cleanup_thread_started
+    if _cleanup_thread_started:
+        return
+    _cleanup_thread_started = True
+
+    def _loop():
+        while True:
+            _time.sleep(1800)  # 30 min
+            try:
+                cleanup_temp_files()
+            except Exception:
+                pass
+
+    t = Thread(target=_loop, daemon=True)
+    t.start()
 
 
 @app.get("/charts/{filename}")
@@ -851,5 +914,6 @@ if __name__ == "__main__":
     logger.info(f"Sleeping fox Web UI — http://localhost:{port}")
     logger.info(f"Model: {get_config().model} | Provider: {get_config().provider}")
 
-    cleanup_old_charts()
+    cleanup_temp_files()
+    _start_cleanup_thread()
     uvicorn.run(app, host="0.0.0.0", port=port, log_level="info")
