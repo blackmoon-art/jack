@@ -749,6 +749,9 @@ document.getElementById('contact-close').addEventListener('click', () => {
   });
   obs.observe(document.getElementById('messages'), {childList:true, subtree:true});
 })();
+
+// PWA Service Worker 注册
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('/static/sw.js');
 </script>
 </body>
 </html>
