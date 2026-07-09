@@ -93,6 +93,19 @@
   footer input:focus { border-color:#7c3aed; }
   footer button, footer select, footer label { height:42px; box-sizing:border-box; display:inline-flex; align-items:center;
                                                   border-radius:8px; font-size:14px; padding:0 16px; }
+
+  #voice-btn { background:#333; border:1px solid #555; color:#ccc; cursor:pointer; min-width:42px; justify-content:center; flex-shrink:0; }
+  #voice-btn:hover { background:#444 !important; }
+  #voice-btn.recording { background:#dc2626; border-color:#dc2626; color:#fff; animation: pulse 1s infinite; }
+  .input-row { display:flex; gap:10px; flex:1; align-items:center; }
+  @keyframes pulse { 0%,100% { opacity:1; } 50% { opacity:0.6; } }
+  .msg.agent .tts-btn { cursor:pointer; opacity:0; transition:opacity 0.2s; margin-left:6px; font-size:12px; }
+  .msg.agent:hover .tts-btn { opacity:0.7; }
+  .msg.agent:hover .tts-btn:hover { opacity:1; }
+  @media (max-width:600px) {
+    .input-row { width:100%; }
+    .input-row input { flex:1; min-width:0; }
+  }
   footer button { background:#7c3aed; color:#fff; border:none; cursor:pointer; font-weight:600; white-space:nowrap; }
   footer button:disabled { opacity:0.5; cursor:not-allowed; }
   footer select { background:#222; color:#e0e0e0; border:1px solid #444; cursor:pointer; }
@@ -102,7 +115,6 @@
   #upload-preview a { text-decoration:none; }
   @media (max-width:600px) {
     footer { flex-wrap:wrap; }
-    footer input { flex:100%; }
     footer select { flex:1; }
   }
   .status { text-align:center; padding:8px; font-size:12px; color:#666; }
@@ -129,7 +141,10 @@
 <div id="messages"></div>
 
 <footer>
+  <div class="input-row">
   <input type="text" id="input" placeholder="输入任务..." autofocus />
+  <button id="voice-btn" title="语音输入"><svg width="24" height="24" viewBox="0 0 24 24" fill="none"><rect x="2.0" y="5.0" width="2.8" height="14" rx="1.4" fill="currentColor"/><rect x="5.8" y="0.0" width="2.8" height="24" rx="1.4" fill="currentColor"/><rect x="9.7" y="2.5" width="2.8" height="19" rx="1.4" fill="currentColor"/><rect x="13.5" y="4.0" width="2.8" height="16" rx="1.4" fill="currentColor"/><rect x="17.4" y="0.0" width="2.8" height="24" rx="1.4" fill="currentColor"/><rect x="21.2" y="5.0" width="2.8" height="14" rx="1.4" fill="currentColor"/></svg></button>
+  </div>
   <select id="model">
     <option value="">Default</option>
     <optgroup label="DeepSeek">
@@ -296,7 +311,8 @@ function addMessage(role, text, extraHtml = '') {
   const div = document.createElement('div');
   div.className = `msg ${role}`;
   const content = text ? renderContent(text) : '';
-  const body = extraHtml + (content ? `<div class="content">${content}</div>` : '');
+  const ttsBtn = (role === 'agent' && text) ? '<span class="tts-btn" title="朗读">🔊</span>' : '';
+  const body = extraHtml + (content ? `<div class="content">${content}</div>${ttsBtn}` : '');
   div.innerHTML = body || '';
   $messages.appendChild(div);
   $messages.scrollTop = $messages.scrollHeight;
@@ -450,6 +466,16 @@ function renderContent(text) {
 // ── 发送消息 ─────────────────────────────────────────
 
 async function send() {
+  // 发送时立即停止录音并重置图标
+  if (recognition) {
+    try { recognition.abort(); } catch (_) {}
+    isRecording = false;
+    intentionalStop = true;
+    sendFromVoice = false;
+    $voiceBtn.classList.remove('recording');
+    // 立即恢复默认图标（和 onend/onerror 中的 reset 逻辑一致）
+    $voiceBtn.innerHTML = '<svg width="24" height="24" viewBox="0 0 24 24" fill="none"><rect x="2.0" y="5.0" width="2.8" height="14" rx="1.4" fill="currentColor"/><rect x="5.8" y="0.0" width="2.8" height="24" rx="1.4" fill="currentColor"/><rect x="9.7" y="2.5" width="2.8" height="19" rx="1.4" fill="currentColor"/><rect x="13.5" y="4.0" width="2.8" height="16" rx="1.4" fill="currentColor"/><rect x="17.4" y="0.0" width="2.8" height="24" rx="1.4" fill="currentColor"/><rect x="21.2" y="5.0" width="2.8" height="14" rx="1.4" fill="currentColor"/></svg>';
+  }
   let task = $input.value.trim();
 
   // 附加上传文件信息
@@ -749,6 +775,99 @@ document.getElementById('contact-close').addEventListener('click', () => {
   });
   obs.observe(document.getElementById('messages'), {childList:true, subtree:true});
 })();
+
+
+// ── 语音功能 ──────────────────────────────────────────
+const $voiceBtn = document.getElementById('voice-btn');
+let recognition = null;
+let isRecording = false;
+let sendFromVoice = false;  // 标记是否由语音结束自动触发发送
+let intentionalStop = false;  // 标记主动停止，防止 onstart 重新闪烁
+
+if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
+  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  recognition = new SpeechRecognition();
+  recognition.lang = 'zh-CN';
+  recognition.interimResults = true;
+  recognition.continuous = true;
+
+  recognition.onresult = (e) => {
+    let transcript = '';
+    for (let i = e.resultIndex; i < e.results.length; i++) {
+      transcript += e.results[i][0].transcript;
+    }
+    $input.value = transcript;
+  };
+
+  recognition.onstart = () => {
+    if (intentionalStop) {
+      // 主动停止后浏览器重启了识别，立刻再停
+      recognition.stop();
+      return;
+    }
+    isRecording = true;
+    $voiceBtn.classList.add('recording');
+    $voiceBtn.innerHTML = '<svg width="24" height="24" viewBox="0 0 24 24" fill="none"><rect x="2.0" y="5.0" width="2.8" height="14" rx="1.4" fill="currentColor"/><rect x="5.8" y="0.0" width="2.8" height="24" rx="1.4" fill="currentColor"/><rect x="9.7" y="2.5" width="2.8" height="19" rx="1.4" fill="currentColor"/><rect x="13.5" y="4.0" width="2.8" height="16" rx="1.4" fill="currentColor"/><rect x="17.4" y="0.0" width="2.8" height="24" rx="1.4" fill="currentColor"/><rect x="21.2" y="5.0" width="2.8" height="14" rx="1.4" fill="currentColor"/></svg>';
+  };
+
+  recognition.onend = () => {
+    isRecording = false;
+    $voiceBtn.classList.remove('recording');
+    $voiceBtn.innerHTML = '<svg width="24" height="24" viewBox="0 0 24 24" fill="none"><rect x="2.0" y="5.0" width="2.8" height="14" rx="1.4" fill="currentColor"/><rect x="5.8" y="0.0" width="2.8" height="24" rx="1.4" fill="currentColor"/><rect x="9.7" y="2.5" width="2.8" height="19" rx="1.4" fill="currentColor"/><rect x="13.5" y="4.0" width="2.8" height="16" rx="1.4" fill="currentColor"/><rect x="17.4" y="0.0" width="2.8" height="24" rx="1.4" fill="currentColor"/><rect x="21.2" y="5.0" width="2.8" height="14" rx="1.4" fill="currentColor"/></svg>';
+    // 只在语音按钮停止时自动发送，用户手动点 Send 时不重复发
+    if (sendFromVoice && $input.value.trim()) {
+      sendFromVoice = false;
+      send();
+    } else {
+      sendFromVoice = false;
+    }
+    // onend 之后重置，允许下次正常启动
+    setTimeout(() => { intentionalStop = false; }, 100);
+  };
+
+  recognition.onerror = () => {
+    isRecording = false;
+    $voiceBtn.classList.remove('recording');
+    $voiceBtn.innerHTML = '<svg width="24" height="24" viewBox="0 0 24 24" fill="none"><rect x="2.0" y="5.0" width="2.8" height="14" rx="1.4" fill="currentColor"/><rect x="5.8" y="0.0" width="2.8" height="24" rx="1.4" fill="currentColor"/><rect x="9.7" y="2.5" width="2.8" height="19" rx="1.4" fill="currentColor"/><rect x="13.5" y="4.0" width="2.8" height="16" rx="1.4" fill="currentColor"/><rect x="17.4" y="0.0" width="2.8" height="24" rx="1.4" fill="currentColor"/><rect x="21.2" y="5.0" width="2.8" height="14" rx="1.4" fill="currentColor"/></svg>';
+  };
+
+  // Click to toggle: click=start, click again=stop+send
+  $voiceBtn.addEventListener('click', () => {
+    if (isRecording) {
+      sendFromVoice = true;
+      recognition.stop();
+    } else {
+      recognition.start();
+    }
+  });
+} else {
+  $voiceBtn.style.display = 'none';
+}
+
+// 语音播报 (TTS)
+let currentUtterance = null;
+document.addEventListener('click', (e) => {
+  if (e.target.classList.contains('tts-btn')) {
+    const msg = e.target.closest('.msg');
+    const content = msg.querySelector('.content');
+    if (!content) return;
+    if (currentUtterance && speechSynthesis.speaking) {
+      speechSynthesis.cancel();
+      currentUtterance = null;
+      e.target.textContent = '🔊';
+      return;
+    }
+    const text = content.innerText;
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.lang = 'zh-CN';
+    utterance.rate = 1.1;
+    currentUtterance = utterance;
+    e.target.textContent = '⏹';
+    utterance.onend = () => { e.target.textContent = '🔊'; currentUtterance = null; };
+    utterance.onerror = () => { e.target.textContent = '🔊'; currentUtterance = null; };
+    speechSynthesis.speak(utterance);
+  }
+});
 
 // PWA Service Worker 注册
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('/static/sw.js');
