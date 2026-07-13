@@ -171,7 +171,6 @@
   </label>
   <button id="send">Send</button>
 </footer>
-<div id="online-count" style="text-align:center;padding:4px;font-size:11px;color:#555;"></div>
 <div id="upload-preview" style="display:none; padding:6px 20px; font-size:12px; color:#a78bfa;"></div>
 
 <script>
@@ -872,19 +871,6 @@ document.addEventListener('click', (e) => {
 
 // PWA Service Worker 注册
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('/static/sw.js');
-
-// 在线人数（每30秒更新，仅 owner IP 可见）
-(async function pollOnline() {
-  try {
-    const resp = await fetch('/api/stats');
-    const data = await resp.json();
-    if (data.is_owner) {
-      document.getElementById('online-count').textContent =
-        `🟢 在线: ${data.sessions} 人 (活跃: ${data.active_5min})`;
-    }
-  } catch (_) {}
-  setTimeout(pollOnline, 30000);
-})();
 </script>
 </body>
 </html>
