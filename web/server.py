@@ -550,12 +550,6 @@ async def survey_stats():
             "recent": records[-20:]}
 
 
-@app.get("/api/stats")
-async def stats():
-    """返回在线人数统计。"""
-    return {"sessions": len(sessions)}
-
-
 @app.get("/api/health")
 async def health():
     # 每小时触发一次 chart 清理
