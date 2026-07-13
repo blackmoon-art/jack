@@ -735,7 +735,7 @@ document.getElementById('online-btn').addEventListener('click', async () => {
     try {
       const resp = await fetch('/api/stats');
       const data = await resp.json();
-      btn.textContent = '🟢 ' + data.active + ' · ' + data.sessions + ' 在线';
+      btn.textContent = '👥 ' + data.sessions + ' 在线';
       btn.style.color = '#10b981';
     } catch (_) {
       btn.textContent = '👥 ?';

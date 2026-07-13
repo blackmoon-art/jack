@@ -149,8 +149,6 @@ _SESSION_TTL_SECONDS = 7200  # 2 小时未访问则可淘汰
 # Agent 并发上限 — 防止内存爆 (每 Agent ~8MB 线程栈 + LLM 响应)
 _MAX_CONCURRENT_AGENTS = int(os.getenv("MAX_CONCURRENT_AGENTS", "10"))
 _agent_slots = Semaphore(_MAX_CONCURRENT_AGENTS)
-_active_connections = 0
-_active_connections_lock = threading.Lock()
 
 # ── 使用次数限制 ──────────────────────────────────────
 
@@ -347,11 +345,6 @@ def agent_stream(task: str, strategy: str, session_id: str,
         yield f"event: error\ndata: {json.dumps({'text': 'Server busy. Please try again later.'})}\n\n"
         return
 
-    # 实时在线计数
-    global _active_connections
-    with _active_connections_lock:
-        _active_connections += 1
-
     # 在后台线程运行 agent
     last_item = None
     cancelled = {"value": False}  # mutable flag for thread
@@ -402,8 +395,6 @@ def agent_stream(task: str, strategy: str, session_id: str,
         cancelled["value"] = True
         logger.info(f"Client disconnected from session {session_id}")
     finally:
-        with _active_connections_lock:
-            _active_connections -= 1
         # 确保线程结束，避免泄露
         thread.join(timeout=5)
         if thread.is_alive():
@@ -561,11 +552,8 @@ async def survey_stats():
 
 @app.get("/api/stats")
 async def stats():
-    """返回在线人数统计。active = 正在执行 agent 的实时连接数。"""
-    return {
-        "sessions": len(sessions),
-        "active": _active_connections,
-    }
+    """返回在线人数统计。"""
+    return {"sessions": len(sessions)}
 
 
 @app.get("/api/health")
