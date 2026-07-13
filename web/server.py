@@ -550,6 +550,25 @@ async def survey_stats():
             "recent": records[-20:]}
 
 
+@app.get("/api/stats")
+async def stats(request: Request):
+    """返回实时统计：在线人数。owner IP 才显示 is_owner=true。"""
+    client_ip = get_client_ip(request)
+    owner_ips = set(
+        ip.strip() for ip in os.getenv("OWNER_IPS", "").split(",") if ip.strip()
+    )
+    recent_ips = []
+    with _sessions_lock:
+        for sid, s in sessions.items():
+            if _time.time() - s.get("last_access", 0) < 300:
+                recent_ips.append({"ip": sid[:12], "since": int(_time.time() - s["last_access"])})
+    return {
+        "sessions": len(sessions),
+        "active_5min": len(recent_ips),
+        "is_owner": client_ip in owner_ips or not owner_ips,
+    }
+
+
 @app.get("/api/health")
 async def health():
     # 每小时触发一次 chart 清理
