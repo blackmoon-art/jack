@@ -73,7 +73,13 @@ class LongTermMemory:
             conn.execute("PRAGMA journal_mode=WAL")
             conn.row_factory = None
             self._local.conn = conn
-            self._local._all_conns.append(conn)
+            # _all_conns 是 thread-local 的，需用 getattr 惰性创建，
+            # 否则非构造线程首次访问会 AttributeError
+            all_conns = getattr(self._local, '_all_conns', None)
+            if all_conns is None:
+                all_conns = []
+                self._local._all_conns = all_conns
+            all_conns.append(conn)
         return conn
 
     def _init_db(self):
@@ -201,7 +207,12 @@ class ReflexionTrace:
             conn.execute("PRAGMA journal_mode=WAL")
             conn.row_factory = sqlite3.Row
             self._local.conn = conn
-            self._local._all_conns.append(conn)
+            # _all_conns 是 thread-local 的，需用 getattr 惰性创建（同 LongTermMemoryStore）
+            all_conns = getattr(self._local, '_all_conns', None)
+            if all_conns is None:
+                all_conns = []
+                self._local._all_conns = all_conns
+            all_conns.append(conn)
         return conn
 
     def _init_db(self):
