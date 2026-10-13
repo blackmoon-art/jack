@@ -1,14 +1,20 @@
-"""AI 图像生成 — 多后端: diffusers本地 > Stability API > pollinations.ai 兜底。
+"""AI 图像生成 — 多后端: diffusers 本地优先, pollinations.ai 降级。
 
 优先级:
-  1. diffusers 本地 (需 torch + diffusers, 自动检测)
-  2. Stability AI API (需 STABILITY_API_KEY 环境变量)
-  3. pollinations.ai (免费, 无需配置, 兜底)
+  1. diffusers 本地 (需 torch + diffusers; 稳定、无外网依赖) — 首选
+     (2026-08-25 切换: pollinations 从大陆到 Cloudflare 的 TLS 握手约 1/3 概率被丢弃,
+      实测 14 次请求失败 5 次; diffusers 慢(~5min/512px CPU)但可靠)
+  2. pollinations.ai (云端 GPU, 快, 免费; diffusers 失败时降级, 带重试)
+  3. Stability AI API (需 STABILITY_API_KEY; 目前不参与自动检测)
+
+AI_IMAGE_BACKEND 环境变量可强制指定后端 (diffusers / pollinations / stability)。
 """
 
 import json
 import logging
 import os
+import threading
+import time
 import urllib.parse
 import urllib.request
 from datetime import datetime
@@ -16,8 +22,9 @@ from pathlib import Path
 
 logger = logging.getLogger("nano_agent.tools.ai_image")
 
-# 懒加载全局 pipeline
+# 懒加载全局 pipeline + 推理锁 (7.4GB 内存无 swap, 并发推理会 OOM, 必须串行)
 _pipeline = None
+_pipeline_lock = threading.Lock()
 
 
 class AIImage:
@@ -41,31 +48,21 @@ class AIImage:
             self.charts_dir = web_static / "charts"
         self.charts_dir.mkdir(parents=True, exist_ok=True)
         self._backend = None  # 延迟检测
+        self._diffusers_broken = False  # 本地 pipeline 加载失败后不再重试
 
     def _detect_backend(self) -> str:
-        """检测可用的后端。"""
+        """检测可用的后端。默认 diffusers 本地（稳定），
+        可用 AI_IMAGE_BACKEND 环境变量覆盖；主后端失败时
+        在 generate_image 里降级另一后端。"""
         if self._backend:
             return self._backend
 
-        # 1. 检查 diffusers 本地
-        try:
-            import diffusers  # noqa: F401
-            import torch  # noqa: F401
-            self._backend = "diffusers"
-            logger.info("AI Image backend: diffusers (local)")
-            return self._backend
-        except ImportError:
-            pass
-
-        # 2. 检查 Stability API key
-        if os.environ.get("STABILITY_API_KEY"):
-            self._backend = "stability"
-            logger.info("AI Image backend: Stability AI API")
-            return self._backend
-
-        # 3. 兜底: pollinations.ai
-        self._backend = "pollinations"
-        logger.info("AI Image backend: pollinations.ai (free)")
+        backend = os.environ.get("AI_IMAGE_BACKEND", "").strip().lower() or "diffusers"
+        if backend not in ("diffusers", "pollinations", "stability"):
+            logger.warning(f"Unknown AI_IMAGE_BACKEND '{backend}', using diffusers")
+            backend = "diffusers"
+        self._backend = backend
+        logger.info(f"AI Image backend: {backend}")
         return self._backend
 
     def generate_image(self, prompt: str, negative_prompt: str = "",
@@ -88,15 +85,26 @@ class AIImage:
 
         try:
             if backend == "diffusers":
+                if self._diffusers_broken:
+                    raise RuntimeError("diffusers pipeline unavailable")
                 return self._generate_diffusers(prompt, negative_prompt, width, height)
             elif backend == "stability":
                 return self._generate_stability(prompt, negative_prompt, width, height)
             else:
                 return self._generate_pollinations(prompt, negative_prompt, width, height)
         except Exception as e:
-            # 如果首选后端失败，降级到 pollinations
-            if backend != "pollinations":
-                logger.warning(f"{backend} failed, falling back to pollinations: {e}")
+            # 主后端失败 → 降级另一后端（diffusers 加载失败后置 broken，不再反复尝试）
+            if backend == "pollinations" and not self._diffusers_broken:
+                logger.warning(f"pollinations failed, falling back to diffusers: {e}")
+                try:
+                    return self._generate_diffusers(prompt, negative_prompt, width, height)
+                except Exception as e2:
+                    self._diffusers_broken = True
+                    logger.warning(f"diffusers fallback failed too (marking broken): {e2}")
+                    return f"Error: All backends failed. {e}; {e2}"
+            if backend == "diffusers":
+                logger.warning(f"diffusers failed, falling back to pollinations: {e}")
+                self._diffusers_broken = True
                 try:
                     return self._generate_pollinations(prompt, negative_prompt, width, height)
                 except Exception as e2:
@@ -141,16 +149,33 @@ class AIImage:
 
         logger.info(f"pollinations.ai: '{prompt[:80]}' ({width}x{height})")
 
-        try:
-            req = urllib.request.Request(url, headers={
-                "User-Agent": "nano_agent_plus/1.0",
-            })
-            with urllib.request.urlopen(req, timeout=60) as resp:
-                image_data = resp.read()
-        except urllib.error.URLError as e:
-            raise RuntimeError(f"pollinations.ai request failed: {e.reason}")
-        except Exception as e:
-            raise RuntimeError(f"pollinations.ai request failed: {e}")
+        # 大陆→Cloudflare TLS 握手约 1/3 概率被丢弃: 重试 3 次, 每次 20s
+        for attempt in (1, 2, 3):
+            try:
+                req = urllib.request.Request(url, headers={
+                    "User-Agent": "nano_agent_plus/1.0",
+                })
+                with urllib.request.urlopen(req, timeout=20) as resp:
+                    image_data = resp.read()
+                break
+            except urllib.error.HTTPError as e:
+                if e.code == 429 and attempt < 3:
+                    logger.warning(f"pollinations.ai 429, attempt {attempt}/3, retry in 5s")
+                    time.sleep(5)
+                    continue
+                raise RuntimeError(f"pollinations.ai request failed: HTTP {e.code} {e.reason}")
+            except urllib.error.URLError as e:
+                if attempt < 3:
+                    logger.warning(f"pollinations.ai attempt {attempt}/3 failed: {e.reason}, retrying")
+                    time.sleep(1)
+                    continue
+                raise RuntimeError(f"pollinations.ai request failed: {e.reason}")
+            except Exception as e:
+                if attempt < 3:
+                    logger.warning(f"pollinations.ai attempt {attempt}/3 failed: {e}, retrying")
+                    time.sleep(1)
+                    continue
+                raise RuntimeError(f"pollinations.ai request failed: {e}")
 
         if len(image_data) < 1000:
             raise RuntimeError(f"pollinations.ai returned invalid data ({len(image_data)} bytes)")
@@ -222,19 +247,22 @@ class AIImage:
         device = "mps" if torch.backends.mps.is_available() else \
                  "cuda" if torch.cuda.is_available() else "cpu"
 
-        width = max(256, min(width, 768))
-        height = max(256, min(height, 768))
+        # CPU 推理: 512x512 ~5min, 768 翻倍 — 收到 512 保证可预期
+        width = max(256, min(width, 512))
+        height = max(256, min(height, 512))
 
-        logger.info(f"diffusers: '{prompt[:80]}' on {device}")
-        result = pipe(
-            prompt=prompt,
-            negative_prompt=negative_prompt or "blurry, ugly, low quality, distorted",
-            num_inference_steps=20,
-            width=width,
-            height=height,
-            guidance_scale=7.5,
-        )
-        image = result.images[0]
+        # 串行化推理: 7.4GB 内存无 swap, 并发 pipe() 会 OOM 杀进程
+        with _pipeline_lock:
+            logger.info(f"diffusers: '{prompt[:80]}' on {device} ({width}x{height})")
+            result = pipe(
+                prompt=prompt,
+                negative_prompt=negative_prompt or "blurry, ugly, low quality, distorted",
+                num_inference_steps=20,
+                width=width,
+                height=height,
+                guidance_scale=7.5,
+            )
+            image = result.images[0]
 
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         filename = f"ai_{ts}.png"
@@ -247,28 +275,29 @@ class AIImage:
 
     @staticmethod
     def _load_pipeline():
-        """懒加载 diffusers pipeline。"""
+        """懒加载 diffusers pipeline（锁内: 防止并发重复加载 OOM）。"""
         global _pipeline
-        if _pipeline is not None:
-            return _pipeline
-        try:
-            from diffusers import StableDiffusionPipeline
-            import torch
+        with _pipeline_lock:
+            if _pipeline is not None:
+                return _pipeline
+            try:
+                from diffusers import StableDiffusionPipeline
+                import torch
 
-            device = "mps" if torch.backends.mps.is_available() else \
-                     "cuda" if torch.cuda.is_available() else "cpu"
-            model_id = "runwayml/stable-diffusion-v1-5"
-            logger.info(f"Loading Stable Diffusion ({model_id}) on {device}...")
+                device = "mps" if torch.backends.mps.is_available() else \
+                         "cuda" if torch.cuda.is_available() else "cpu"
+                model_id = "runwayml/stable-diffusion-v1-5"
+                logger.info(f"Loading Stable Diffusion ({model_id}) on {device}...")
 
-            dtype = torch.float16 if device == "cuda" else torch.float32
-            pipe = StableDiffusionPipeline.from_pretrained(
-                model_id, torch_dtype=dtype, safety_checker=None
-            )
-            pipe = pipe.to(device)
-            pipe.enable_attention_slicing()
-            _pipeline = pipe
-            logger.info("Stable Diffusion loaded successfully")
-            return pipe
-        except Exception as e:
-            logger.error(f"Failed to load Stable Diffusion: {e}")
-            return None
+                dtype = torch.float16 if device == "cuda" else torch.float32
+                pipe = StableDiffusionPipeline.from_pretrained(
+                    model_id, torch_dtype=dtype, safety_checker=None
+                )
+                pipe = pipe.to(device)
+                pipe.enable_attention_slicing()
+                _pipeline = pipe
+                logger.info("Stable Diffusion loaded successfully")
+                return pipe
+            except Exception as e:
+                logger.error(f"Failed to load Stable Diffusion: {e}")
+                return None
