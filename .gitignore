@@ -9,6 +9,7 @@ dist/
 
 # Agent 运行时
 agent_memory.md
+nohup_web.log
 
 # IDE
 .vscode/
