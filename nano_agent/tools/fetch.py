@@ -14,10 +14,17 @@ import urllib.error
 # ── SSRF 防护：IP 检查 ────────────────────────────────────
 
 def _is_private_ip(ip_str: str) -> bool:
-    """检查 IP 是否为私有/保留地址。"""
+    """检查 IP 是否为私有/保留地址。
+
+    按 not is_global 判定，一次覆盖：私网、环回、链路本地(169.254/16)、
+    CGNAT(100.64/10，含阿里云元数据 100.100.100.200)、组播、未指定等。
+    残余风险（DNS 重绑定 TOCTOU）：此处解析与 urllib 实际连接是两次
+    独立解析，可控域名的攻击者可在两次解析间换 IP；彻底修复需解析后
+    固定 IP 连接（HTTP 可做，HTTPS 需处理 SNI）。
+    """
     try:
         ip = ipaddress.ip_address(ip_str)
-        return ip.is_private or ip.is_loopback or ip.is_reserved or ip.is_unspecified
+        return not ip.is_global
     except ValueError:
         return False
 
