@@ -18,6 +18,18 @@ logger = logging.getLogger("nano_agent.tools.diagram")
 
 MERMAID_INK = "https://mermaid.ink"
 
+# Mermaid 图表类型关键字：首行以此开头 = 作者已显式声明类型。
+# 未登记进 _CHART_CONFIGS 的类型（timeline / kanban / gitGraph ...）也在此列，
+# 否则它们会走 chart_type 的 "flowchart" 默认值而被误插 flowchart 前缀。
+_MERMAID_TYPES = frozenset({
+    "flowchart", "graph", "sequencediagram", "classdiagram",
+    "statediagram", "statediagram-v2", "erdiagram", "journey",
+    "gantt", "pie", "quadrantchart", "requirementdiagram",
+    "gitgraph", "c4context", "mindmap", "timeline", "zenuml",
+    "sankey-beta", "xychart-beta", "block-beta", "packet-beta",
+    "architecture-beta", "kanban", "radar-beta", "treemap-beta",
+})
+
 
 class Diagram:
     # 工具注册声明
@@ -28,6 +40,8 @@ class Diagram:
          "state machines, org charts, sequence/timing diagrams (交互时序图 → sequenceDiagram).\n"
          "NOT for coordinate graphs or data plots — use generate_chart for those.\n"
          "Sequence/timing (时序图): 'sequenceDiagram', shows interactions between components over time.\n"
+         "Mind map (思维导图): 'mindmap' + INDENTED hierarchy — indentation IS the structure, no arrows.\n"
+         "  Root as 'root((主题))', each deeper level indented 2 more spaces than its parent.\n"
          "Architecture: 'flowchart TB', group layers with subgraph.\n"
          "Shapes: [(DB)] database, [/API/] gateway, ([Svc]) service, [Client] client, {Auth} decision.\n"
          "Arrows: --> request, -.-> async, ==> critical. State machines: stateDiagram-v2.\n"
@@ -39,7 +53,8 @@ class Diagram:
                        "Sequence/timing (时序图): sequenceDiagram + participants + messages (->>,-->>). "
                        "Shapes: [(DB)]=database, [/API/]=gateway, ([Svc])=service, [Client]=client, {Auth}=decision. "
                        "Arrows: --> data, -.-> async, ==> critical. "
-                       "Flowchart: short labels. State: stateDiagram-v2."
+                       "Flowchart: short labels. State: stateDiagram-v2. "
+                       "Mind map (思维导图): mindmap + 2-space indented hierarchy, root((主题)), no arrows."
                    )},
           "theme": {"type": "string", "description": "Theme: dark or default (default: dark)"}},
          ["code"]),
@@ -69,6 +84,7 @@ class Diagram:
     _CHART_CONFIGS = {
         "flowchart":      {"flowchart": {"useMaxWidth": True, "htmlLabels": True, "curve": "basis", "rankSpacing": 60, "nodeSpacing": 35, "padding": 25}},
         "graph":          {"flowchart": {"useMaxWidth": True, "htmlLabels": True, "curve": "basis", "rankSpacing": 60, "nodeSpacing": 35, "padding": 25}},
+        "mindmap":        {"mindmap": {"useMaxWidth": True, "padding": 10}},
         "stateDiagram":   {},
         "stateDiagram-v2": {},
         "sequenceDiagram": {"sequence": {"useMaxWidth": True, "mirrorActors": False, "actorMargin": 80, "messageMargin": 40}},
@@ -195,6 +211,12 @@ class Diagram:
                 chart_type = key
                 break
 
+        # 首行显式声明的图表类型（裸正文时为 ""）
+        _head = first_lower.split()
+        declared_type = _head[0] if _head and _head[0] in _MERMAID_TYPES else ""
+        # 裸正文按 flowchart 处理（保留自动补头）；显式声明其他类型时一律不碰首行
+        is_flowchart = declared_type in ("", "flowchart", "graph")
+
         # 检测是否已有方向声明
         has_direction = bool(
             re.match(r'(flowchart|graph)\s+(TB|BT|LR|RL)\b', code_stripped, re.IGNORECASE)
@@ -207,8 +229,10 @@ class Diagram:
         if type_cfg:
             mermaid_config.update(type_cfg)
 
-        # flowchart 无方向声明时自动加
-        if chart_type in ("flowchart", "graph") and not has_direction:
+        # flowchart 无方向声明时自动加。
+        # 仅限 flowchart / 裸正文：mindmap、timeline 等已声明类型的首行绝不注入，
+        # 否则会被硬插一行 `flowchart LR`，把 "mindmap" 变成流程图里的一个节点。
+        if is_flowchart and not has_direction:
             has_subgraph = bool(re.search(r'\bsubgraph\b', code_stripped))
             if has_subgraph:
                 direction = "TB"  # 有 subgraph = 分层架构，必须纵向
